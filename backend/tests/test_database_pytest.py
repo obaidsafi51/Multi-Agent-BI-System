@@ -13,12 +13,15 @@ from datetime import date
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
+# Import shared utility for environment loading
+from tests.utils.env_loader import load_environment_variables
+
 from database.connection import (
     DatabaseManager,
     DatabaseConfig,
     get_database,
     tidb_connection,
-    test_tidb_connection,
+    test_tidb_connection as check_tidb_connection,
     execute_query,
     execute_many
 )
@@ -33,7 +36,9 @@ class TestDatabaseConfig:
         config = DatabaseConfig()
         
         assert config.port == 4000
-        assert config.user == "root"
+        # Test that user is set (either from env or default)
+        assert config.user is not None
+        assert len(config.user) > 0
         assert config.autocommit is True
         assert config.query_timeout == 30
         assert config.retry_attempts == 3
@@ -57,7 +62,7 @@ class TestDatabaseConnection:
     
     def test_tidb_connection_health(self):
         """Test TiDB connection health check"""
-        result = test_tidb_connection()
+        result = check_tidb_connection()
         assert result is True, "TiDB connection should be healthy"
     
     def test_context_manager_connection(self):
@@ -325,16 +330,7 @@ class TestDataValidation:
         assert result['gross_profit'] == Decimal('400000.00')
 
 
-def load_environment_variables():
-    """Load environment variables from .env file"""
-    env_file = Path(__file__).parent.parent.parent / ".env"
-    if env_file.exists():
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key] = value
+
 
 
 # Load environment variables for tests
