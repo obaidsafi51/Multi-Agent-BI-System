@@ -1,0 +1,202 @@
+version: "3.8"
+
+services:
+  # Frontend - Next.js with TypeScript and shadcn/ui
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_WS_URL=ws://backend:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # Backend - FastAPI Gateway
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql://root:${TIDB_PASSWORD}@tidb:4000/ai_cfo_db
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - KIMI_API_KEY=${KIMI_API_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      tidb:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # NLP Agent with KIMI Integration
+  nlp-agent:
+    build:
+      context: ./agents/nlp-agent
+      dockerfile: Dockerfile
+    environment:
+      - KIMI_API_KEY=${KIMI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - ./agents/nlp-agent:/app
+      - ./config:/app/config
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # Data Agent with TiDB Integration
+  data-agent:
+    build:
+      context: ./agents/data-agent
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=mysql://root:${TIDB_PASSWORD}@tidb:4000/ai_cfo_db
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - ./agents/data-agent:/app
+    depends_on:
+      tidb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # Visualization Agent
+  viz-agent:
+    build:
+      context: ./agents/viz-agent
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - ./agents/viz-agent:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # Personalization Agent
+  personal-agent:
+    build:
+      context: ./agents/personal-agent
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - DATABASE_URL=mysql://root:${TIDB_PASSWORD}@tidb:4000/ai_cfo_db
+    volumes:
+      - ./agents/personal-agent:/app
+    depends_on:
+      tidb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+
+  # Redis for MCP Context Store and Caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ai-cfo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # RabbitMQ for A2A Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - ai-cfo-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # TiDB Database
+  tidb:
+    image: pingcap/tidb:latest
+    ports:
+      - "4000:4000"
+    environment:
+      - TIDB_PASSWORD=${TIDB_PASSWORD}
+    volumes:
+      - tidb_data:/var/lib/tidb
+      - ./config/tidb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./scripts/tidb-healthcheck.sh:/usr/local/bin/tidb-healthcheck.sh:ro
+    networks:
+      - ai-cfo-network
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/tidb-healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  tidb_data:
+
+networks:
+  ai-cfo-network:
+    driver: bridge
