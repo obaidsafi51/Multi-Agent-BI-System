@@ -266,7 +266,7 @@ class FinancialDataValidator:
             
             # Calculate variance percentage only if budgeted amount is greater than 0
             # When budget is 0, percentage variance is undefined/infinite
-            if validated['budgeted_amount'] > 0:
+            if validated['budgeted_amount'] is not None and validated['budgeted_amount'] > 0:
                 variance_pct = (variance / validated['budgeted_amount']) * 100
                 validated['variance_percentage'] = DataValidator.validate_decimal(
                     variance_pct, 'variance_percentage', 5, 2
@@ -300,7 +300,7 @@ class FinancialDataValidator:
         if validated['initial_amount'] is not None and validated['current_value'] is not None:
             # Calculate ROI only if initial amount is greater than 0
             # When initial investment is 0, ROI is undefined/infinite
-            if validated['initial_amount'] > 0:
+            if validated['initial_amount'] is not None and validated['initial_amount'] > 0:
                 roi = ((validated['current_value'] - validated['initial_amount']) / 
                        validated['initial_amount']) * 100
                 validated['roi_percentage'] = DataValidator.validate_decimal(roi, 'roi_percentage', 5, 2)
