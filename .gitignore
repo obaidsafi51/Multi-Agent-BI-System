@@ -64,6 +64,10 @@ venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# uv
+.python-version
+uv.lock
+
 # Java
 *.class
 *.jar
@@ -74,4 +78,35 @@ target/
 # Database
 *.db
 *.sqlite
-*.sqlite3
+*.sqlite3# D
+ocker
+.dockerignore
+
+# Next.js
+.next/
+next-env.d.ts
+
+# FastAPI
+.pytest_cache/
+
+# Machine Learning models
+*.pkl
+*.joblib
+models/
+
+# Data files
+data/
+*.csv
+*.json.bak
+
+# Redis dumps
+dump.rdb
+
+# TiDB data
+tidb_data/
+
+# Agent logs
+agents/*/logs/
+
+# Configuration backups
+config/*.bak
