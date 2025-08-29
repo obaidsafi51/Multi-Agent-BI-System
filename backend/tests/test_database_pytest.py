@@ -339,9 +339,5 @@ def pytest_configure():
     load_environment_variables()
 
 
-# Load environment variables immediately when module is imported
-load_environment_variables()
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

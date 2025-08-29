@@ -5,23 +5,106 @@ Data validation functions for database operations.
 from typing import Dict, List, Any, Optional, Tuple
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, date
+from enum import Enum
+from dataclasses import dataclass
 import re
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+class PercentageType(Enum):
+    """Enum defining different types of percentage validations"""
+    STANDARD = "standard"           # -100% to 100% (tax rates, margins)
+    ROI = "roi"                    # Unlimited range (can be very high or very low)
+    GROWTH_RATE = "growth_rate"    # -100% to unlimited positive
+    VARIANCE = "variance"          # Unlimited range (budget variances)
+    MARGIN = "margin"              # 0% to 100% (profit margins)
+    UTILIZATION = "utilization"    # 0% to 100% (resource utilization)
+
+
+@dataclass
+class PercentageValidationConfig:
+    """Configuration for percentage validation rules"""
+    min_value: Optional[Decimal]
+    max_value: Optional[Decimal]
+    warning_threshold: Optional[Decimal]
+    allow_null: bool = True
+    precision: int = 2
+    description: str = ""
+
+
 class ValidationError(Exception):
     """Custom exception for validation errors"""
-    def __init__(self, field: str, message: str, value: Any = None):
+    def __init__(self, field: str, message: str, value: Any = None, 
+                 percentage_type: Optional[PercentageType] = None):
         self.field = field
         self.message = message
         self.value = value
-        super().__init__(f"Validation error for field '{field}': {message}")
+        self.percentage_type = percentage_type
+        
+        if percentage_type:
+            config = DataValidator.get_percentage_config(percentage_type)
+            self.message += f" (Expected range for {percentage_type.value}: {config.description})"
+        
+        super().__init__(f"Validation error for field '{field}': {self.message}")
+
+
+class ValidationWarning:
+    """Warning for percentage values that are valid but unusual"""
+    def __init__(self, field: str, message: str, value: Any, percentage_type: PercentageType):
+        self.field = field
+        self.message = message
+        self.value = value
+        self.percentage_type = percentage_type
+        self.timestamp = datetime.now()
 
 
 class DataValidator:
     """Data validation utilities for financial data"""
+    
+    # Minimum threshold for financial calculations to avoid division by very small numbers
+    EPSILON = Decimal('0.01')  # 1 cent minimum for percentage calculations
+    
+    # Percentage validation configuration registry
+    PERCENTAGE_VALIDATION_CONFIGS = {
+        PercentageType.STANDARD: PercentageValidationConfig(
+            min_value=Decimal('-100'),
+            max_value=Decimal('100'),
+            warning_threshold=None,
+            description="Standard percentage (-100% to 100%)"
+        ),
+        PercentageType.ROI: PercentageValidationConfig(
+            min_value=None,
+            max_value=None,
+            warning_threshold=Decimal('1000'),  # Warn if >1000%
+            description="Return on Investment (unlimited range)"
+        ),
+        PercentageType.GROWTH_RATE: PercentageValidationConfig(
+            min_value=Decimal('-100'),
+            max_value=None,
+            warning_threshold=Decimal('500'),   # Warn if >500%
+            description="Growth rate (-100% to unlimited positive)"
+        ),
+        PercentageType.VARIANCE: PercentageValidationConfig(
+            min_value=None,
+            max_value=None,
+            warning_threshold=Decimal('200'),   # Warn if >200% or <-200%
+            description="Budget variance (unlimited range)"
+        ),
+        PercentageType.MARGIN: PercentageValidationConfig(
+            min_value=Decimal('0'),
+            max_value=Decimal('100'),
+            warning_threshold=None,
+            description="Profit margin (0% to 100%)"
+        ),
+        PercentageType.UTILIZATION: PercentageValidationConfig(
+            min_value=Decimal('0'),
+            max_value=Decimal('100'),
+            warning_threshold=None,
+            description="Resource utilization (0% to 100%)"
+        )
+    }
     
     @staticmethod
     def validate_decimal(value: Any, field_name: str, max_digits: int = 15, decimal_places: int = 2) -> Decimal:
@@ -115,16 +198,75 @@ class DataValidator:
         return value.strip()
     
     @staticmethod
-    def validate_percentage(value: Any, field_name: str) -> Decimal:
-        """Validate percentage value (-100 to 100)"""
+    def get_percentage_config(percentage_type: PercentageType) -> PercentageValidationConfig:
+        """Get validation configuration for percentage type"""
+        return DataValidator.PERCENTAGE_VALIDATION_CONFIGS[percentage_type]
+    
+    @staticmethod
+    def validate_percentage_typed(
+        value: Any, 
+        field_name: str, 
+        percentage_type: PercentageType = PercentageType.STANDARD
+    ) -> Tuple[Decimal, Optional[ValidationWarning]]:
+        """Validate percentage with type-specific rules"""
         decimal_value = DataValidator.validate_decimal(value, field_name, 5, 2)
+        warning = None
         
-        if decimal_value is not None and (decimal_value < -100 or decimal_value > 100):
+        if decimal_value is None:
+            return decimal_value, warning
+        
+        config = DataValidator.get_percentage_config(percentage_type)
+        
+        # Check minimum value
+        if config.min_value is not None and decimal_value < config.min_value:
             raise ValidationError(
-                field_name, 
-                "Percentage must be between -100 and 100", 
-                value
+                field_name,
+                f"Percentage must be >= {config.min_value}%",
+                value,
+                percentage_type
             )
+        
+        # Check maximum value
+        if config.max_value is not None and decimal_value > config.max_value:
+            raise ValidationError(
+                field_name,
+                f"Percentage must be <= {config.max_value}%",
+                value,
+                percentage_type
+            )
+        
+        # Check warning threshold
+        if config.warning_threshold is not None:
+            if percentage_type == PercentageType.VARIANCE:
+                # For variance, warn if absolute value exceeds threshold
+                if abs(decimal_value) > config.warning_threshold:
+                    warning = ValidationWarning(
+                        field_name,
+                        f"Unusual {percentage_type.value} percentage: {decimal_value}% (threshold: ±{config.warning_threshold}%)",
+                        value,
+                        percentage_type
+                    )
+            else:
+                # For other types, warn if value exceeds threshold
+                if decimal_value > config.warning_threshold:
+                    warning = ValidationWarning(
+                        field_name,
+                        f"Unusual {percentage_type.value} percentage: {decimal_value}% (threshold: {config.warning_threshold}%)",
+                        value,
+                        percentage_type
+                    )
+        
+        return decimal_value, warning
+    
+    @staticmethod
+    def validate_percentage(value: Any, field_name: str) -> Decimal:
+        """Validate percentage value (-100 to 100) - Legacy method for backward compatibility"""
+        decimal_value, warning = DataValidator.validate_percentage_typed(
+            value, field_name, PercentageType.STANDARD
+        )
+        
+        if warning:
+            logger.warning(f"Percentage validation warning: {warning.message}")
         
         return decimal_value
     
@@ -264,15 +406,17 @@ class FinancialDataValidator:
             variance = validated['actual_amount'] - validated['budgeted_amount']
             validated['variance_amount'] = variance
             
-            # Calculate variance percentage only if budgeted amount is greater than 0
-            # When budget is 0, percentage variance is undefined/infinite
-            if validated['budgeted_amount'] > 0:
+            # Calculate variance percentage only if budgeted amount is greater than or equal to epsilon
+            # When budget is very small or zero, percentage variance is undefined/misleading
+            if validated['budgeted_amount'] >= DataValidator.EPSILON:
                 variance_pct = (variance / validated['budgeted_amount']) * 100
-                validated['variance_percentage'] = DataValidator.validate_decimal(
-                    variance_pct, 'variance_percentage', 5, 2
+                validated['variance_percentage'], warning = DataValidator.validate_percentage_typed(
+                    variance_pct, 'variance_percentage', PercentageType.VARIANCE
                 )
+                if warning:
+                    logger.warning(f"Budget variance warning: {warning.message}")
             else:
-                # When budgeted_amount is 0, variance percentage is undefined
+                # When budgeted_amount is very small or zero, variance percentage is undefined
                 # Set to None to indicate this special case
                 validated['variance_percentage'] = None
         
@@ -298,14 +442,18 @@ class FinancialDataValidator:
         
         # Calculate ROI if both amounts are provided
         if validated['initial_amount'] is not None and validated['current_value'] is not None:
-            # Calculate ROI only if initial amount is greater than 0
-            # When initial investment is 0, ROI is undefined/infinite
-            if validated['initial_amount'] > 0:
+            # Calculate ROI only if initial amount is greater than or equal to epsilon
+            # When initial investment is very small or zero, ROI is undefined/misleading
+            if validated['initial_amount'] >= DataValidator.EPSILON:
                 roi = ((validated['current_value'] - validated['initial_amount']) / 
                        validated['initial_amount']) * 100
-                validated['roi_percentage'] = DataValidator.validate_decimal(roi, 'roi_percentage', 5, 2)
+                validated['roi_percentage'], warning = DataValidator.validate_percentage_typed(
+                    roi, 'roi_percentage', PercentageType.ROI
+                )
+                if warning:
+                    logger.warning(f"ROI warning: {warning.message}")
             else:
-                # When initial_amount is 0, ROI is undefined
+                # When initial_amount is very small or zero, ROI is undefined
                 # Set to None to indicate this special case
                 validated['roi_percentage'] = None
         
