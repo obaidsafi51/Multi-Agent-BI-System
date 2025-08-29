@@ -325,9 +325,8 @@ class TestDataValidation:
         assert result['gross_profit'] == Decimal('400000.00')
 
 
-# Load environment variables for tests
-def pytest_configure():
-    """Configure pytest with environment variables"""
+def load_environment_variables():
+    """Load environment variables from .env file"""
     env_file = Path(__file__).parent.parent.parent / ".env"
     if env_file.exists():
         with open(env_file) as f:
@@ -337,15 +336,15 @@ def pytest_configure():
                     key, value = line.split('=', 1)
                     os.environ[key] = value
 
+
+# Load environment variables for tests
+def pytest_configure():
+    """Configure pytest with environment variables"""
+    load_environment_variables()
+
+
 # Load environment variables immediately when module is imported
-env_file = Path(__file__).parent.parent.parent / ".env"
-if env_file.exists():
-    with open(env_file) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                os.environ[key] = value
+load_environment_variables()
 
 
 if __name__ == "__main__":

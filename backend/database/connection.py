@@ -71,7 +71,7 @@ class DatabaseManager:
     """Pure PyMySQL database manager for TiDB Cloud"""
     
     def __init__(self, config: Optional[DatabaseConfig] = None):
-        self.config = config or DatabaseConfig()
+        self.config = config or get_cached_config()
     
     @contextmanager
     def get_connection(self, autocommit: Optional[bool] = None):
@@ -214,13 +214,32 @@ class DatabaseManager:
         return info
 
 
+# Module-level cached configuration to avoid repeated environment variable lookups
+_cached_config: Optional[DatabaseConfig] = None
+
+
+def get_cached_config() -> DatabaseConfig:
+    """Get cached database configuration, creating it if necessary"""
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = DatabaseConfig()
+    return _cached_config
+
+
+def refresh_cached_config() -> DatabaseConfig:
+    """Refresh the cached configuration (useful for testing or config changes)"""
+    global _cached_config
+    _cached_config = DatabaseConfig()
+    return _cached_config
+
+
 # TiDB-specific utility functions following TiDB Cloud best practices
 def get_tidb_connection(autocommit: bool = True) -> Connection:
     """
     Get TiDB connection following TiDB Cloud best practices
     This function follows the pattern from TiDB documentation
     """
-    config = DatabaseConfig()
+    config = get_cached_config()
     pymysql_config = config.pymysql_config.copy()
     pymysql_config["autocommit"] = autocommit
     return pymysql.connect(**pymysql_config)
@@ -273,9 +292,10 @@ def get_database() -> DatabaseManager:
 
 def close_database():
     """Close global database connections (no-op for PyMySQL as connections are per-request)"""
-    global _db_manager
+    global _db_manager, _cached_config
     _db_manager = None
-    logger.info("Database manager reset")
+    _cached_config = None
+    logger.info("Database manager and cached config reset")
 
 
 # Convenience functions for common operations
