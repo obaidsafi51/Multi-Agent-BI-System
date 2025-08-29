@@ -43,9 +43,14 @@ echo "Removing temporary files..."
 find . -name "tmp" -type d -exec rm -rf {} + 2>/dev/null || true
 find . -name "temp" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Docker cleanup
-echo "Cleaning up Docker artifacts..."
-docker system prune -f 2>/dev/null || true
+# Docker cleanup (project-specific)
+echo "Cleaning up project Docker artifacts..."
+# Remove stopped containers for this project
+docker-compose down --remove-orphans 2>/dev/null || true
+# Remove dangling images (untagged images)
+docker image prune -f 2>/dev/null || true
+# Remove unused build cache (but keep recent cache)
+docker builder prune --keep-storage 1GB -f 2>/dev/null || true
 
 echo "✅ Cleanup complete!"
 echo ""

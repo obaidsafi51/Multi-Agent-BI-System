@@ -181,23 +181,11 @@ services:
     volumes:
       - tidb_data:/var/lib/tidb
       - ./config/tidb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./scripts/tidb-healthcheck.sh:/usr/local/bin/tidb-healthcheck.sh:ro
     networks:
       - ai-cfo-network
     healthcheck:
-      test:
-        [
-          "CMD",
-          "mysql",
-          "-h",
-          "localhost",
-          "-P",
-          "4000",
-          "-u",
-          "root",
-          "-p${TIDB_PASSWORD}",
-          "-e",
-          "SELECT 1",
-        ]
+      test: ["CMD", "bash", "/usr/local/bin/tidb-healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 5

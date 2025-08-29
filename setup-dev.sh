@@ -4,6 +4,26 @@
 
 set -e  # Exit on any error
 
+# Parse command line arguments
+INTERACTIVE=true
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --non-interactive)
+            INTERACTIVE=false
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--non-interactive]"
+            echo "  --non-interactive  Skip manual prompts (for CI/CD)"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🚀 Setting up AI CFO BI Agent development environment..."
 
 # Check if Docker and Docker Compose are installed
@@ -28,17 +48,43 @@ fi
 if [ ! -f .env ]; then
     echo "📝 Creating .env file from template..."
     cp .env.example .env
-    echo "⚠️  Please edit .env file with your actual configuration values:"
-    echo "   - TIDB_PASSWORD: Set a secure password for TiDB"
-    echo "   - KIMI_API_KEY: Your KIMI LLM API key"
-    echo "   - SECRET_KEY: Generate with: openssl rand -hex 32"
-    echo ""
-    echo "Press Enter to continue after updating .env file..."
-    read -r
+    
+    if [ "$INTERACTIVE" = true ]; then
+        echo "⚠️  Please edit .env file with your actual configuration values:"
+        echo "   - TIDB_PASSWORD: Set a secure password for TiDB"
+        echo "   - KIMI_API_KEY: Your KIMI LLM API key"
+        echo "   - SECRET_KEY: Generate with: openssl rand -hex 32"
+        echo ""
+        echo "Press Enter to continue after updating .env file..."
+        read -r
+    else
+        echo "⚠️  .env file created from template. In non-interactive mode, checking for required variables..."
+        # Auto-generate missing values for non-interactive mode
+        if ! grep -q "^SECRET_KEY=" .env || grep -q "^SECRET_KEY=$" .env; then
+            SECRET_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32)
+            sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$SECRET_KEY/" .env
+            echo "   ✅ Generated SECRET_KEY automatically"
+        fi
+        
+        if ! grep -q "^TIDB_PASSWORD=" .env || grep -q "^TIDB_PASSWORD=$" .env; then
+            TIDB_PASSWORD=$(openssl rand -base64 16 2>/dev/null || head -c 16 /dev/urandom | base64 | tr -d '\n')
+            sed -i "s/^TIDB_PASSWORD=.*/TIDB_PASSWORD=$TIDB_PASSWORD/" .env
+            echo "   ✅ Generated TIDB_PASSWORD automatically"
+        fi
+        
+        echo "   ⚠️  KIMI_API_KEY still needs to be set manually or via environment variable"
+    fi
 fi
 
 # Validate environment
 echo "🔍 Validating environment configuration..."
+if [ "$INTERACTIVE" = false ]; then
+    # In non-interactive mode, check critical variables
+    if [ -z "${KIMI_API_KEY:-}" ] && ! grep -q "^KIMI_API_KEY=.\\+$" .env; then
+        echo "⚠️  Warning: KIMI_API_KEY not set. Set via environment variable or .env file"
+        echo "   export KIMI_API_KEY=your_api_key"
+    fi
+fi
 ./scripts/validate-env.sh
 
 # Clean up development artifacts and containers
