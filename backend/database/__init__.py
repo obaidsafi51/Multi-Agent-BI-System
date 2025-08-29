@@ -4,6 +4,7 @@ from .connection import (
     get_database, 
     tidb_connection,
     test_tidb_connection,
+    get_direct_connection,
     execute_query,
     execute_many,
     execute_transaction
@@ -14,6 +15,7 @@ __all__ = [
     "get_database",
     "tidb_connection", 
     "test_tidb_connection",
+    "get_direct_connection",
     "execute_query",
     "execute_many",
     "execute_transaction"

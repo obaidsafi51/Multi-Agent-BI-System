@@ -5,7 +5,7 @@ Implements the financial data schema from the design document
 
 import logging
 from typing import List, Dict, Any
-from database.connection import tidb_connection, DatabaseConfig, get_database
+from database.connection import tidb_connection, get_database
 import pymysql
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,8 @@ class TiDBMigration:
     """TiDB migration manager following TiDB Cloud best practices"""
     
     def __init__(self):
-        self.config = DatabaseConfig()
+        # Use the global database manager for consistency
+        self.db_manager = get_database()
     
     def create_financial_tables(self) -> bool:
         """Create all financial data tables as defined in the design document"""
@@ -47,6 +48,7 @@ class TiDBMigration:
                     net_cash_flow DECIMAL(15,2),
                     cash_balance DECIMAL(15,2),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX idx_period_date (period_date)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,

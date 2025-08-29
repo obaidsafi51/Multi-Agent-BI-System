@@ -42,10 +42,17 @@ class DataValidator:
                 )
             
             # Check decimal places
-            if exponent < -decimal_places:
+            # In Decimal.as_tuple(), exponent represents the power of 10
+            # For decimal numbers: exponent = -number_of_decimal_places
+            # Examples:
+            #   123.45 → exponent = -2 (2 decimal places)
+            #   123.456 → exponent = -3 (3 decimal places)
+            #   123 → exponent = 0 (0 decimal places)
+            actual_decimal_places = -exponent if exponent < 0 else 0
+            if actual_decimal_places > decimal_places:
                 raise ValidationError(
                     field_name, 
-                    f"Value has too many decimal places (max {decimal_places})", 
+                    f"Value has {actual_decimal_places} decimal places (max {decimal_places})", 
                     value
                 )
             

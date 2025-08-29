@@ -233,49 +233,73 @@ def refresh_cached_config() -> DatabaseConfig:
     return _cached_config
 
 
-# TiDB-specific utility functions following TiDB Cloud best practices
-def get_tidb_connection(autocommit: bool = True) -> Connection:
+# Convenience functions that use the global DatabaseManager
+@contextmanager
+def tidb_connection(autocommit: bool = True):
     """
-    Get TiDB connection following TiDB Cloud best practices
-    This function follows the pattern from TiDB documentation
+    Context manager for TiDB connections using the global DatabaseManager.
+    
+    This is a convenience function that delegates to DatabaseManager.get_connection()
+    for consistent connection management and configuration.
+    
+    Args:
+        autocommit: Whether to enable autocommit mode
+        
+    Yields:
+        pymysql.Connection: Database connection with proper cleanup
+        
+    Example:
+        with tidb_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT * FROM financial_overview")
+                results = cursor.fetchall()
+    """
+    db_manager = get_database()
+    with db_manager.get_connection(autocommit=autocommit) as connection:
+        yield connection
+
+
+def test_tidb_connection() -> bool:
+    """
+    Test TiDB connection health using the global DatabaseManager.
+    
+    This function uses the DatabaseManager's health_check method for consistency.
+    
+    Returns:
+        bool: True if connection is healthy, False otherwise
+    """
+    db_manager = get_database()
+    return db_manager.health_check()
+
+
+def get_direct_connection(autocommit: bool = True) -> Connection:
+    """
+    Get a direct PyMySQL connection without context management.
+    
+    WARNING: This function returns a raw connection that must be manually closed.
+    Use tidb_connection() context manager instead for automatic cleanup.
+    
+    This function is provided for special cases where you need direct connection
+    control (e.g., long-running operations, custom connection pooling).
+    
+    Args:
+        autocommit: Whether to enable autocommit mode
+        
+    Returns:
+        pymysql.Connection: Raw database connection (must be closed manually)
+        
+    Example:
+        conn = get_direct_connection()
+        try:
+            # Your database operations
+            pass
+        finally:
+            conn.close()  # IMPORTANT: Always close manually
     """
     config = get_cached_config()
     pymysql_config = config.pymysql_config.copy()
     pymysql_config["autocommit"] = autocommit
     return pymysql.connect(**pymysql_config)
-
-
-@contextmanager
-def tidb_connection(autocommit: bool = True):
-    """
-    Context manager for TiDB connections
-    Ensures proper connection cleanup
-    """
-    connection = None
-    try:
-        connection = get_tidb_connection(autocommit=autocommit)
-        yield connection
-    except Exception as e:
-        if connection and not autocommit:
-            connection.rollback()
-        logger.error(f"TiDB connection error: {e}")
-        raise
-    finally:
-        if connection:
-            connection.close()
-
-
-def test_tidb_connection() -> bool:
-    """Test TiDB connection health"""
-    try:
-        with tidb_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT 1 as test")
-                result = cursor.fetchone()
-                return result["test"] == 1
-    except Exception as e:
-        logger.error(f"TiDB connection test failed: {e}")
-        return False
 
 
 # Global database manager instance

@@ -253,7 +253,6 @@ def main():
     env_file = Path(__file__).parent.parent.parent / ".env"
     if env_file.exists():
         logger.info(f"Loading environment from: {env_file}")
-        import os
         with open(env_file) as f:
             for line in f:
                 line = line.strip()
