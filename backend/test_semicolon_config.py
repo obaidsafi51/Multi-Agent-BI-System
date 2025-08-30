@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Quick test script to verify the configurable semicolon behavior in QueryOptimizer
-This demonstrates the fix for the Copilot AI suggestion about making semicolon addition configurable.
+Quick test script to verify the configurable semicolon behavior in QueryOptimizer.
+Demonstrates how semicolon addition can be configured globally and per database type.
 """
 
 # Simple direct test without complex imports
