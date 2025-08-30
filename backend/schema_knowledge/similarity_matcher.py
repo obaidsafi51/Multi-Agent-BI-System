@@ -129,7 +129,7 @@ class SimilarityMatcher:
                 self._edit_distance_match(unknown_term, normalized_known)
             ]
             # Remove None results to avoid issues with max()
-            valid_results = [result for result in similarity_results if result]
+            valid_results = [result for result in similarity_results if result is not None]
             if not valid_results:
                 continue
             
