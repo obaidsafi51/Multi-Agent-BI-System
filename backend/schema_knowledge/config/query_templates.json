@@ -1,0 +1,190 @@
+{
+  "financial_overview_queries": {
+    "basic_metric": {
+      "template": "SELECT {time_column}, {metric_columns} FROM financial_overview WHERE {time_filter} ORDER BY {time_column}",
+      "description": "Basic financial metric query with time filtering",
+      "parameters": {
+        "time_column": "period_date",
+        "metric_columns": ["revenue", "gross_profit", "net_profit", "operating_expenses"],
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "aggregation": "SUM({metric}) as {metric}"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "revenue_analysis": {
+      "template": "SELECT {time_column}, SUM(revenue) as total_revenue, AVG(revenue) as avg_revenue FROM financial_overview WHERE {time_filter} GROUP BY {group_by} ORDER BY {time_column}",
+      "description": "Revenue analysis with aggregation",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "profitability_analysis": {
+      "template": "SELECT {time_column}, SUM(revenue) as revenue, SUM(gross_profit) as gross_profit, SUM(net_profit) as net_profit, (SUM(gross_profit)/SUM(revenue)*100) as gross_margin_pct, (SUM(net_profit)/SUM(revenue)*100) as net_margin_pct FROM financial_overview WHERE {time_filter} GROUP BY {group_by} ORDER BY {time_column}",
+      "description": "Comprehensive profitability analysis with calculated margins",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    }
+  },
+  "cash_flow_queries": {
+    "cash_flow_summary": {
+      "template": "SELECT {time_column}, SUM(operating_cash_flow) as operating_cf, SUM(investing_cash_flow) as investing_cf, SUM(financing_cash_flow) as financing_cf, SUM(net_cash_flow) as net_cf FROM cash_flow WHERE {time_filter} GROUP BY {group_by} ORDER BY {time_column}",
+      "description": "Complete cash flow analysis",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "cash_position": {
+      "template": "SELECT {time_column}, cash_balance, net_cash_flow FROM cash_flow WHERE {time_filter} ORDER BY {time_column} DESC LIMIT 1",
+      "description": "Current cash position and latest cash flow",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'"
+      },
+      "supports_aggregation": false,
+      "supports_comparison": true
+    },
+    "operating_cash_trend": {
+      "template": "SELECT {time_column}, SUM(operating_cash_flow) as operating_cf, LAG(SUM(operating_cash_flow)) OVER (ORDER BY {time_column}) as prev_operating_cf FROM cash_flow WHERE {time_filter} GROUP BY {group_by} ORDER BY {time_column}",
+      "description": "Operating cash flow trend with period-over-period comparison",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    }
+  },
+  "budget_queries": {
+    "budget_variance": {
+      "template": "SELECT department, {time_column}, SUM(budgeted_amount) as budget, SUM(actual_amount) as actual, SUM(variance_amount) as variance, AVG(variance_percentage) as variance_pct FROM budget_tracking WHERE {time_filter} {department_filter} GROUP BY department, {group_by} ORDER BY department, {time_column}",
+      "description": "Budget vs actual analysis by department",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "department_filter": "AND department = '{department}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "department_spending": {
+      "template": "SELECT department, SUM(actual_amount) as total_spent, SUM(budgeted_amount) as total_budget, (SUM(actual_amount)/SUM(budgeted_amount)*100) as budget_utilization FROM budget_tracking WHERE {time_filter} GROUP BY department ORDER BY total_spent DESC",
+      "description": "Department spending summary with budget utilization",
+      "parameters": {
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "budget_performance": {
+      "template": "SELECT {time_column}, SUM(budgeted_amount) as total_budget, SUM(actual_amount) as total_actual, SUM(variance_amount) as total_variance, (SUM(variance_amount)/SUM(budgeted_amount)*100) as variance_pct FROM budget_tracking WHERE {time_filter} GROUP BY {group_by} ORDER BY {time_column}",
+      "description": "Overall budget performance over time",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'",
+        "group_by": "period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    }
+  },
+  "investment_queries": {
+    "investment_performance": {
+      "template": "SELECT investment_name, investment_category, initial_amount, current_value, roi_percentage, status FROM investments WHERE {status_filter} ORDER BY roi_percentage DESC",
+      "description": "Investment performance ranking",
+      "parameters": {
+        "status_filter": "status = '{status}'"
+      },
+      "supports_aggregation": false,
+      "supports_comparison": true
+    },
+    "roi_analysis": {
+      "template": "SELECT investment_category, COUNT(*) as investment_count, SUM(initial_amount) as total_invested, SUM(current_value) as total_value, AVG(roi_percentage) as avg_roi FROM investments WHERE {status_filter} GROUP BY investment_category ORDER BY avg_roi DESC",
+      "description": "ROI analysis by investment category",
+      "parameters": {
+        "status_filter": "status = 'active'"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "investment_summary": {
+      "template": "SELECT status, COUNT(*) as count, SUM(initial_amount) as total_invested, SUM(current_value) as total_value, AVG(roi_percentage) as avg_roi FROM investments GROUP BY status ORDER BY status",
+      "description": "Investment portfolio summary by status",
+      "parameters": {},
+      "supports_aggregation": true,
+      "supports_comparison": true
+    }
+  },
+  "ratio_queries": {
+    "financial_ratios": {
+      "template": "SELECT {time_column}, debt_to_equity, current_ratio, quick_ratio, gross_margin, net_margin FROM financial_ratios WHERE {time_filter} ORDER BY {time_column}",
+      "description": "Financial ratios over time",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'"
+      },
+      "supports_aggregation": false,
+      "supports_comparison": true
+    },
+    "liquidity_analysis": {
+      "template": "SELECT {time_column}, current_ratio, quick_ratio, (current_ratio - LAG(current_ratio) OVER (ORDER BY {time_column})) as current_ratio_change FROM financial_ratios WHERE {time_filter} ORDER BY {time_column}",
+      "description": "Liquidity ratios with trend analysis",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'"
+      },
+      "supports_aggregation": false,
+      "supports_comparison": true
+    },
+    "leverage_analysis": {
+      "template": "SELECT {time_column}, debt_to_equity, (debt_to_equity - LAG(debt_to_equity) OVER (ORDER BY {time_column})) as leverage_change FROM financial_ratios WHERE {time_filter} ORDER BY {time_column}",
+      "description": "Leverage analysis with period-over-period changes",
+      "parameters": {
+        "time_column": "period_date",
+        "time_filter": "period_date >= '{start_date}' AND period_date <= '{end_date}'"
+      },
+      "supports_aggregation": false,
+      "supports_comparison": true
+    }
+  },
+  "comparison_queries": {
+    "year_over_year": {
+      "template": "SELECT current_year.{time_column} as current_period, current_year.{metric} as current_value, previous_year.{metric} as previous_value, ((current_year.{metric} - previous_year.{metric})/previous_year.{metric}*100) as yoy_change_pct FROM ({base_query}) current_year LEFT JOIN ({base_query_previous}) previous_year ON DATE_FORMAT(current_year.{time_column}, '%m-%d') = DATE_FORMAT(previous_year.{time_column}, '%m-%d') ORDER BY current_year.{time_column}",
+      "description": "Year-over-year comparison template",
+      "parameters": {
+        "time_column": "period_date",
+        "metric": "revenue",
+        "base_query": "SELECT period_date, SUM(revenue) as revenue FROM financial_overview WHERE YEAR(period_date) = {current_year} GROUP BY period_date",
+        "base_query_previous": "SELECT period_date, SUM(revenue) as revenue FROM financial_overview WHERE YEAR(period_date) = {previous_year} GROUP BY period_date"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    },
+    "quarter_over_quarter": {
+      "template": "SELECT current_q.period_date, current_q.{metric} as current_value, previous_q.{metric} as previous_value, ((current_q.{metric} - previous_q.{metric})/previous_q.{metric}*100) as qoq_change_pct FROM ({base_query}) current_q LEFT JOIN ({base_query_previous}) previous_q ON current_q.quarter_num = previous_q.quarter_num + 1 ORDER BY current_q.period_date",
+      "description": "Quarter-over-quarter comparison template",
+      "parameters": {
+        "metric": "revenue",
+        "base_query": "SELECT period_date, QUARTER(period_date) as quarter_num, SUM(revenue) as revenue FROM financial_overview WHERE period_date >= '{start_date}' GROUP BY period_date, QUARTER(period_date)",
+        "base_query_previous": "SELECT period_date, QUARTER(period_date) as quarter_num, SUM(revenue) as revenue FROM financial_overview WHERE period_date >= '{previous_start_date}' GROUP BY period_date, QUARTER(period_date)"
+      },
+      "supports_aggregation": true,
+      "supports_comparison": true
+    }
+  }
+}
