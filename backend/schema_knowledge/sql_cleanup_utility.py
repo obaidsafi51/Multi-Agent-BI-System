@@ -69,4 +69,4 @@ class SQLCleanupUtility:
         if re.search(r'\bWHERE\s*FROM\b', cleaned_sql, re.IGNORECASE):
             issues.append("WHERE clause appears before FROM clause")
         
-        return len(issues) == 0, issues  # Add this return statement
+        return len(issues) == 0, issues
