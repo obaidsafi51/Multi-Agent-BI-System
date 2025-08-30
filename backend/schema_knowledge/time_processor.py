@@ -348,10 +348,10 @@ class TimeProcessor:
         """
         Get current quarter based on fiscal year settings.
         
-        Handles edge cases:
-        - fiscal_year_start_month outside valid range (1-12)
-        - fiscal_month calculations that overflow or underflow
-        - Proper modular arithmetic for fiscal year boundaries
+    Handles edge cases:
+    - Validates fiscal_year_start_month is in range (1-12) and raises ValueError if not
+    - fiscal_month calculations that underflow or overflow month boundaries
+    - Proper modular arithmetic for fiscal year boundary calculations
         """
         month = reference_date.month
         
@@ -361,6 +361,7 @@ class TimeProcessor:
         
         # Calculate fiscal month using proper modular arithmetic
         # This handles both negative and > 12 cases correctly
+        # In Python, (-3) % 12 yields 9, so months before fiscal_year_start_month are mapped correctly
         fiscal_month = ((month - self.fiscal_year_start_month) % 12) + 1
         
         # Calculate quarter (1-4) from fiscal month (1-12)

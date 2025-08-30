@@ -346,8 +346,8 @@ class QueryOptimizer:
         # Remove trailing whitespace
         sql = sql.strip()
         
-        # Ensure proper semicolon ending
-        if not sql.endswith(';') and not sql.endswith('LIMIT'):
+        # Ensure SQL ends with a semicolon; add if missing
+        if not sql.endswith(';'):
             sql += ';'
         
         return sql

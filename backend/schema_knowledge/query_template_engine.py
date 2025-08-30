@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from models.core import QueryIntent, QueryResult
+from ..models.core import QueryIntent, QueryResult
 from .types import QueryTemplate, GeneratedQuery
 
 

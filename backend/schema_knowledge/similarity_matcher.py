@@ -3,7 +3,7 @@ Similarity matching algorithm for unknown financial terms with configurable thre
 """
 
 import re
-from typing import List, Tuple, Dict, Optional, Set
+from typing import List, Tuple, Dict, Optional, Set, Any
 from difflib import SequenceMatcher
 import math
 
@@ -369,7 +369,7 @@ class SimilarityMatcher:
         """Add a new semantic group"""
         self.semantic_groups[group_name] = [term.lower() for term in terms]
     
-    def get_match_statistics(self, matches: List[SimilarityMatch]) -> Dict[str, any]:
+    def get_match_statistics(self, matches: List[SimilarityMatch]) -> Dict[str, Any]:
         """Get statistics about match results"""
         if not matches:
             return {"total_matches": 0}

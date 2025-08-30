@@ -21,7 +21,7 @@ from .types import (
     DatabaseType
 )
 
-from models.core import QueryIntent, FinancialEntity, ErrorResponse
+from ..models.core import QueryIntent, FinancialEntity, ErrorResponse
 
 class SchemaKnowledgeBase:
     """

@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from models.core import FinancialEntity
+from ..models.core import FinancialEntity
 from .types import TermMapping
 
 
