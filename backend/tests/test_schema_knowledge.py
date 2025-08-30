@@ -329,7 +329,9 @@ class TestTimeProcessor:
     
     def test_relative_periods(self, time_processor):
         """Test relative time period parsing"""
-        period = time_processor.parse_time_period("this quarter")
+        # Use specific reference date to ensure consistent test behavior
+        reference_date = date(2025, 8, 30)  # August 30, 2025
+        period = time_processor.parse_time_period("this quarter", reference_date)
         
         assert period.period_type.value == "quarterly"
         assert period.is_partial  # Current quarter is typically partial

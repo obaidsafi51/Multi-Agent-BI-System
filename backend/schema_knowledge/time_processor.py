@@ -33,16 +33,18 @@ class TimeProcessor:
             raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
         self.fiscal_year_start_month = fiscal_year_start_month
         self.current_date = datetime.now().date()
-    
-    def _validate_fiscal_year_start_month(self) -> None:
-        """Validate that fiscal_year_start_month is an integer between 1 and 12."""
-        if not isinstance(self.fiscal_year_start_month, int):
-            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(self.fiscal_year_start_month)}")
-        if not (1 <= self.fiscal_year_start_month <= 12):
-            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {self.fiscal_year_start_month}")
-        
+        # Validate fiscal_year_start_month and initialize patterns
+        self._validate_fiscal_year_start_month()
         # Common time period patterns
         self.period_patterns = {
+            # Relative patterns (most specific first)
+            r'\bthis quarter\b|\bcurrent quarter\b': ('quarterly', 'current'),
+            r'\blast quarter\b|\bprevious quarter\b': ('quarterly', 'previous'),
+            r'\bthis month\b|\bcurrent month\b': ('monthly', 'current'),
+            r'\blast month\b|\bprevious month\b': ('monthly', 'previous'),
+            r'\bthis year\b|\bcurrent year\b': ('yearly', 'current'),
+            r'\blast year\b|\bprevious year\b': ('yearly', 'previous'),
+            
             # Quarterly patterns
             r'\bq1\b|\bfirst quarter\b|\b1st quarter\b': ('quarterly', 1),
             r'\bq2\b|\bsecond quarter\b|\b2nd quarter\b': ('quarterly', 2),
@@ -68,14 +70,6 @@ class TimeProcessor:
             # Yearly patterns
             r'\byear\b|\byearly\b|\bannual\b|\bannually\b|\bytd\b|\byear to date\b': ('yearly', None),
             
-            # Relative patterns
-            r'\bthis quarter\b|\bcurrent quarter\b': ('quarterly', 'current'),
-            r'\blast quarter\b|\bprevious quarter\b': ('quarterly', 'previous'),
-            r'\bthis month\b|\bcurrent month\b': ('monthly', 'current'),
-            r'\blast month\b|\bprevious month\b': ('monthly', 'previous'),
-            r'\bthis year\b|\bcurrent year\b': ('yearly', 'current'),
-            r'\blast year\b|\bprevious year\b': ('yearly', 'previous'),
-            
             # Range patterns
             r'\blast (\d+) months?\b': ('range_months', None),
             r'\blast (\d+) quarters?\b': ('range_quarters', None),
@@ -84,7 +78,6 @@ class TimeProcessor:
             r'\bpast (\d+) quarters?\b': ('range_quarters', None),
             r'\bpast (\d+) years?\b': ('range_years', None),
         }
-        
         # Comparison patterns
         self.comparison_patterns = {
             r'\bvs?\s+last year\b|\bcompared to last year\b|\byear over year\b|\byoy\b': 'year_over_year',
@@ -92,6 +85,14 @@ class TimeProcessor:
             r'\bvs?\s+last month\b|\bcompared to last month\b|\bmonth over month\b|\bmom\b': 'month_over_month',
             r'\bvs?\s+previous period\b|\bcompared to previous\b|\bperiod over period\b|\bpop\b': 'period_over_period',
         }
+    
+    def _validate_fiscal_year_start_month(self) -> None:
+        """Validate that fiscal_year_start_month is an integer between 1 and 12."""
+        if not isinstance(self.fiscal_year_start_month, int):
+            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(self.fiscal_year_start_month)}")
+        if not (1 <= self.fiscal_year_start_month <= 12):
+            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {self.fiscal_year_start_month}")
+        
     
     def parse_time_period(self, time_expression: str, reference_date: Optional[date] = None) -> TimePeriod:
         """Parse a natural language time expression into a structured time period"""
@@ -157,6 +158,9 @@ class TimeProcessor:
                                reference_date: date, original_expr: str) -> TimePeriod:
         """Create quarterly time period"""
         
+        # Store the original quarter_value to check for partial periods later
+        original_quarter_value = quarter_value
+        
         if quarter_value == 'current':
             quarter = self._get_current_quarter(reference_date)
         elif quarter_value == 'previous':
@@ -194,7 +198,7 @@ class TimeProcessor:
         end_date = date(end_year, end_month, last_day)
         
         # Check if it's a partial period (current quarter not yet complete)
-        is_partial = (quarter_value == 'current' and reference_date < end_date)
+        is_partial = (original_quarter_value == 'current' and reference_date < end_date)
         
         return TimePeriod(
             start_date=start_date,

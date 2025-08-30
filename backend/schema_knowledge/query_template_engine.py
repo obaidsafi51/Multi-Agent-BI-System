@@ -230,6 +230,13 @@ class QueryTemplateEngine:
                 "end_date": current_date.strftime("%Y-%m-%d")
             }
         else:
+            # Check if it's a standalone year (e.g., "2024")
+            year = self._extract_year(time_period, current_date.year)
+            if year != current_date.year:  # Year was explicitly provided
+                return {
+                    "start_date": f"{year}-01-01",
+                    "end_date": f"{year}-12-31"
+                }
             # Default to current year
             return {
                 "start_date": f"{current_date.year}-01-01",
@@ -290,8 +297,27 @@ class QueryTemplateEngine:
         """Perform parameter substitution in template"""
         sql = template
         
-        # Replace all {parameter} placeholders
+        # First pass: replace template-specific parameters that may contain placeholders
+        template_params = {}
+        regular_params = {}
+        
         for key, value in params.items():
+            if isinstance(value, str) and '{' in value and '}' in value:
+                template_params[key] = value
+            else:
+                regular_params[key] = value
+        
+        # Replace placeholders in template-specific parameters first
+        for key, value in template_params.items():
+            for param_key, param_value in regular_params.items():
+                placeholder = f"{{{param_key}}}"
+                if placeholder in value:
+                    value = value.replace(placeholder, str(param_value))
+            template_params[key] = value
+        
+        # Now replace all parameters in the main template
+        all_params = {**regular_params, **template_params}
+        for key, value in all_params.items():
             placeholder = f"{{{key}}}"
             if placeholder in sql:
                 sql = sql.replace(placeholder, str(value))

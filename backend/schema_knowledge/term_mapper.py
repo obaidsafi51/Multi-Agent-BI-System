@@ -72,11 +72,13 @@ class TermMapper:
     
     def _build_synonym_index(self) -> None:
         """Build index of synonyms to canonical terms"""
+        # First pass: Add canonical terms
         for canonical_term, mapping in self.term_mappings.items():
-            # Add the canonical term itself
             self.synonym_index[canonical_term.lower()] = canonical_term
-            
-            # Add all synonyms
+        
+        # Second pass: Add synonyms (this will override canonical terms if there are conflicts)
+        # Synonyms should take precedence over canonical terms for better mapping
+        for canonical_term, mapping in self.term_mappings.items():
             for synonym in mapping.synonyms:
                 self.synonym_index[synonym.lower()] = canonical_term
     

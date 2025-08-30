@@ -215,12 +215,14 @@ class SimilarityMatcher:
             similarity = SequenceMatcher(None, consonants1, consonants2).ratio()
             
             if similarity >= self.phonetic_threshold:
+                # Weight phonetic matches lower so fuzzy matches take precedence
+                phonetic_score = similarity * 0.6  # Reduced from raw similarity
                 return SimilarityMatch(
                     term=term1,
                     canonical_term=term2,
-                    similarity_score=similarity,
+                    similarity_score=phonetic_score,
                     match_type="phonetic",
-                    confidence=similarity * 0.7  # Lower confidence for phonetic matches
+                    confidence=phonetic_score  # Align confidence with score
                 )
         
         return None
@@ -238,19 +240,20 @@ class SimilarityMatcher:
         
         # Check for overlap in semantic groups
         common_groups = unknown_groups.intersection(known_groups)
-        
+
         if common_groups:
             # Calculate semantic similarity based on group overlap
             total_groups = unknown_groups.union(known_groups)
-            similarity = len(common_groups) / len(total_groups) if total_groups else 0
-            
-            if similarity >= self.semantic_threshold:
+            base_similarity = len(common_groups) / len(total_groups) if total_groups else 0
+            if base_similarity >= self.semantic_threshold:
+                # Weight semantic lower so fuzzy matches take precedence
+                semantic_score = base_similarity * self.semantic_threshold
                 return SimilarityMatch(
                     term=unknown_term,
                     canonical_term=known_term,
-                    similarity_score=similarity,
+                    similarity_score=semantic_score,
                     match_type="semantic",
-                    confidence=similarity * 0.85
+                    confidence=semantic_score
                 )
         
         return None
