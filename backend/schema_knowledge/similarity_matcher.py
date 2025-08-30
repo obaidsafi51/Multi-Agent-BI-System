@@ -128,9 +128,13 @@ class SimilarityMatcher:
                 self._partial_match(unknown_term, normalized_known),
                 self._edit_distance_match(unknown_term, normalized_known)
             ]
+            # Remove None results to avoid issues with max()
+            valid_results = [result for result in similarity_results if result]
+            if not valid_results:
+                continue
             
-            # Get the best match from all strategies
-            best_match = max(similarity_results, key=lambda x: x.similarity_score if x else 0)
+            # Get the best match from valid strategies
+            best_match = max(valid_results, key=lambda x: x.similarity_score)
             
             if best_match and best_match.similarity_score >= self.similarity_threshold:
                 matches.append(best_match)

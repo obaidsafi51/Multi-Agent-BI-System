@@ -2,9 +2,10 @@
 Intelligent time period processing for quarterly, yearly, and monthly queries.
 """
 
+from __future__ import annotations
 import re
 from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Union
 import calendar
 
 
@@ -14,30 +15,23 @@ from .types import PeriodType, TimePeriod, ComparisonPeriod
 class TimeProcessor:
     """Intelligent time period processing for financial queries"""
     
-    def __init__(self, fiscal_year_start_month: int = 1, two_digit_year_threshold: int = 50):
+    def __init__(self, fiscal_year_start_month: int = 1):
         """
-        Initialize time processor with fiscal year and year-parsing configuration.
+        Initialize time processor with fiscal year configuration.
 
         Args:
             fiscal_year_start_month: Month when fiscal year starts (1-12, where 1=January)
-            two_digit_year_threshold: Cutoff for interpreting two-digit years (0-99)
 
         Raises:
-            TypeError: If inputs are not integers
-            ValueError: If fiscal_year_start_month not in 1-12 or two_digit_year_threshold not in 0-99
+            TypeError: If fiscal_year_start_month is not an integer
+            ValueError: If fiscal_year_start_month not in 1-12
         """
-        # Validate parameters
+        # Validate fiscal year start month
         if not isinstance(fiscal_year_start_month, int):
             raise TypeError(f"fiscal_year_start_month must be an integer, got {type(fiscal_year_start_month)}")
-        if not isinstance(two_digit_year_threshold, int):
-            raise TypeError(f"two_digit_year_threshold must be an integer, got {type(two_digit_year_threshold)}")
         if not (1 <= fiscal_year_start_month <= 12):
             raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
-        if not (0 <= two_digit_year_threshold <= 99):
-            raise ValueError(f"two_digit_year_threshold must be between 0 and 99, got {two_digit_year_threshold}")
-
         self.fiscal_year_start_month = fiscal_year_start_month
-        self.two_digit_year_threshold = two_digit_year_threshold
         self.current_date = datetime.now().date()
         
         # Common time period patterns
@@ -122,23 +116,22 @@ class TimeProcessor:
         if year_match:
             return int(year_match.group(1))
         
-        # Look for 2-digit years (assume 20xx)
+        # Look for 2-digit years and map using sliding window relative to default_year
         year_match = re.search(r'\b(\d{2})\b', time_expr)
         if year_match:
             year_2digit = int(year_match.group(1))
-            # Note: cutoff of 50 for 2-digit years is hard-coded (2000-2050).
-            # Consider making this threshold configurable or using a sliding window around current year.
-            # Interpret two-digit year based on configurable threshold
-            if year_2digit <= self.two_digit_year_threshold:
-                # e.g., threshold 50 maps 00-50 to 2000-2050
-                return 2000 + year_2digit
+            # Generate candidate full years in both centuries
+            full_2000 = 2000 + year_2digit
+            full_1900 = 1900 + year_2digit
+            # Choose the year closest to default_year
+            if abs(full_2000 - default_year) <= abs(full_1900 - default_year):
+                return full_2000
             else:
-                # values above threshold map to previous century
-                return 1900 + year_2digit
+                return full_1900
         
         return default_year
     
-    def _create_period(self, period_type: str, period_value: Any, year: int, 
+    def _create_period(self, period_type: str, period_value: Union[int, str, None], year: int,
                       reference_date: date, original_expr: str) -> TimePeriod:
         """Create a TimePeriod object based on parsed components"""
         
@@ -154,7 +147,7 @@ class TimeProcessor:
             # Default to yearly
             return self._create_yearly_period('current', year, reference_date, original_expr)
     
-    def _create_quarterly_period(self, quarter_value: Any, year: int, 
+    def _create_quarterly_period(self, quarter_value: Union[int, str, None], year: int,
                                reference_date: date, original_expr: str) -> TimePeriod:
         """Create quarterly time period"""
         
@@ -209,7 +202,7 @@ class TimeProcessor:
             confidence=0.95
         )
     
-    def _create_monthly_period(self, month_value: Any, year: int, 
+    def _create_monthly_period(self, month_value: Union[int, str, None], year: int,
                              reference_date: date, original_expr: str) -> TimePeriod:
         """Create monthly time period"""
         
@@ -246,7 +239,7 @@ class TimeProcessor:
             confidence=0.95
         )
     
-    def _create_yearly_period(self, year_value: Any, year: int, 
+    def _create_yearly_period(self, year_value: Union[int, str, None], year: int,
                             reference_date: date, original_expr: str) -> TimePeriod:
         """Create yearly time period"""
         
@@ -516,7 +509,7 @@ class TimeProcessor:
         }
         return formulas.get(comparison_type, "((current_value - previous_value) / previous_value) * 100")
     
-    def validate_time_period(self, time_period: TimePeriod) -> Dict[str, Any]:
+    def validate_time_period(self, time_period: TimePeriod) -> Dict[str, List[str]]:
         """Validate a time period for reasonableness"""
         warnings = []
         errors = []
