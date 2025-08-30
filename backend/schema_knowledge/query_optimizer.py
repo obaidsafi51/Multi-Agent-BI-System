@@ -52,6 +52,12 @@ class QueryOptimizer:
         """Get default optimization configuration"""
         return {
             "database_type": "mysql",
+            "sql_formatting": {
+                "auto_add_semicolon": True,
+                "database_specific_overrides": {
+                    "sqlite": {"auto_add_semicolon": False},  # SQLite drivers often don't expect semicolons
+                }
+            },
             "optimization_rules": {
                 "result_limiting": {
                     "enabled": True,
@@ -339,18 +345,35 @@ class QueryOptimizer:
         return False
     
     def _cleanup_sql(self, sql: str) -> str:
-        """Clean up the SQL query"""
+        """Clean up the SQL query with configurable formatting options"""
         # Remove extra whitespace
         sql = re.sub(r'\s+', ' ', sql)
         
         # Remove trailing whitespace
         sql = sql.strip()
         
-        # Ensure SQL ends with a semicolon; add if missing
-        if not sql.endswith(';'):
+        # Check if we should add semicolon based on configuration
+        should_add_semicolon = self._should_add_semicolon()
+        
+        # Ensure SQL ends with a semicolon if configured to do so
+        if should_add_semicolon and not sql.endswith(';'):
             sql += ';'
         
         return sql
+    
+    def _should_add_semicolon(self) -> bool:
+        """Determine if semicolon should be added based on configuration"""
+        sql_formatting = self.optimization_config.get("sql_formatting", {})
+        
+        # Check for database-specific override first
+        db_overrides = sql_formatting.get("database_specific_overrides", {})
+        db_type_str = self.database_type.value
+        
+        if db_type_str in db_overrides:
+            return db_overrides[db_type_str].get("auto_add_semicolon", True)
+        
+        # Fall back to global setting
+        return sql_formatting.get("auto_add_semicolon", True)
     
     def set_database_type(self, database_type: DatabaseType) -> None:
         """Change the database type for optimization"""
@@ -361,6 +384,30 @@ class QueryOptimizer:
         """Add a custom optimization rule"""
         self.optimization_rules.append(rule)
         self.optimization_rules.sort(key=lambda x: x.priority, reverse=True)
+    
+    def set_semicolon_behavior(self, auto_add: bool, database_type: Optional[DatabaseType] = None) -> None:
+        """Configure semicolon addition behavior
+        
+        Args:
+            auto_add: Whether to automatically add semicolons
+            database_type: If specified, sets behavior for specific database type only
+        """
+        if "sql_formatting" not in self.optimization_config:
+            self.optimization_config["sql_formatting"] = {}
+        
+        if database_type is not None:
+            # Set database-specific override
+            if "database_specific_overrides" not in self.optimization_config["sql_formatting"]:
+                self.optimization_config["sql_formatting"]["database_specific_overrides"] = {}
+            
+            db_key = database_type.value
+            if db_key not in self.optimization_config["sql_formatting"]["database_specific_overrides"]:
+                self.optimization_config["sql_formatting"]["database_specific_overrides"][db_key] = {}
+            
+            self.optimization_config["sql_formatting"]["database_specific_overrides"][db_key]["auto_add_semicolon"] = auto_add
+        else:
+            # Set global behavior
+            self.optimization_config["sql_formatting"]["auto_add_semicolon"] = auto_add
     
     def get_optimization_statistics(self) -> Dict[str, Any]:
         """Get optimization statistics"""

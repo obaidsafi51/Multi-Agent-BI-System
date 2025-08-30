@@ -1,0 +1,39 @@
+{
+  "database_type": "mysql",
+  "sql_formatting": {
+    "auto_add_semicolon": true,
+    "comment": "Controls whether SQL statements are automatically terminated with semicolons",
+    "database_specific_overrides": {
+      "sqlite": {
+        "auto_add_semicolon": false,
+        "comment": "SQLite drivers often don't expect semicolons for single statements"
+      },
+      "postgresql": {
+        "auto_add_semicolon": true,
+        "comment": "PostgreSQL generally works well with semicolons"
+      },
+      "mysql": {
+        "auto_add_semicolon": true,
+        "comment": "MySQL standard practice includes semicolons"
+      }
+    }
+  },
+  "optimization_rules": {
+    "result_limiting": {
+      "enabled": true,
+      "rules": [
+        {
+          "condition": {"complexity": "high", "no_existing_limit": true},
+          "default_limit": 1000
+        }
+      ]
+    }
+  },
+  "performance_thresholds": {
+    "complexity_scoring": {
+      "base_score": 0,
+      "join_penalty": 2,
+      "subquery_penalty": 3
+    }
+  }
+}

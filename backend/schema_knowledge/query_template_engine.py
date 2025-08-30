@@ -323,9 +323,17 @@ class QueryTemplateEngine:
                 sql = sql.replace(placeholder, str(value))
         
         # Clean up any remaining empty filters
-        sql = re.sub(r'\s+AND\s+$', '', sql)  # Remove trailing AND
-        sql = re.sub(r'\s+WHERE\s+AND\s+', ' WHERE ', sql)  # Fix WHERE AND
-        sql = re.sub(r'\s+', ' ', sql)  # Normalize whitespace
+        # Remove 'WHERE AND' (with any whitespace)
+        sql = re.sub(r'\bWHERE\s+AND\b', 'WHERE', sql, flags=re.IGNORECASE)
+        # Remove multiple consecutive ANDs
+        sql = re.sub(r'\bAND\s+AND\b', 'AND', sql, flags=re.IGNORECASE)
+        # Remove trailing AND after WHERE or at end of WHERE clause
+        sql = re.sub(r'(WHERE\s*)(AND\s*)+', r'\1', sql, flags=re.IGNORECASE)
+        sql = re.sub(r'\s+AND\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
+        # Remove empty WHERE clauses (i.e., 'WHERE' followed by nothing or only whitespace)
+        sql = re.sub(r'\bWHERE\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
+        # Normalize whitespace
+        sql = re.sub(r'\s+', ' ', sql)
         
         return sql.strip()
     
