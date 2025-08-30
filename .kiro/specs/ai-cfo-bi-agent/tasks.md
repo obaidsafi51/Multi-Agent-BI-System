@@ -46,6 +46,7 @@
   - Build data retrieval functions with proper validation and quality checks
   - Create query optimization logic for analytical workloads and large datasets
   - Implement caching mechanism for frequently accessed financial data
+  -Use PyMySQL instead of SQLAlchemy in the Project
   - Write unit tests for SQL generation correctness and database operations
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
