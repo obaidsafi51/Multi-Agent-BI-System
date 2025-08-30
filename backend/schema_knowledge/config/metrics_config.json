@@ -1,0 +1,426 @@
+{
+  "metric_definitions": {
+    "revenue": {
+      "display_name": "Revenue",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(revenue)",
+      "description": "Total income from business operations",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["bar", "area"],
+        "color_scheme": "blue",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 1.2 * target",
+        "good": "> 1.0 * target", 
+        "warning": "> 0.8 * target",
+        "critical": "<= 0.8 * target"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM", 
+        "monthly": "SUM",
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "profit": {
+      "display_name": "Net Profit",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(net_profit)",
+      "description": "Total earnings after all expenses",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["bar", "waterfall"],
+        "color_scheme": "green",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 0.15 * revenue",
+        "good": "> 0.10 * revenue",
+        "warning": "> 0.05 * revenue", 
+        "critical": "<= 0.05 * revenue"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM", 
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "gross_profit": {
+      "display_name": "Gross Profit",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(gross_profit)",
+      "description": "Revenue minus cost of goods sold",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["bar", "area"],
+        "color_scheme": "teal",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 0.40 * revenue",
+        "good": "> 0.30 * revenue",
+        "warning": "> 0.20 * revenue",
+        "critical": "<= 0.20 * revenue"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM",
+        "quarterly": "SUM", 
+        "yearly": "SUM"
+      }
+    },
+    "operating_expenses": {
+      "display_name": "Operating Expenses",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(operating_expenses)",
+      "description": "Costs for day-to-day operations",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["bar", "pie"],
+        "color_scheme": "red",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "< 0.20 * revenue",
+        "good": "< 0.30 * revenue",
+        "warning": "< 0.40 * revenue",
+        "critical": ">= 0.40 * revenue"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM",
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "cash_flow": {
+      "display_name": "Net Cash Flow",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(net_cash_flow)",
+      "description": "Net cash movement",
+      "visualization_preferences": {
+        "primary_chart": "waterfall",
+        "secondary_charts": ["line", "bar"],
+        "color_scheme": "blue",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 0",
+        "good": "> -0.05 * revenue",
+        "warning": "> -0.10 * revenue",
+        "critical": "<= -0.10 * revenue"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM",
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "operating_cash_flow": {
+      "display_name": "Operating Cash Flow",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(operating_cash_flow)",
+      "description": "Cash from core operations",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["bar", "area"],
+        "color_scheme": "green",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 1.2 * net_profit",
+        "good": "> 1.0 * net_profit",
+        "warning": "> 0.8 * net_profit",
+        "critical": "<= 0.8 * net_profit"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM",
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "cash_balance": {
+      "display_name": "Cash Balance",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "LAST_VALUE(cash_balance)",
+      "description": "Available cash position",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["gauge", "bar"],
+        "color_scheme": "blue",
+        "show_trend": true,
+        "show_comparison": false
+      },
+      "kpi_thresholds": {
+        "excellent": "> 6 * monthly_expenses",
+        "good": "> 3 * monthly_expenses",
+        "warning": "> 1 * monthly_expenses",
+        "critical": "<= 1 * monthly_expenses"
+      },
+      "time_aggregation": {
+        "daily": "LAST",
+        "weekly": "LAST",
+        "monthly": "LAST",
+        "quarterly": "LAST",
+        "yearly": "LAST"
+      }
+    },
+    "budget_variance": {
+      "display_name": "Budget Variance",
+      "unit": "currency",
+      "format": "${:,.2f}",
+      "calculation": "SUM(variance_amount)",
+      "description": "Budget vs actual difference",
+      "visualization_preferences": {
+        "primary_chart": "bar",
+        "secondary_charts": ["waterfall", "line"],
+        "color_scheme": "orange",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "ABS(variance) < 0.05 * budget",
+        "good": "ABS(variance) < 0.10 * budget",
+        "warning": "ABS(variance) < 0.15 * budget",
+        "critical": "ABS(variance) >= 0.15 * budget"
+      },
+      "time_aggregation": {
+        "daily": "SUM",
+        "weekly": "SUM",
+        "monthly": "SUM",
+        "quarterly": "SUM",
+        "yearly": "SUM"
+      }
+    },
+    "roi": {
+      "display_name": "Return on Investment",
+      "unit": "percentage",
+      "format": "{:.2f}%",
+      "calculation": "AVG(roi_percentage)",
+      "description": "Investment return percentage",
+      "visualization_preferences": {
+        "primary_chart": "bar",
+        "secondary_charts": ["scatter", "gauge"],
+        "color_scheme": "purple",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 15",
+        "good": "> 10",
+        "warning": "> 5",
+        "critical": "<= 5"
+      },
+      "time_aggregation": {
+        "daily": "AVG",
+        "weekly": "AVG",
+        "monthly": "AVG",
+        "quarterly": "AVG",
+        "yearly": "AVG"
+      }
+    },
+    "debt_to_equity": {
+      "display_name": "Debt-to-Equity Ratio",
+      "unit": "ratio",
+      "format": "{:.2f}",
+      "calculation": "LAST_VALUE(debt_to_equity)",
+      "description": "Financial leverage ratio",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["gauge", "bar"],
+        "color_scheme": "red",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "< 0.3",
+        "good": "< 0.5",
+        "warning": "< 1.0",
+        "critical": ">= 1.0"
+      },
+      "time_aggregation": {
+        "daily": "LAST",
+        "weekly": "LAST",
+        "monthly": "LAST",
+        "quarterly": "LAST",
+        "yearly": "LAST"
+      }
+    },
+    "current_ratio": {
+      "display_name": "Current Ratio",
+      "unit": "ratio",
+      "format": "{:.2f}",
+      "calculation": "LAST_VALUE(current_ratio)",
+      "description": "Short-term liquidity ratio",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["gauge", "bar"],
+        "color_scheme": "blue",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 2.0",
+        "good": "> 1.5",
+        "warning": "> 1.0",
+        "critical": "<= 1.0"
+      },
+      "time_aggregation": {
+        "daily": "LAST",
+        "weekly": "LAST",
+        "monthly": "LAST",
+        "quarterly": "LAST",
+        "yearly": "LAST"
+      }
+    },
+    "gross_margin": {
+      "display_name": "Gross Margin",
+      "unit": "percentage",
+      "format": "{:.2f}%",
+      "calculation": "AVG(gross_margin)",
+      "description": "Gross profit percentage",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["gauge", "bar"],
+        "color_scheme": "teal",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 40",
+        "good": "> 30",
+        "warning": "> 20",
+        "critical": "<= 20"
+      },
+      "time_aggregation": {
+        "daily": "AVG",
+        "weekly": "AVG",
+        "monthly": "AVG",
+        "quarterly": "AVG",
+        "yearly": "AVG"
+      }
+    },
+    "net_margin": {
+      "display_name": "Net Margin",
+      "unit": "percentage",
+      "format": "{:.2f}%",
+      "calculation": "AVG(net_margin)",
+      "description": "Net profit percentage",
+      "visualization_preferences": {
+        "primary_chart": "line",
+        "secondary_charts": ["gauge", "bar"],
+        "color_scheme": "green",
+        "show_trend": true,
+        "show_comparison": true
+      },
+      "kpi_thresholds": {
+        "excellent": "> 15",
+        "good": "> 10",
+        "warning": "> 5",
+        "critical": "<= 5"
+      },
+      "time_aggregation": {
+        "daily": "AVG",
+        "weekly": "AVG",
+        "monthly": "AVG",
+        "quarterly": "AVG",
+        "yearly": "AVG"
+      }
+    }
+  },
+  "calculation_formulas": {
+    "gross_margin_percentage": "(gross_profit / revenue) * 100",
+    "net_margin_percentage": "(net_profit / revenue) * 100",
+    "budget_utilization": "(actual_amount / budgeted_amount) * 100",
+    "variance_percentage": "((actual_amount - budgeted_amount) / budgeted_amount) * 100",
+    "yoy_growth": "((current_value - previous_value) / previous_value) * 100",
+    "qoq_growth": "((current_quarter - previous_quarter) / previous_quarter) * 100",
+    "mom_growth": "((current_month - previous_month) / previous_month) * 100",
+    "cash_runway_months": "cash_balance / ABS(monthly_burn_rate)",
+    "working_capital": "current_assets - current_liabilities",
+    "ebitda": "net_profit + interest + taxes + depreciation + amortization"
+  },
+  "aggregation_rules": {
+    "sum_metrics": ["revenue", "profit", "gross_profit", "operating_expenses", "cash_flow", "operating_cash_flow", "investing_cash_flow", "financing_cash_flow", "budget_variance"],
+    "average_metrics": ["roi", "gross_margin", "net_margin"],
+    "last_value_metrics": ["cash_balance", "debt_to_equity", "current_ratio", "quick_ratio"],
+    "count_metrics": ["investment_count", "department_count"],
+    "weighted_average_metrics": ["weighted_roi", "weighted_margin"]
+  },
+  "comparison_periods": {
+    "year_over_year": {
+      "offset": "1 YEAR",
+      "label": "vs Last Year",
+      "format": "YoY"
+    },
+    "quarter_over_quarter": {
+      "offset": "3 MONTHS",
+      "label": "vs Last Quarter", 
+      "format": "QoQ"
+    },
+    "month_over_month": {
+      "offset": "1 MONTH",
+      "label": "vs Last Month",
+      "format": "MoM"
+    },
+    "week_over_week": {
+      "offset": "1 WEEK",
+      "label": "vs Last Week",
+      "format": "WoW"
+    }
+  },
+  "visualization_defaults": {
+    "chart_colors": {
+      "blue": ["#1f77b4", "#aec7e8", "#c5dbf1"],
+      "green": ["#2ca02c", "#98df8a", "#c4e8c4"],
+      "red": ["#d62728", "#ff9896", "#ffb3b3"],
+      "orange": ["#ff7f0e", "#ffbb78", "#ffd4a3"],
+      "purple": ["#9467bd", "#c5b0d5", "#dcc5e8"],
+      "teal": ["#17becf", "#9edae5", "#c7e9f1"]
+    },
+    "chart_settings": {
+      "line": {
+        "line_width": 2,
+        "marker_size": 6,
+        "show_grid": true
+      },
+      "bar": {
+        "bar_width": 0.8,
+        "show_values": true,
+        "show_grid": true
+      },
+      "pie": {
+        "show_percentages": true,
+        "explode_largest": true
+      },
+      "gauge": {
+        "show_threshold_bands": true,
+        "show_target_line": true
+      }
+    }
+  }
+}

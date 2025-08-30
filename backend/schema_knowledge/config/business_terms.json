@@ -1,0 +1,216 @@
+{
+  "financial_metrics": {
+    "revenue": {
+      "synonyms": ["sales", "income", "turnover", "top line", "gross sales"],
+      "database_mapping": "financial_overview.revenue",
+      "description": "Total income generated from business operations",
+      "category": "income_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "profit": {
+      "synonyms": ["net profit", "net income", "bottom line", "earnings", "profit after tax"],
+      "database_mapping": "financial_overview.net_profit",
+      "description": "Total earnings after all expenses and taxes",
+      "category": "income_statement", 
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "gross_profit": {
+      "synonyms": ["gross income", "gross margin dollars", "gross earnings"],
+      "database_mapping": "financial_overview.gross_profit",
+      "description": "Revenue minus cost of goods sold",
+      "category": "income_statement",
+      "data_type": "decimal", 
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "operating_expenses": {
+      "synonyms": ["opex", "operational costs", "operating costs", "overhead"],
+      "database_mapping": "financial_overview.operating_expenses",
+      "description": "Costs required for day-to-day business operations",
+      "category": "income_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "cash_flow": {
+      "synonyms": ["cash", "cash position", "liquidity"],
+      "database_mapping": "cash_flow.net_cash_flow",
+      "description": "Net amount of cash moving in and out of business",
+      "category": "cash_flow_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "operating_cash_flow": {
+      "synonyms": ["ocf", "cash from operations", "operational cash flow"],
+      "database_mapping": "cash_flow.operating_cash_flow",
+      "description": "Cash generated from core business operations",
+      "category": "cash_flow_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "investing_cash_flow": {
+      "synonyms": ["icf", "cash from investing", "investment cash flow"],
+      "database_mapping": "cash_flow.investing_cash_flow", 
+      "description": "Cash used for or generated from investments",
+      "category": "cash_flow_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "financing_cash_flow": {
+      "synonyms": ["fcf", "cash from financing", "financing activities"],
+      "database_mapping": "cash_flow.financing_cash_flow",
+      "description": "Cash from debt, equity, and dividend transactions",
+      "category": "cash_flow_statement",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "cash_balance": {
+      "synonyms": ["cash on hand", "cash position", "available cash"],
+      "database_mapping": "cash_flow.cash_balance",
+      "description": "Total cash available at end of period",
+      "category": "balance_sheet",
+      "data_type": "decimal",
+      "aggregation_methods": ["last", "avg"],
+      "time_sensitive": true
+    },
+    "budget_variance": {
+      "synonyms": ["variance", "budget vs actual", "budget difference"],
+      "database_mapping": "budget_tracking.variance_amount",
+      "description": "Difference between budgeted and actual amounts",
+      "category": "budget_analysis",
+      "data_type": "decimal",
+      "aggregation_methods": ["sum", "avg"],
+      "time_sensitive": true
+    },
+    "roi": {
+      "synonyms": ["return on investment", "investment return", "return percentage"],
+      "database_mapping": "investments.roi_percentage",
+      "description": "Return on investment as a percentage",
+      "category": "investment_analysis",
+      "data_type": "percentage",
+      "aggregation_methods": ["avg", "weighted_avg"],
+      "time_sensitive": true
+    },
+    "debt_to_equity": {
+      "synonyms": ["d/e ratio", "leverage ratio", "debt equity ratio"],
+      "database_mapping": "financial_ratios.debt_to_equity",
+      "description": "Ratio of total debt to shareholders equity",
+      "category": "financial_ratios",
+      "data_type": "ratio",
+      "aggregation_methods": ["last", "avg"],
+      "time_sensitive": true
+    },
+    "current_ratio": {
+      "synonyms": ["liquidity ratio", "working capital ratio"],
+      "database_mapping": "financial_ratios.current_ratio",
+      "description": "Ratio of current assets to current liabilities",
+      "category": "financial_ratios",
+      "data_type": "ratio",
+      "aggregation_methods": ["last", "avg"],
+      "time_sensitive": true
+    },
+    "gross_margin": {
+      "synonyms": ["gross profit margin", "gross margin percentage"],
+      "database_mapping": "financial_ratios.gross_margin",
+      "description": "Gross profit as percentage of revenue",
+      "category": "financial_ratios",
+      "data_type": "percentage",
+      "aggregation_methods": ["avg", "weighted_avg"],
+      "time_sensitive": true
+    },
+    "net_margin": {
+      "synonyms": ["net profit margin", "net margin percentage", "profit margin"],
+      "database_mapping": "financial_ratios.net_margin",
+      "description": "Net profit as percentage of revenue",
+      "category": "financial_ratios",
+      "data_type": "percentage",
+      "aggregation_methods": ["avg", "weighted_avg"],
+      "time_sensitive": true
+    }
+  },
+  "time_periods": {
+    "quarterly": {
+      "synonyms": ["quarter", "q1", "q2", "q3", "q4", "qtd", "quarter to date"],
+      "pattern": "quarterly",
+      "description": "Three-month periods"
+    },
+    "monthly": {
+      "synonyms": ["month", "mtd", "month to date", "monthly"],
+      "pattern": "monthly", 
+      "description": "Calendar month periods"
+    },
+    "yearly": {
+      "synonyms": ["year", "annual", "annually", "ytd", "year to date"],
+      "pattern": "yearly",
+      "description": "Calendar year periods"
+    },
+    "daily": {
+      "synonyms": ["day", "daily", "today", "yesterday"],
+      "pattern": "daily",
+      "description": "Daily periods"
+    },
+    "weekly": {
+      "synonyms": ["week", "weekly", "this week", "last week"],
+      "pattern": "weekly",
+      "description": "Weekly periods"
+    }
+  },
+  "departments": {
+    "sales": {
+      "synonyms": ["sales team", "revenue team", "business development"],
+      "database_mapping": "budget_tracking.department = 'sales'",
+      "description": "Sales and revenue generation department"
+    },
+    "marketing": {
+      "synonyms": ["marketing team", "brand", "advertising"],
+      "database_mapping": "budget_tracking.department = 'marketing'",
+      "description": "Marketing and brand management department"
+    },
+    "operations": {
+      "synonyms": ["ops", "operational", "operations team"],
+      "database_mapping": "budget_tracking.department = 'operations'",
+      "description": "Day-to-day operations department"
+    },
+    "finance": {
+      "synonyms": ["finance team", "accounting", "financial"],
+      "database_mapping": "budget_tracking.department = 'finance'",
+      "description": "Finance and accounting department"
+    },
+    "hr": {
+      "synonyms": ["human resources", "people", "hr team"],
+      "database_mapping": "budget_tracking.department = 'hr'",
+      "description": "Human resources department"
+    },
+    "it": {
+      "synonyms": ["information technology", "tech", "technology"],
+      "database_mapping": "budget_tracking.department = 'it'",
+      "description": "Information technology department"
+    }
+  },
+  "comparison_types": {
+    "year_over_year": {
+      "synonyms": ["yoy", "vs last year", "compared to last year", "year on year"],
+      "description": "Compare same period in previous year"
+    },
+    "quarter_over_quarter": {
+      "synonyms": ["qoq", "vs last quarter", "compared to last quarter"],
+      "description": "Compare to previous quarter"
+    },
+    "month_over_month": {
+      "synonyms": ["mom", "vs last month", "compared to last month"],
+      "description": "Compare to previous month"
+    },
+    "period_over_period": {
+      "synonyms": ["pop", "vs previous period", "compared to previous"],
+      "description": "Compare to previous equivalent period"
+    }
+  }
+}
