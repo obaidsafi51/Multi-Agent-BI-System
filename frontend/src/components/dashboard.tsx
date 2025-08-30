@@ -1,4 +1,5 @@
 "use client";
+import React from "react";
 
 import { useState } from "react";
 import { ChatInterface } from "./chat/chat-interface";
@@ -7,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { BentoGridCard, ChatMessage, QuerySuggestion } from "@/types/dashboard";
 import { mockBentoCards, mockChatMessages, mockSuggestions } from "@/lib/mock-data";
 
-export function Dashboard() {
+export default function Dashboard() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(mockChatMessages);
   const [bentoCards, setBentoCards] = useState<BentoGridCard[]>(mockBentoCards);
   const [suggestions] = useState<QuerySuggestion[]>(mockSuggestions);
