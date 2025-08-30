@@ -30,8 +30,6 @@ class TimeProcessor:
         self._validate_fiscal_year_start_month(fiscal_year_start_month)
         self.fiscal_year_start_month = fiscal_year_start_month
         self.current_date = datetime.now().date()
-        # Validate fiscal_year_start_month and initialize patterns
-        self._validate_fiscal_year_start_month()
         # Common time period patterns
         self.period_patterns = {
             # Relative patterns (most specific first)
