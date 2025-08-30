@@ -5,7 +5,7 @@ Intelligent time period processing for quarterly, yearly, and monthly queries.
 from __future__ import annotations
 import re
 from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import calendar
 
 
@@ -24,15 +24,22 @@ class TimeProcessor:
 
         Raises:
             TypeError: If fiscal_year_start_month is not an integer
-            ValueError: If fiscal_year_start_month not in 1-12
+            ValueError: If fiscal_year_start_month is not between 1 and 12
         """
-        # Validate fiscal year start month
+        # Validate fiscal_year_start_month
         if not isinstance(fiscal_year_start_month, int):
             raise TypeError(f"fiscal_year_start_month must be an integer, got {type(fiscal_year_start_month)}")
         if not (1 <= fiscal_year_start_month <= 12):
             raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
         self.fiscal_year_start_month = fiscal_year_start_month
         self.current_date = datetime.now().date()
+    
+    def _validate_fiscal_year_start_month(self) -> None:
+        """Validate that fiscal_year_start_month is an integer between 1 and 12."""
+        if not isinstance(self.fiscal_year_start_month, int):
+            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(self.fiscal_year_start_month)}")
+        if not (1 <= self.fiscal_year_start_month <= 12):
+            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {self.fiscal_year_start_month}")
         
         # Common time period patterns
         self.period_patterns = {
@@ -95,6 +102,9 @@ class TimeProcessor:
         
         # Extract year if present
         year = self._extract_year(time_expr, reference_date.year)
+        # Standalone 4-digit year: treat as full-year period
+        if re.fullmatch(r'\d{4}', time_expr):
+            return self._create_period('yearly', None, year, reference_date, time_expr)
         
         # Try to match patterns
         for pattern, (period_type, period_value) in self.period_patterns.items():
@@ -116,18 +126,14 @@ class TimeProcessor:
         if year_match:
             return int(year_match.group(1))
         
-        # Look for 2-digit years and map using sliding window relative to default_year
+        # Look for 2-digit years (assume 20xx)
         year_match = re.search(r'\b(\d{2})\b', time_expr)
         if year_match:
             year_2digit = int(year_match.group(1))
-            # Generate candidate full years in both centuries
-            full_2000 = 2000 + year_2digit
-            full_1900 = 1900 + year_2digit
-            # Choose the year closest to default_year
-            if abs(full_2000 - default_year) <= abs(full_1900 - default_year):
-                return full_2000
-            else:
-                return full_1900
+            if year_2digit <= 50:  # Assume 2000-2050
+                return 2000 + year_2digit
+            else:  # Assume 1951-1999
+                return 1900 + year_2digit
         
         return default_year
     
@@ -352,10 +358,10 @@ class TimeProcessor:
         """
         Get current quarter based on fiscal year settings.
         
-        Handles edge cases:
-        - Validates fiscal_year_start_month is in range (1-12) and raises ValueError if not
-        - fiscal_month calculations that underflow or overflow month boundaries
-        - Proper modular arithmetic for fiscal year boundary calculations
+    Handles edge cases:
+    - Validates fiscal_year_start_month is in range (1-12) and raises ValueError if not
+    - fiscal_month calculations that underflow or overflow month boundaries
+    - Proper modular arithmetic for fiscal year boundary calculations
         """
         month = reference_date.month
         
@@ -509,7 +515,7 @@ class TimeProcessor:
         }
         return formulas.get(comparison_type, "((current_value - previous_value) / previous_value) * 100")
     
-    def validate_time_period(self, time_period: TimePeriod) -> Dict[str, List[str]]:
+    def validate_time_period(self, time_period: TimePeriod) -> Dict[str, Any]:
         """Validate a time period for reasonableness"""
         warnings = []
         errors = []
