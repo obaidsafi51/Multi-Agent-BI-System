@@ -66,9 +66,12 @@ SPACED_VALUE= value with spaces
     
     def test_missing_env_file_handling(self):
         """Test graceful handling of missing .env file"""
-        # Create path to non-existent file using cross-platform temporary directory
-        temp_dir = Path(tempfile.gettempdir())
-        non_existent_path = temp_dir / "non_existent_file.env"
+        # Create path to guaranteed non-existent file using tempfile.mktemp()
+        # This creates a unique path that doesn't exist
+        non_existent_path = Path(tempfile.mktemp(suffix='.env'))
+        
+        # Verify the file doesn't exist (it shouldn't, but let's be explicit)
+        assert not non_existent_path.exists(), "Test file should not exist"
         
         # Should not raise any exceptions
         load_environment_variables(non_existent_path)

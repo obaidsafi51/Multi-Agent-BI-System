@@ -189,15 +189,16 @@ class DatabaseManager:
             version_result = self.execute_query("SELECT VERSION() as version", fetch_one=True)
             info["version"] = version_result["version"] if version_result else "Unknown"
             
-            # Check if TiDB (handle TiDB Serverless which doesn't support @@tidb_version)
+            # Check if TiDB (handle cases where @@tidb_version is not available)
             try:
                 with self.get_connection() as conn:
                     with conn.cursor() as cursor:
                         cursor.execute("SELECT @@tidb_version as tidb_version")
                         tidb_result = cursor.fetchone()
                         info["tidb_version"] = tidb_result["tidb_version"] if tidb_result else None
-            except pymysql.Error:
-                info["tidb_version"] = "TiDB Serverless (version not available)"
+            except pymysql.Error as e:
+                logger.debug(f"TiDB version query failed: {e}")
+                info["tidb_version"] = "TiDB version unavailable"
             
             # Get current database
             db_result = self.execute_query("SELECT DATABASE() as current_db", fetch_one=True)

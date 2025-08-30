@@ -115,7 +115,21 @@ class DataValidator:
         try:
             decimal_value = Decimal(str(value))
             
-            # Check precision
+            # Check precision (total number of significant digits)
+            # Decimal.as_tuple() returns (sign, digits, exponent) where:
+            # - sign: 0 for positive, 1 for negative
+            # - digits: tuple of individual digits (0-9) representing ALL significant digits
+            # - exponent: power of 10 to apply to the digits
+            #
+            # Examples of digits tuple:
+            #   123.45   → digits = (1, 2, 3, 4, 5), len = 5 significant digits
+            #   0.00123  → digits = (1, 2, 3), len = 3 significant digits (leading zeros ignored)
+            #   1230000  → digits = (1, 2, 3, 0, 0, 0, 0), len = 7 digits (trailing zeros count)
+            #   0.10     → digits = (1, 0), len = 2 significant digits
+            #   1000.00  → digits = (1, 0, 0, 0, 0, 0), len = 6 digits (all zeros after 1 count)
+            #
+            # The len(digits) gives us the total count of significant digits,
+            # which is what we want to limit for precision control
             sign, digits, exponent = decimal_value.as_tuple()
             if len(digits) > max_digits:
                 raise ValidationError(
