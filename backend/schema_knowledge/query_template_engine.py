@@ -26,6 +26,7 @@ class QueryTemplateEngine:
         self.templates: Dict[str, QueryTemplate] = {}
         self.template_categories: Dict[str, List[str]] = {}
         self.sql_cleaner = SQLCleanupUtility()
+        self.cleanup_rules = []  # Initialize as empty list; add functions here if needed
         
         self._load_templates()
         self._categorize_templates()
