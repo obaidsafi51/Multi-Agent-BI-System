@@ -21,6 +21,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "python-multipart>=0.0.6",
     "pytest>=7.4.3",
+    "pytest-asyncio>=0.21.1",
 ]
 requires-python = ">=3.11"
 

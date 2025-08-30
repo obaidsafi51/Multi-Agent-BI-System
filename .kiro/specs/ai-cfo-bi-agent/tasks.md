@@ -29,7 +29,7 @@
   - Write unit tests for term mapping accuracy and query template validation
   - _Requirements: 1.2, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 4. Implement NLP Agent with KIMI integration
+- [x] 4. Implement NLP Agent with KIMI integration
 
   - Create KIMI API client with authentication, retry logic, and error handling
   - Build natural language query parser that extracts financial metrics and time periods
