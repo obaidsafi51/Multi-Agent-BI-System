@@ -4,7 +4,7 @@ Tests for flexible percentage validation system.
 
 import pytest
 from decimal import Decimal
-from backend.database.validation import (
+from database.validation import (
     DataValidator, 
     PercentageType, 
     ValidationError, 

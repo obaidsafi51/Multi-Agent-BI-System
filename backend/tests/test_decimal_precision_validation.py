@@ -4,7 +4,7 @@ Tests for decimal precision validation logic.
 
 import pytest
 from decimal import Decimal
-from backend.database.validation import DataValidator, ValidationError
+from database.validation import DataValidator, ValidationError
 
 
 class TestDecimalPrecisionValidation:

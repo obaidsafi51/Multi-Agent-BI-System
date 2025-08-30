@@ -5,7 +5,7 @@ Implements the financial data schema from the design document
 
 import logging
 from typing import List, Dict, Any
-from database.connection import tidb_connection, get_database
+from .connection import tidb_connection, get_database
 import pymysql
 
 logger = logging.getLogger(__name__)

@@ -333,11 +333,6 @@ class TestDataValidation:
 
 
 
-# Load environment variables for tests
-def pytest_configure():
-    """Configure pytest with environment variables"""
-    load_environment_variables()
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

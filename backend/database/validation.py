@@ -43,11 +43,26 @@ class ValidationError(Exception):
         self.value = value
         self.percentage_type = percentage_type
         
-        if percentage_type:
-            config = DataValidator.get_percentage_config(percentage_type)
-            self.message += f" (Expected range for {percentage_type.value}: {config.description})"
-        
         super().__init__(f"Validation error for field '{field}': {self.message}")
+    
+    def get_enhanced_message(self) -> str:
+        """Get enhanced error message with percentage config info if available"""
+        enhanced_message = f"Validation error for field '{self.field}': {self.message}"
+        
+        if self.percentage_type:
+            try:
+                # Access DataValidator after it's fully defined
+                config = DataValidator.get_percentage_config(self.percentage_type)
+                enhanced_message += f" (Expected range for {self.percentage_type.value}: {config.description})"
+            except (NameError, AttributeError):
+                # Fallback if DataValidator is not available yet
+                pass
+        
+        return enhanced_message
+    
+    def __str__(self) -> str:
+        """Return the enhanced message when converting to string"""
+        return self.get_enhanced_message()
 
 
 class ValidationWarning:
