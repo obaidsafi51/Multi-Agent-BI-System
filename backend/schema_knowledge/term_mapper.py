@@ -7,26 +7,14 @@ import os
 from typing import Dict, List, Optional, Tuple, Any
 from difflib import SequenceMatcher
 from dataclasses import dataclass
+import json
+import os
+from typing import Dict, List, Optional, Tuple, Any
+from difflib import SequenceMatcher
 from pathlib import Path
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from models.core import FinancialEntity
-
-
-@dataclass
-class TermMapping:
-    """Represents a mapping between business term and database schema"""
-    business_term: str
-    database_mapping: str
-    synonyms: List[str]
-    category: str
-    data_type: str
-    aggregation_methods: List[str]
-    confidence_score: float = 1.0
-    description: str = ""
+from .types import TermMapping
 
 
 class TermMapper:

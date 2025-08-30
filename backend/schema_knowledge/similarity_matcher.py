@@ -9,14 +9,7 @@ from dataclasses import dataclass
 import math
 
 
-@dataclass
-class SimilarityMatch:
-    """Represents a similarity match result"""
-    term: str
-    canonical_term: str
-    similarity_score: float
-    match_type: str  # exact, fuzzy, phonetic, semantic
-    confidence: float
+from .types import SimilarityMatch
 
 
 class SimilarityMatcher:

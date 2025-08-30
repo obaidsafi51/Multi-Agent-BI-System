@@ -8,16 +8,26 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from datetime import date
 
-from .term_mapper import TermMapper, TermMapping
-from .query_template_engine import QueryTemplateEngine, GeneratedQuery
-from .similarity_matcher import SimilarityMatcher, SimilarityMatch
-from .time_processor import TimeProcessor, TimePeriod, ComparisonPeriod
-import sys
+import json
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from typing import Dict, List, Optional, Any, Tuple
+from pathlib import Path
+from datetime import date
+
+from .term_mapper import TermMapper
+from .query_template_engine import QueryTemplateEngine
+from .similarity_matcher import SimilarityMatcher
+from .time_processor import TimeProcessor
+from .types import (
+    TermMapping, 
+    GeneratedQuery, 
+    SimilarityMatch, 
+    TimePeriod, 
+    ComparisonPeriod,
+    DatabaseType
+)
 
 from models.core import QueryIntent, FinancialEntity, ErrorResponse
-
 
 class SchemaKnowledgeBase:
     """
@@ -472,3 +482,36 @@ class SchemaKnowledgeBase:
         # This would require extending the term mapper to support runtime additions
         # For now, we'll store it in memory
         pass
+    
+    def configure_database_optimization(self, database_type: str = "mysql") -> None:
+        """Configure database-specific optimizations"""
+        # Map string to enum
+        db_type_mapping = {
+            "mysql": DatabaseType.MYSQL,
+            "postgresql": DatabaseType.POSTGRESQL,
+            "sqlite": DatabaseType.SQLITE,
+            "mssql": DatabaseType.MSSQL
+        }
+        
+        if database_type.lower() in db_type_mapping:
+            # This would be used by the query engine's optimizer
+            # For now, we store it for future use
+            self._database_type = db_type_mapping[database_type.lower()]
+        else:
+            raise ValueError(f"Unsupported database type: {database_type}")
+    
+    def get_optimization_config(self) -> Dict[str, Any]:
+        """Get current optimization configuration"""
+        from .query_optimizer import QueryOptimizer
+        
+        optimizer = QueryOptimizer(
+            config_path=os.path.join(os.path.dirname(__file__), "config"),
+            database_type=getattr(self, '_database_type', DatabaseType.MYSQL)
+        )
+        
+        return {
+            "database_type": optimizer.database_type.value,
+            "optimization_rules": len(optimizer.optimization_rules),
+            "statistics": optimizer.get_optimization_statistics(),
+            "validation": optimizer.validate_optimization_config()
+        }

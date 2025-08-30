@@ -10,38 +10,7 @@ from enum import Enum
 import calendar
 
 
-class PeriodType(Enum):
-    """Types of time periods"""
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    QUARTERLY = "quarterly"
-    YEARLY = "yearly"
-    CUSTOM = "custom"
-
-
-@dataclass
-class TimePeriod:
-    """Represents a processed time period"""
-    start_date: date
-    end_date: date
-    period_type: PeriodType
-    period_label: str
-    fiscal_year: Optional[int] = None
-    quarter: Optional[int] = None
-    month: Optional[int] = None
-    year: Optional[int] = None
-    is_partial: bool = False
-    confidence: float = 1.0
-
-
-@dataclass
-class ComparisonPeriod:
-    """Represents a comparison period with context"""
-    current_period: TimePeriod
-    comparison_period: TimePeriod
-    comparison_type: str  # yoy, qoq, mom, etc.
-    growth_calculation: str
+from .types import PeriodType, TimePeriod, ComparisonPeriod
 
 
 class TimeProcessor:

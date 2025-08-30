@@ -1,0 +1,158 @@
+{
+  "database_type": "mysql",
+  "optimization_rules": {
+    "index_hints": {
+      "enabled": true,
+      "strategy": "conditional",
+      "rules": [
+        {
+          "condition": {
+            "table": "financial_overview",
+            "order_by_columns": ["period_date"],
+            "complexity": ["medium", "high"]
+          },
+          "mysql": {
+            "hint": "USE INDEX (idx_period_date)",
+            "position": "after_table"
+          },
+          "postgresql": {
+            "hint": "/* INDEX HINT: period_date */",
+            "position": "comment"
+          },
+          "sqlite": {
+            "hint": "",
+            "position": "none"
+          }
+        },
+        {
+          "condition": {
+            "table": "cash_flow",
+            "joins": true,
+            "complexity": ["high"]
+          },
+          "mysql": {
+            "hint": "USE INDEX (idx_period_date, idx_cash_flow_type)",
+            "position": "after_table"
+          },
+          "postgresql": {
+            "hint": "/* INDEX HINT: period_date, cash_flow_type */",
+            "position": "comment"
+          }
+        }
+      ]
+    },
+    "result_limiting": {
+      "enabled": true,
+      "rules": [
+        {
+          "condition": {
+            "complexity": "high",
+            "no_existing_limit": true
+          },
+          "default_limit": 1000,
+          "max_limit": 10000
+        },
+        {
+          "condition": {
+            "complexity": "medium",
+            "no_existing_limit": true,
+            "time_range_days": "> 365"
+          },
+          "default_limit": 5000
+        }
+      ]
+    },
+    "query_rewriting": {
+      "enabled": true,
+      "rules": [
+        {
+          "name": "avoid_select_star",
+          "pattern": "SELECT \\*",
+          "replacement": "SELECT {explicit_columns}",
+          "condition": {
+            "table_size": "large"
+          }
+        },
+        {
+          "name": "optimize_date_filters",
+          "pattern": "WHERE.*period_date.*AND.*period_date",
+          "replacement": "WHERE period_date BETWEEN '{start_date}' AND '{end_date}'",
+          "condition": {
+            "date_range_query": true
+          }
+        }
+      ]
+    },
+    "caching_hints": {
+      "enabled": true,
+      "rules": [
+        {
+          "condition": {
+            "historical_data": true,
+            "time_range_complete": true
+          },
+          "cache_duration": 3600,
+          "cache_key_components": ["table", "date_range", "aggregation"]
+        },
+        {
+          "condition": {
+            "real_time_data": true
+          },
+          "cache_duration": 60,
+          "cache_key_components": ["table", "timestamp"]
+        }
+      ]
+    }
+  },
+  "performance_thresholds": {
+    "complexity_scoring": {
+      "base_score": 0,
+      "join_penalty": 2,
+      "subquery_penalty": 3,
+      "window_function_penalty": 2,
+      "group_by_penalty": 1,
+      "order_by_penalty": 1,
+      "large_time_range_penalty": 2
+    },
+    "optimization_triggers": {
+      "low_complexity": {
+        "max_score": 3,
+        "optimizations": ["basic_formatting"]
+      },
+      "medium_complexity": {
+        "max_score": 7,
+        "optimizations": ["index_hints", "result_limiting"]
+      },
+      "high_complexity": {
+        "max_score": 999,
+        "optimizations": ["index_hints", "result_limiting", "query_rewriting", "caching_hints"]
+      }
+    }
+  },
+  "database_specific_settings": {
+    "mysql": {
+      "supports_index_hints": true,
+      "hint_syntax": "USE INDEX ({index_names})",
+      "max_query_length": 1048576,
+      "preferred_date_format": "YYYY-MM-DD"
+    },
+    "postgresql": {
+      "supports_index_hints": false,
+      "hint_syntax": "/* INDEX: {index_names} */",
+      "max_query_length": 1073741824,
+      "preferred_date_format": "YYYY-MM-DD"
+    },
+    "sqlite": {
+      "supports_index_hints": false,
+      "hint_syntax": "",
+      "max_query_length": 1000000,
+      "preferred_date_format": "YYYY-MM-DD"
+    },
+    "mssql": {
+      "supports_index_hints": true,
+      "hint_syntax": "WITH (INDEX({index_names}))",
+      "max_query_length": 65536,
+      "preferred_date_format": "YYYY-MM-DD"
+    }
+  }
+}

@@ -6,37 +6,16 @@ import json
 import os
 import re
 from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timedelta
-
-import sys
+from typing import Dict, List, Optional, Any, Tuple
+from pathlib import Path
+import json
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import re
 
 from models.core import QueryIntent, QueryResult
-
-
-@dataclass
-class QueryTemplate:
-    """Represents a SQL query template with metadata"""
-    name: str
-    template: str
-    description: str
-    parameters: Dict[str, Any]
-    supports_aggregation: bool
-    supports_comparison: bool
-    category: str = "general"
-
-
-@dataclass
-class GeneratedQuery:
-    """Represents a generated SQL query with metadata"""
-    sql: str
-    parameters: Dict[str, Any]
-    template_name: str
-    estimated_complexity: str
-    supports_caching: bool = True
+from .types import QueryTemplate, GeneratedQuery
 
 
 class QueryTemplateEngine:
@@ -419,19 +398,31 @@ class QueryTemplateEngine:
         return self.template_categories.copy()
     
     def optimize_query(self, generated_query: GeneratedQuery) -> GeneratedQuery:
-        """Apply query optimizations"""
-        sql = generated_query.sql
+        """
+        Apply query optimizations using configurable, database-agnostic optimizer.
         
-        # Add appropriate indexes hints for common patterns
-        if "ORDER BY period_date" in sql and "financial_overview" in sql:
-            sql = sql.replace("FROM financial_overview", "FROM financial_overview USE INDEX (idx_period_date)")
+        This method now uses a configuration-driven approach instead of hard-coded
+        database-specific optimizations. The optimizer supports:
+        - Multiple database types (MySQL, PostgreSQL, SQLite, MSSQL)
+        - Configurable optimization rules
+        - Performance-based optimization strategies
+        - Database-agnostic query improvements
+        """
+        # Import here to avoid circular imports
+        from .query_optimizer import QueryOptimizer
+        from .types import DatabaseType
         
-        # Add LIMIT for potentially large result sets
-        if generated_query.estimated_complexity == "high" and "LIMIT" not in sql.upper():
-            sql += " LIMIT 1000"
+        # Initialize optimizer (could be cached as instance variable)
+        optimizer = QueryOptimizer(
+            config_path=os.path.join(os.path.dirname(__file__), "config"),
+            database_type=DatabaseType.MYSQL  # Could be configurable via settings
+        )
+        
+        # Apply optimizations using configuration-driven rules
+        optimization_result = optimizer.optimize_query(generated_query)
         
         return GeneratedQuery(
-            sql=sql,
+            sql=optimization_result.optimized_sql,
             parameters=generated_query.parameters,
             template_name=generated_query.template_name,
             estimated_complexity=generated_query.estimated_complexity,
