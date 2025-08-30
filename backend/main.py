@@ -38,14 +38,23 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Validate environment variables on startup"""
-    required_env_vars = ['DATABASE_URL', 'REDIS_URL', 'RABBITMQ_URL', 'KIMI_API_KEY', 'SECRET_KEY']
-    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+    # TiDB connection variables (required for database functionality)
+    tidb_vars = ['TIDB_HOST', 'TIDB_USER', 'TIDB_PASSWORD', 'TIDB_DATABASE']
+    missing_tidb_vars = [var for var in tidb_vars if not os.getenv(var)]
     
-    if missing_vars:
-        logger.error(f"Missing required environment variables: {missing_vars}")
-        raise RuntimeError(f"Missing required environment variables: {missing_vars}")
+    if missing_tidb_vars:
+        logger.warning(f"Missing TiDB environment variables: {missing_tidb_vars}")
+        logger.warning("Database functionality may not work properly")
     
-    logger.info("Backend started successfully with all required environment variables")
+    # Optional environment variables for full functionality
+    optional_vars = ['REDIS_URL', 'RABBITMQ_URL', 'KIMI_API_KEY', 'SECRET_KEY']
+    missing_optional_vars = [var for var in optional_vars if not os.getenv(var)]
+    
+    if missing_optional_vars:
+        logger.info(f"Optional environment variables not set: {missing_optional_vars}")
+        logger.info("Some features may be limited")
+    
+    logger.info("Backend started successfully")
 
 @app.get("/")
 async def root():
