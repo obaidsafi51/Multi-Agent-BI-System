@@ -8,12 +8,6 @@ from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from datetime import date
 
-import json
-import os
-from typing import Dict, List, Optional, Any, Tuple
-from pathlib import Path
-from datetime import date
-
 from .term_mapper import TermMapper
 from .query_template_engine import QueryTemplateEngine
 from .similarity_matcher import SimilarityMatcher

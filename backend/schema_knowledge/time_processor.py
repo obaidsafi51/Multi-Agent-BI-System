@@ -5,8 +5,6 @@ Intelligent time period processing for quarterly, yearly, and monthly queries.
 import re
 from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
-from enum import Enum
 import calendar
 
 
@@ -17,7 +15,22 @@ class TimeProcessor:
     """Intelligent time period processing for financial queries"""
     
     def __init__(self, fiscal_year_start_month: int = 1):
-        """Initialize time processor with fiscal year configuration"""
+        """
+        Initialize time processor with fiscal year configuration.
+        
+        Args:
+            fiscal_year_start_month: Month when fiscal year starts (1-12, where 1=January)
+            
+        Raises:
+            ValueError: If fiscal_year_start_month is not between 1 and 12
+        """
+        # Validate fiscal year start month
+        if not isinstance(fiscal_year_start_month, int):
+            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(fiscal_year_start_month)}")
+        
+        if not (1 <= fiscal_year_start_month <= 12):
+            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
+        
         self.fiscal_year_start_month = fiscal_year_start_month
         self.current_date = datetime.now().date()
         
@@ -332,15 +345,32 @@ class TimeProcessor:
         return None
     
     def _get_current_quarter(self, reference_date: date) -> int:
-        """Get current quarter based on fiscal year settings"""
+        """
+        Get current quarter based on fiscal year settings.
+        
+        Handles edge cases:
+        - fiscal_year_start_month outside valid range (1-12)
+        - fiscal_month calculations that overflow or underflow
+        - Proper modular arithmetic for fiscal year boundaries
+        """
         month = reference_date.month
         
-        # Adjust for fiscal year
-        fiscal_month = month - self.fiscal_year_start_month + 1
-        if fiscal_month <= 0:
-            fiscal_month += 12
+        # Validate fiscal_year_start_month is in valid range
+        if not (1 <= self.fiscal_year_start_month <= 12):
+            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {self.fiscal_year_start_month}")
         
-        return (fiscal_month - 1) // 3 + 1
+        # Calculate fiscal month using proper modular arithmetic
+        # This handles both negative and > 12 cases correctly
+        fiscal_month = ((month - self.fiscal_year_start_month) % 12) + 1
+        
+        # Calculate quarter (1-4) from fiscal month (1-12)
+        quarter = ((fiscal_month - 1) // 3) + 1
+        
+        # Ensure quarter is in valid range (defensive programming)
+        if not (1 <= quarter <= 4):
+            raise ValueError(f"Calculated quarter {quarter} is outside valid range 1-4")
+        
+        return quarter
     
     def parse_comparison(self, time_expression: str, base_period: TimePeriod) -> Optional[ComparisonPeriod]:
         """Parse comparison expressions and create comparison periods"""

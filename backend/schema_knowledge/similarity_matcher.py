@@ -5,7 +5,6 @@ Similarity matching algorithm for unknown financial terms with configurable thre
 import re
 from typing import List, Tuple, Dict, Optional, Set
 from difflib import SequenceMatcher
-from dataclasses import dataclass
 import math
 
 
