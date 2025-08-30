@@ -14,14 +14,20 @@ from .types import SimilarityMatch
 class SimilarityMatcher:
     """Advanced similarity matching for financial terms"""
     
-    def __init__(self, similarity_threshold: float = 0.7):
-        """Initialize similarity matcher with configurable threshold"""
+    def __init__(self, similarity_threshold: float = 0.7, include_saas_metrics: bool = False):
+        """Initialize similarity matcher with configurable threshold.
+        Args:
+            similarity_threshold: threshold for fuzzy matching (0-1)
+            include_saas_metrics: include customer/SaaS metrics (LTV, CAC, ARR, MRR) in abbreviation mapping
+        """
         self.similarity_threshold = similarity_threshold
+        self.include_saas_metrics = include_saas_metrics
         self.phonetic_threshold = 0.6
         self.semantic_threshold = 0.8
         
         # Common financial term abbreviations and variations
-        self.abbreviation_map = {
+        # SaaS metrics can be included via include_saas_metrics flag
+        base_abbreviations = {
             "rev": "revenue",
             "revs": "revenue", 
             "sales": "revenue",
@@ -52,10 +58,6 @@ class SimilarityMatcher:
             "ap": "accounts_payable",
             "wc": "working_capital",
             "nwc": "net_working_capital",
-            "ltv": "lifetime_value",
-            "cac": "customer_acquisition_cost",
-            "arr": "annual_recurring_revenue",
-            "mrr": "monthly_recurring_revenue",
             "churn": "churn_rate",
             "nps": "net_promoter_score",
             "kpi": "key_performance_indicator",
@@ -66,6 +68,15 @@ class SimilarityMatcher:
             "qoq": "quarter_over_quarter",
             "mom": "month_over_month"
         }
+        # Initialize abbreviation_map and optionally include SaaS metrics
+        self.abbreviation_map = base_abbreviations.copy()
+        if self.include_saas_metrics:
+            self.abbreviation_map.update({
+                "ltv": "lifetime_value",
+                "cac": "customer_acquisition_cost",
+                "arr": "annual_recurring_revenue",
+                "mrr": "monthly_recurring_revenue",
+            })
         
         # Common misspellings and typos
         self.common_misspellings = {

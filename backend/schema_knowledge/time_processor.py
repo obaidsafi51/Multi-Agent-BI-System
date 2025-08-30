@@ -14,24 +14,30 @@ from .types import PeriodType, TimePeriod, ComparisonPeriod
 class TimeProcessor:
     """Intelligent time period processing for financial queries"""
     
-    def __init__(self, fiscal_year_start_month: int = 1):
+    def __init__(self, fiscal_year_start_month: int = 1, two_digit_year_threshold: int = 50):
         """
-        Initialize time processor with fiscal year configuration.
-        
+        Initialize time processor with fiscal year and year-parsing configuration.
+
         Args:
             fiscal_year_start_month: Month when fiscal year starts (1-12, where 1=January)
-            
+            two_digit_year_threshold: Cutoff for interpreting two-digit years (0-99)
+
         Raises:
-            ValueError: If fiscal_year_start_month is not between 1 and 12
+            TypeError: If inputs are not integers
+            ValueError: If fiscal_year_start_month not in 1-12 or two_digit_year_threshold not in 0-99
         """
-        # Validate fiscal year start month
+        # Validate parameters
         if not isinstance(fiscal_year_start_month, int):
             raise TypeError(f"fiscal_year_start_month must be an integer, got {type(fiscal_year_start_month)}")
-        
+        if not isinstance(two_digit_year_threshold, int):
+            raise TypeError(f"two_digit_year_threshold must be an integer, got {type(two_digit_year_threshold)}")
         if not (1 <= fiscal_year_start_month <= 12):
             raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
-        
+        if not (0 <= two_digit_year_threshold <= 99):
+            raise ValueError(f"two_digit_year_threshold must be between 0 and 99, got {two_digit_year_threshold}")
+
         self.fiscal_year_start_month = fiscal_year_start_month
+        self.two_digit_year_threshold = two_digit_year_threshold
         self.current_date = datetime.now().date()
         
         # Common time period patterns
@@ -120,9 +126,14 @@ class TimeProcessor:
         year_match = re.search(r'\b(\d{2})\b', time_expr)
         if year_match:
             year_2digit = int(year_match.group(1))
-            if year_2digit <= 50:  # Assume 2000-2050
+            # Note: cutoff of 50 for 2-digit years is hard-coded (2000-2050).
+            # Consider making this threshold configurable or using a sliding window around current year.
+            # Interpret two-digit year based on configurable threshold
+            if year_2digit <= self.two_digit_year_threshold:
+                # e.g., threshold 50 maps 00-50 to 2000-2050
                 return 2000 + year_2digit
-            else:  # Assume 1951-1999
+            else:
+                # values above threshold map to previous century
                 return 1900 + year_2digit
         
         return default_year
@@ -348,10 +359,10 @@ class TimeProcessor:
         """
         Get current quarter based on fiscal year settings.
         
-    Handles edge cases:
-    - Validates fiscal_year_start_month is in range (1-12) and raises ValueError if not
-    - fiscal_month calculations that underflow or overflow month boundaries
-    - Proper modular arithmetic for fiscal year boundary calculations
+        Handles edge cases:
+        - Validates fiscal_year_start_month is in range (1-12) and raises ValueError if not
+        - fiscal_month calculations that underflow or overflow month boundaries
+        - Proper modular arithmetic for fiscal year boundary calculations
         """
         month = reference_date.month
         
