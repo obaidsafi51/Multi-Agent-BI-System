@@ -29,7 +29,7 @@
   - Write unit tests for term mapping accuracy and query template validation
   - _Requirements: 1.2, 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 5.4, 5.5_
 
-- [ ] 4. Implement NLP Agent with KIMI integration
+- [x] 4. Implement NLP Agent with KIMI integration
 
   - Create KIMI API client with authentication, retry logic, and error handling
   - Build natural language query parser that extracts financial metrics and time periods
@@ -39,13 +39,14 @@
   - Write comprehensive unit tests for query parsing accuracy and KIMI API integration
   - _Requirements: 1.1, 1.3, 1.4, 7.1, 9.1, 9.2_
 
-- [ ] 5. Develop Data Agent with TiDB integration
+- [x] 5. Develop Data Agent with TiDB integration
 
   - Create TiDB connection manager with SSL configuration and connection pooling
   - Implement SQL query generation from structured QueryIntent objects
   - Build data retrieval functions with proper validation and quality checks
   - Create query optimization logic for analytical workloads and large datasets
   - Implement caching mechanism for frequently accessed financial data
+  -Use PyMySQL instead of SQLAlchemy in the Project
   - Write unit tests for SQL generation correctness and database operations
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
 
