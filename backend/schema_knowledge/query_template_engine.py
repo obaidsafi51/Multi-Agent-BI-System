@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from ..models.core import QueryIntent, QueryResult
 from .types import QueryTemplate, GeneratedQuery
+from .sql_cleanup_utility import SQLCleanupUtility
 
 
 class QueryTemplateEngine:
@@ -24,6 +25,7 @@ class QueryTemplateEngine:
         self.config_path = Path(config_path)
         self.templates: Dict[str, QueryTemplate] = {}
         self.template_categories: Dict[str, List[str]] = {}
+        self.sql_cleaner = SQLCleanupUtility()
         
         self._load_templates()
         self._categorize_templates()
@@ -323,19 +325,44 @@ class QueryTemplateEngine:
                 sql = sql.replace(placeholder, str(value))
         
         # Clean up any remaining empty filters
-        # Remove 'WHERE AND' (with any whitespace)
-        sql = re.sub(r'\bWHERE\s+AND\b', 'WHERE', sql, flags=re.IGNORECASE)
-        # Remove multiple consecutive ANDs
-        sql = re.sub(r'\bAND\s+AND\b', 'AND', sql, flags=re.IGNORECASE)
-        # Remove trailing AND after WHERE or at end of WHERE clause
-        sql = re.sub(r'(WHERE\s*)(AND\s*)+', r'\1', sql, flags=re.IGNORECASE)
-        sql = re.sub(r'\s+AND\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
-        # Remove empty WHERE clauses (i.e., 'WHERE' followed by nothing or only whitespace)
-        sql = re.sub(r'\bWHERE\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
-        # Normalize whitespace
-        sql = re.sub(r'\s+', ' ', sql)
+        sql = self._clean_sql(sql)
         
         return sql.strip()
+    
+    def _clean_sql(self, sql: str) -> str:
+        """
+        Apply all SQL cleanup rules to the input SQL string.
+        
+        Args:
+            sql: The SQL string to clean
+            
+        Returns:
+            Cleaned SQL string
+        """
+        cleaned_sql = sql
+        for cleanup_func in self.cleanup_rules:
+            cleaned_sql = cleanup_func(cleaned_sql)
+        return cleaned_sql
+    
+    def _remove_where_and(self, sql: str) -> str:
+        """Remove 'WHERE AND' patterns (with any whitespace)."""
+        return re.sub(r'\bWHERE\s+AND\b', 'WHERE', sql, flags=re.IGNORECASE)
+    
+    def _remove_consecutive_ands(self, sql: str) -> str:
+        """Remove multiple consecutive ANDs."""
+        return re.sub(r'\bAND\s+AND\b', 'AND', sql, flags=re.IGNORECASE)
+    
+    def _remove_trailing_ands(self, sql: str) -> str:
+        """Remove trailing AND after WHERE or at end of WHERE clause."""
+        # Remove AND after WHERE
+        sql = re.sub(r'(WHERE\s*)(AND\s*)+', r'\1', sql, flags=re.IGNORECASE)
+        # Remove AND at end of line or before semicolon
+        sql = re.sub(r'\s+AND\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
+        return sql
+    
+    def _remove_empty_where_clauses(self, sql: str) -> str:
+        """Remove empty WHERE clauses (WHERE followed by nothing or only whitespace)."""
+        return re.sub(r'\bWHERE\s*($|;)', r'\1', sql, flags=re.IGNORECASE)
     
     def _estimate_complexity(self, sql: str, query_intent: QueryIntent) -> str:
         """Estimate query complexity for performance optimization"""
@@ -457,3 +484,7 @@ class QueryTemplateEngine:
             estimated_complexity=generated_query.estimated_complexity,
             supports_caching=generated_query.supports_caching
         )
+    
+    def _clean_sql_syntax(self, sql: str) -> str:
+        """Clean up common SQL syntax issues using dedicated utility."""
+        return self.sql_cleaner.clean_sql(sql)

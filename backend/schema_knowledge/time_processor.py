@@ -27,10 +27,7 @@ class TimeProcessor:
             ValueError: If fiscal_year_start_month is not between 1 and 12
         """
         # Validate fiscal_year_start_month
-        if not isinstance(fiscal_year_start_month, int):
-            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(fiscal_year_start_month)}")
-        if not (1 <= fiscal_year_start_month <= 12):
-            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {fiscal_year_start_month}")
+        self._validate_fiscal_year_start_month(fiscal_year_start_month)
         self.fiscal_year_start_month = fiscal_year_start_month
         self.current_date = datetime.now().date()
         # Validate fiscal_year_start_month and initialize patterns
@@ -86,12 +83,10 @@ class TimeProcessor:
             r'\bvs?\s+previous period\b|\bcompared to previous\b|\bperiod over period\b|\bpop\b': 'period_over_period',
         }
     
-    def _validate_fiscal_year_start_month(self) -> None:
-        """Validate that fiscal_year_start_month is an integer between 1 and 12."""
-        if not isinstance(self.fiscal_year_start_month, int):
-            raise TypeError(f"fiscal_year_start_month must be an integer, got {type(self.fiscal_year_start_month)}")
-        if not (1 <= self.fiscal_year_start_month <= 12):
-            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {self.fiscal_year_start_month}")
+    def _validate_fiscal_year_start_month(self, month):
+        """Validate that fiscal year start month is between 1 and 12."""
+        if not (1 <= month <= 12):
+            raise ValueError(f"fiscal_year_start_month must be between 1 and 12, got {month}")
         
     
     def parse_time_period(self, time_expression: str, reference_date: Optional[date] = None) -> TimePeriod:
