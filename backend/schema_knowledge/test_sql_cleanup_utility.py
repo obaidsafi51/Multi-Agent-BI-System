@@ -38,4 +38,4 @@ class TestSQLCleanupUtility:
         cleaned = self.cleaner.clean_sql(original)  # Use actual cleaned SQL
         is_valid, issues = self.cleaner.validate_cleanup_result(original, cleaned)
         assert is_valid is False
-        assert "Unmatched parentheses after cleanup" in issues  # Match the exact string
+        assert "Unmatched parentheses after cleanup" in issues
