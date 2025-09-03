@@ -35,17 +35,17 @@ export function DraggableCard({ card }: DraggableCardProps) {
         return (
           <div className="flex items-center justify-between h-full">
             <div>
-              <p className="text-2xl font-bold">{card.content.value}</p>
-              <p className="text-sm text-muted-foreground">{card.content.label}</p>
+              <p className="text-lg font-bold">{card.content.value}</p>
+              <p className="text-xs text-muted-foreground">{card.content.label}</p>
             </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={card.content.trend === "up" ? "default" : "destructive"}>
+            <div className="flex items-center gap-1">
+              <Badge variant={card.content.trend === "up" ? "default" : "destructive"} className="text-xs">
                 {card.content.change}
               </Badge>
               {card.content.trend === "up" ? (
-                <TrendingUp className="h-4 w-4 text-green-500" />
+                <TrendingUp className="h-3 w-3 text-green-500" />
               ) : (
-                <TrendingUp className="h-4 w-4 text-red-500 rotate-180" />
+                <TrendingUp className="h-3 w-3 text-red-500 rotate-180" />
               )}
             </div>
           </div>
@@ -55,9 +55,9 @@ export function DraggableCard({ card }: DraggableCardProps) {
         return (
           <div className="h-full flex items-center justify-center">
             <div className="text-center">
-              <BarChart3 className="h-12 w-12 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Chart: {card.content.chartType}</p>
-              <p className="text-xs text-muted-foreground mt-1">{card.content.description}</p>
+              <BarChart3 className="h-8 w-8 mx-auto mb-1 text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">Chart: {card.content.chartType}</p>
+              <p className="text-[10px] text-muted-foreground mt-1">{card.content.description}</p>
             </div>
           </div>
         );
@@ -67,24 +67,24 @@ export function DraggableCard({ card }: DraggableCardProps) {
           <div className="h-full overflow-auto">
             <Table>
               <TableHeader>
-                <TableRow>
+                <TableRow className="h-6">
                   {card.content.headers?.map((header: string, index: number) => (
-                    <TableHead key={index}>{header}</TableHead>
+                    <TableHead key={index} className="text-xs py-1">{header}</TableHead>
                   ))}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {card.content.rows?.slice(0, 3).map((row: unknown[], index: number) => (
-                  <TableRow key={index}>
+                  <TableRow key={index} className="h-6">
                     {row.map((cell, cellIndex) => (
-                      <TableCell key={cellIndex}>{String(cell)}</TableCell>
+                      <TableCell key={cellIndex} className="text-xs py-1">{String(cell)}</TableCell>
                     ))}
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
             {card.content.rows && card.content.rows.length > 3 && (
-              <p className="text-xs text-muted-foreground text-center mt-2">
+              <p className="text-[10px] text-muted-foreground text-center mt-1">
                 +{card.content.rows.length - 3} more rows
               </p>
             )}
@@ -121,19 +121,19 @@ export function DraggableCard({ card }: DraggableCardProps) {
       transition={{ duration: 0.2 }}
     >
       <Card className={`h-full ${isDragging ? "shadow-lg" : ""} transition-shadow duration-200`}>
-        <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-sm font-medium">{card.content.title}</CardTitle>
+        <CardHeader className="pb-1 px-3 py-2 flex flex-row items-center justify-between space-y-0">
+          <CardTitle className="text-xs font-medium">{card.content.title}</CardTitle>
           {card.isDraggable !== false && (
             <div
               {...listeners}
-              className="cursor-grab active:cursor-grabbing p-1 hover:bg-muted rounded"
+              className="cursor-grab active:cursor-grabbing p-0.5 hover:bg-muted rounded"
               data-testid="grip-handle"
             >
-              <GripVertical className="h-4 w-4 text-muted-foreground" />
+              <GripVertical className="h-3 w-3 text-muted-foreground" />
             </div>
           )}
         </CardHeader>
-        <CardContent className="pt-0 h-[calc(100%-4rem)] overflow-hidden">
+        <CardContent className="pt-0 px-3 pb-2 h-[calc(100%-2.5rem)] overflow-hidden">
           {renderCardContent()}
         </CardContent>
       </Card>
