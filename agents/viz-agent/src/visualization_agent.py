@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from .models import (
     VisualizationRequest, VisualizationResponse, ChartSpecification,
     ChartConfiguration, InteractiveConfig, VisualizationData,
-    ExportConfig, PerformanceMetrics
+    ExportConfig, PerformanceMetrics, ChartType, DataCharacteristics
 )
 from .chart_selector import ChartTypeSelector
 from .chart_generator import ChartGenerator
@@ -126,9 +126,12 @@ class VisualizationAgent:
         except Exception as e:
             logger.error(f"Error processing visualization request {request.request_id}: {str(e)}")
             
+            # Create empty chart spec for error response
+            empty_chart_spec = self._create_empty_chart_spec()
+            
             return VisualizationResponse(
                 request_id=request.request_id,
-                chart_spec=None,
+                chart_spec=empty_chart_spec,
                 chart_html="",
                 chart_json={},
                 export_urls={},
@@ -364,3 +367,37 @@ class VisualizationAgent:
                 "status": "unhealthy",
                 "error": str(e)
             }
+    
+    def _create_empty_chart_spec(self) -> ChartSpecification:
+        """Create an empty chart specification for error responses"""
+        return ChartSpecification(
+            chart_config=ChartConfiguration(
+                chart_type=ChartType.TABLE,
+                title="Error",
+                x_axis_label="",
+                y_axis_label="",
+                color_scheme="corporate"
+            ),
+            interactive_config=InteractiveConfig(
+                enable_zoom=False,
+                enable_pan=False,
+                enable_select=False,
+                enable_hover=False,
+                enable_crossfilter=False
+            ),
+            data=VisualizationData(
+                data=[],
+                columns=[],
+                metadata={},
+                data_characteristics=DataCharacteristics(
+                    data_type="empty",
+                    row_count=0,
+                    column_count=0,
+                    has_time_dimension=False,
+                    has_categorical_data=False,
+                    has_numerical_data=False,
+                    metric_type="unknown"
+                )
+            ),
+            styling={}
+        )

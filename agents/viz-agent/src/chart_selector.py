@@ -167,6 +167,10 @@ class ChartTypeSelector:
         for col in data[0].keys():
             values = [row.get(col) for row in sample_data if row.get(col) is not None]
             if values and all(isinstance(v, str) for v in values):
+                # For small datasets (<=5 rows), any string column is categorical
+                # For larger datasets, check uniqueness ratio
+                if len(data) <= 5:
+                    return True
                 unique_values = set(values)
                 if len(unique_values) < len(values) * 0.8:  # Less than 80% unique values
                     return True

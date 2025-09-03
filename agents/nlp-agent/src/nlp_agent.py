@@ -64,6 +64,7 @@ class NLPAgent:
             # Verify KIMI API connectivity
             if not await self.kimi_client.health_check():
                 raise Exception("KIMI API health check failed")
+            logger.info("KIMI API health check passed")
             
             self.is_running = True
             logger.info("NLP Agent started successfully")

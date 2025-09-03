@@ -78,29 +78,33 @@ class TiDBConnectionManager:
         """
         parsed = urlparse(self.database_url)
         
-        # Base connection parameters
+        # Base connection parameters (PyMySQL compatible)
         params = {
             'charset': 'utf8mb4',
             'connect_timeout': self.config['connect_timeout'],
-            'read_timeout': self.config['read_timeout'],
-            'write_timeout': self.config['write_timeout'],
             'autocommit': False,
         }
         
-        # SSL configuration
-        if not self.config['ssl_disabled']:
-            params.update({
-                'ssl_disabled': False,
-                'ssl_verify_cert': self.config['ssl_verify_cert'],
-                'ssl_verify_identity': self.config['ssl_verify_identity'],
-            })
+        # For TiDB Cloud, we need SSL but don't use ssl_disabled parameter
+        # Instead, we'll configure SSL through the ssl parameter later
         
         # Build parameter string
         param_string = '&'.join([f"{k}={v}" for k, v in params.items()])
         
         # Reconstruct URL
         if parsed.query:
-            connection_url = f"{self.database_url}&{param_string}"
+            # Remove SSL-related parameters that may conflict with aiomysql
+            existing_params = parsed.query
+            # Filter out problematic SSL parameters
+            filtered_params = []
+            for param in existing_params.split('&'):
+                if not any(ssl_param in param for ssl_param in ['ssl_disabled', 'ssl_verify_cert', 'ssl_verify_identity']):
+                    filtered_params.append(param)
+            
+            if filtered_params:
+                connection_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{'&'.join(filtered_params)}&{param_string}"
+            else:
+                connection_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{param_string}"
         else:
             connection_url = f"{self.database_url}?{param_string}"
         
@@ -113,21 +117,49 @@ class TiDBConnectionManager:
         try:
             connection_url = self._build_connection_url()
             
-            # Create async engine for main operations
+            # For TiDB Cloud, we need to enable SSL for both async and sync engines
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # For async engine, we need to replace the driver properly
+            async_url = connection_url
+            if 'mysql+pymysql://' in async_url:
+                async_url = async_url.replace('mysql+pymysql://', 'mysql+aiomysql://')
+            elif 'mysql://' in async_url:
+                async_url = async_url.replace('mysql://', 'mysql+aiomysql://')
+            
+            # Create async engine for main operations with SSL
+            connect_args_async = {
+                'ssl': ssl_context
+            }
+            
             self.async_engine = create_async_engine(
-                connection_url.replace('mysql://', 'mysql+aiomysql://'),
-                poolclass=QueuePool,
+                async_url,
                 pool_size=self.config['pool_size'],
                 max_overflow=self.config['max_overflow'],
                 pool_timeout=self.config['pool_timeout'],
                 pool_recycle=self.config['pool_recycle'],
                 pool_pre_ping=self.config['pool_pre_ping'],
                 echo=False,  # Set to True for SQL debugging
+                connect_args=connect_args_async
             )
             
-            # Create sync engine for health checks
+            # For sync engine, ensure we use pymysql with SSL
+            sync_url = connection_url
+            if 'mysql+aiomysql://' in sync_url:
+                sync_url = sync_url.replace('mysql+aiomysql://', 'mysql+pymysql://')
+            elif 'mysql://' in sync_url and 'mysql+' not in sync_url:
+                sync_url = sync_url.replace('mysql://', 'mysql+pymysql://')
+            
+            # Create sync engine with SSL for health checks
+            connect_args_sync = {
+                'ssl': ssl_context
+            }
+            
             self.engine = create_engine(
-                connection_url,
+                sync_url,
                 poolclass=QueuePool,
                 pool_size=5,
                 max_overflow=10,
@@ -135,6 +167,7 @@ class TiDBConnectionManager:
                 pool_recycle=self.config['pool_recycle'],
                 pool_pre_ping=self.config['pool_pre_ping'],
                 echo=False,
+                connect_args=connect_args_sync
             )
             
             # Create session factory
@@ -305,16 +338,23 @@ class TiDBConnectionManager:
             await self._test_connection()
             health_status['test_query_ms'] = int((time.time() - start_time) * 1000)
             
-            # Get pool status
+            # Get pool status (handle different pool types safely)
             if self.async_engine:
-                pool = self.async_engine.pool
-                health_status['pool_status'] = {
-                    'size': pool.size(),
-                    'checked_in': pool.checkedin(),
-                    'checked_out': pool.checkedout(),
-                    'overflow': pool.overflow(),
-                    'invalid': pool.invalid()
-                }
+                try:
+                    pool = self.async_engine.pool
+                    health_status['pool_status'] = {
+                        'size': pool.size(),
+                        'checked_in': pool.checkedin(),
+                        'checked_out': pool.checkedout(),
+                        'overflow': pool.overflow()
+                    }
+                    # Only add invalid count if the attribute exists
+                    if hasattr(pool, 'invalid'):
+                        health_status['pool_status']['invalid'] = pool.invalid()
+                except AttributeError as e:
+                    # Some pool types don't have all these methods
+                    logger.debug("Pool status method not available", error=str(e))
+                    health_status['pool_status'] = {'status': 'pool_methods_unavailable'}
             
         except Exception as e:
             health_status['status'] = 'unhealthy'

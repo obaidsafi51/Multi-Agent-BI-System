@@ -328,7 +328,17 @@ class QueryGenerator:
         # Add additional filters
         for filter_key, filter_value in filters.items():
             if filter_key == 'department' and table_name == 'budget_tracking':
-                where_conditions.append(f"department = '{filter_value}'")
+                # budget_tracking uses department_id instead of department name
+                # If department name is provided, we need to convert it to department_id
+                # For now, we'll handle common department names
+                dept_mapping = {
+                    'finance': 1, 'hr': 2, 'it': 3, 'marketing': 4, 'operations': 5,
+                    'research': 6, 'sales': 7, 'legal': 8, 'support': 9, 'administration': 10
+                }
+                dept_id = dept_mapping.get(filter_value.lower(), filter_value)
+                where_conditions.append(f"department_id = {dept_id}")
+            elif filter_key == 'department_id' and table_name == 'budget_tracking':
+                where_conditions.append(f"department_id = {filter_value}")
             elif filter_key == 'investment_category' and table_name == 'investments':
                 where_conditions.append(f"investment_category = '{filter_value}'")
             elif filter_key == 'status' and table_name == 'investments':
@@ -397,15 +407,46 @@ class QueryGenerator:
         
         optimizations = []
         
-        # Add index hints for large tables
-        if table_name in ['financial_overview', 'cash_flow', 'budget_tracking']:
-            # Use index hints for date-based queries
+        # Add index hints for large tables based on actual available indexes
+        if table_name in ['financial_overview', 'cash_flow', 'financial_ratios']:
+            # These tables have idx_period_date index
             if 'period_date BETWEEN' in query:
                 query = query.replace(
                     f"FROM {table_name}",
                     f"FROM {table_name} USE INDEX (idx_period_date)"
                 )
                 optimizations.append("Added date index hint")
+        elif table_name == 'budget_tracking':
+            # budget_tracking has both idx_period_date and idx_department_period
+            # Choose based on whether department_id filter is present
+            if 'department_id =' in query and 'period_date BETWEEN' in query:
+                # Use composite index when both department_id and date are filtered
+                query = query.replace(
+                    f"FROM {table_name}",
+                    f"FROM {table_name} USE INDEX (idx_department_period)"
+                )
+                optimizations.append("Added department-date composite index hint")
+            elif 'period_date BETWEEN' in query:
+                # Use date index when only date is filtered
+                query = query.replace(
+                    f"FROM {table_name}",
+                    f"FROM {table_name} USE INDEX (idx_period_date)"
+                )
+                optimizations.append("Added date index hint")
+        elif table_name == 'investments':
+            # investments table has different indexes
+            if 'status =' in query:
+                query = query.replace(
+                    f"FROM {table_name}",
+                    f"FROM {table_name} USE INDEX (idx_status)"
+                )
+                optimizations.append("Added status index hint")
+            elif 'investment_category =' in query:
+                query = query.replace(
+                    f"FROM {table_name}",
+                    f"FROM {table_name} USE INDEX (idx_category)"
+                )
+                optimizations.append("Added category index hint")
         
         # Add LIMIT for very broad queries to prevent timeouts
         if 'UNION ALL' not in query and 'LIMIT' not in query:

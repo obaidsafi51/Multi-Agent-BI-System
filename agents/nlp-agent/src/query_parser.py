@@ -165,7 +165,7 @@ class QueryParser:
             
             # Add processing metadata
             end_time = datetime.now()
-            processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
+            processing_time_ms = max(1, int((end_time - start_time).total_seconds() * 1000))
             
             query_context.processing_metadata.update({
                 "end_time": end_time.isoformat(),
@@ -185,7 +185,7 @@ class QueryParser:
             
         except KimiAPIError as e:
             logger.error(f"KIMI API error during query parsing: {e}")
-            processing_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            processing_time_ms = max(1, int((datetime.now() - start_time).total_seconds() * 1000))
             
             return ProcessingResult(
                 success=False,
@@ -195,7 +195,7 @@ class QueryParser:
             
         except Exception as e:
             logger.error(f"Unexpected error during query parsing: {e}")
-            processing_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            processing_time_ms = max(1, int((datetime.now() - start_time).total_seconds() * 1000))
             
             return ProcessingResult(
                 success=False,
@@ -255,11 +255,11 @@ class QueryParser:
         
         # Check for unknown metric type
         if intent.metric_type == "unknown":
-            issues.append("Could not identify the financial metric requested")
+            issues.append("Could not identify the financial metric requested (unknown metric type)")
         
         # Check for unknown time period
         if intent.time_period == "unknown":
-            issues.append("Could not identify the time period requested")
+            issues.append("Could not identify the time period requested (unknown time period)")
         
         # Check for ambiguities
         if query_context.ambiguities:

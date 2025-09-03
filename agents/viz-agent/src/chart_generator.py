@@ -72,21 +72,24 @@ class CFOChartStyler:
         """Apply CFO-specific styling to a Plotly figure"""
         color_scheme = self.get_color_scheme(config.color_scheme)
         
-        # Update layout with CFO styling
-        fig.update_layout(
-            **self.cfo_layout_defaults,
-            title={
+        # Create layout updates without conflicts
+        layout_updates = {
+            **{k: v for k, v in self.cfo_layout_defaults.items() if k != 'showlegend'},
+            "title": {
                 "text": config.title,
                 "x": 0.5,
                 "xanchor": "center",
                 "font": self.cfo_layout_defaults["title_font"]
             },
-            xaxis_title=config.x_axis_label,
-            yaxis_title=config.y_axis_label,
-            showlegend=config.show_legend,
-            width=config.width,
-            height=config.height
-        )
+            "xaxis_title": config.x_axis_label,
+            "yaxis_title": config.y_axis_label,
+            "showlegend": config.show_legend,
+            "width": config.width,
+            "height": config.height
+        }
+        
+        # Update layout with CFO styling
+        fig.update_layout(**layout_updates)
         
         # Apply grid styling
         if config.show_grid:
@@ -96,13 +99,40 @@ class CFOChartStyler:
             fig.update_xaxes(showgrid=False)
             fig.update_yaxes(showgrid=False)
         
-        # Update trace colors
+        # Update trace colors safely
         for i, trace in enumerate(fig.data):
             color_index = i % len(color_scheme["colors"])
-            trace.update(
-                marker_color=color_scheme["colors"][color_index],
-                line_color=color_scheme["colors"][color_index]
-            )
+            color = color_scheme["colors"][color_index]
+            
+            # Apply colors based on trace type, handling different chart types
+            try:
+                if trace.type in ['scatter', 'line', 'bar']:
+                    trace.update(marker_color=color, line_color=color)
+                elif trace.type == 'pie':
+                    trace.update(marker=dict(colors=color_scheme["colors"]))
+                elif trace.type == 'heatmap':
+                    # Heatmaps use colorscale, not marker colors
+                    pass
+                elif trace.type == 'table':
+                    # Tables don't use marker colors
+                    pass
+                elif trace.type == 'indicator':
+                    # Gauges have their own color schemes
+                    pass
+                elif trace.type == 'waterfall':
+                    trace.update(marker_color=color)
+                else:
+                    # Try to apply colors, but catch any errors
+                    try:
+                        trace.update(marker_color=color)
+                    except:
+                        pass
+                    try:
+                        trace.update(line_color=color)
+                    except:
+                        pass
+            except Exception as e:
+                logger.debug(f"Could not apply color to trace {i}: {e}")
         
         return fig
 
@@ -456,7 +486,7 @@ class ChartGenerator:
         
         # Add selection capabilities
         if interactive_config.enable_select:
-            fig.update_layout(selectdirection='diagonal')
+            fig.update_layout(selectdirection='d')  # 'd' for diagonal
         
         return fig
     

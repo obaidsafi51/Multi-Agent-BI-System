@@ -108,7 +108,7 @@ class InteractiveFeatureManager:
         # Enable selection for scatter plots and line charts
         if chart_type in [ChartType.SCATTER, ChartType.LINE, ChartType.BAR, ChartType.COLUMN]:
             fig.update_layout(
-                selectdirection='diagonal',
+                selectdirection='d',
                 dragmode='select'
             )
             

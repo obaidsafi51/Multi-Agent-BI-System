@@ -129,7 +129,9 @@ class DatabaseManager:
                 with conn.cursor() as cursor:
                     cursor.execute(query, params or ())
                     
-                    if query.strip().upper().startswith('SELECT'):
+                    # Check if query returns data (SELECT, SHOW, DESCRIBE, EXPLAIN, etc.)
+                    query_upper = query.strip().upper()
+                    if any(query_upper.startswith(cmd) for cmd in ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH']):
                         if fetch_one:
                             return cursor.fetchone()
                         elif fetch_all:

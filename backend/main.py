@@ -17,14 +17,11 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-import jwt
-from passlib.context import CryptContext
 from dotenv import load_dotenv
 import redis.asyncio as redis
 import httpx
@@ -43,17 +40,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Security configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address)
-
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
 
 # Global connections
 redis_client: Optional[redis.Redis] = None
@@ -116,6 +104,8 @@ async def startup_event():
     
     if missing_vars:
         logger.warning(f"Missing required environment variables: {missing_vars}")
+    else:
+        logger.info("All required environment variables are present")
     
     logger.info("Backend started successfully")
 
@@ -138,49 +128,6 @@ async def shutdown_event():
     logger.info("Backend shutdown complete")
 
 
-# Authentication utilities
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    """Create JWT access token"""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password against hash"""
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    """Hash password"""
-    return pwd_context.hash(password)
-
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Get current authenticated user from JWT token"""
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return user_id
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
 # Pydantic models for API requests/responses
 from pydantic import BaseModel
 
@@ -200,15 +147,6 @@ class FeedbackRequest(BaseModel):
     rating: int  # 1-5
     feedback_text: Optional[str] = None
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str
-    expires_in: int
-
 
 # API Endpoints
 
@@ -225,6 +163,16 @@ async def root():
             "websocket": "/ws/chat/{user_id}"
         }
     }
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Favicon endpoint"""
+    return Response(
+        content="",
+        status_code=204,
+        media_type="image/x-icon"
+    )
 
 
 @app.get("/health")
@@ -250,42 +198,29 @@ async def health():
             except Exception:
                 health_status["services"]["redis"] = "unhealthy"
         
+        # Check Database
+        try:
+            from database.connection import get_database
+            db = get_database()
+            if db.health_check():
+                health_status["services"]["database"] = "healthy"
+            else:
+                health_status["services"]["database"] = "unhealthy"
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            health_status["services"]["database"] = "unhealthy"
+        
         return health_status
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail="Service unhealthy")
 
 
-@app.post("/api/auth/login", response_model=TokenResponse)
-@limiter.limit("5/minute")
-async def login(request: Request, login_data: LoginRequest):
-    """Authenticate user and return JWT token"""
-    # TODO: Implement actual user authentication with database
-    # For now, using mock authentication
-    if login_data.username == "cfo" and login_data.password == "demo":
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": login_data.username}, expires_delta=access_token_expires
-        )
-        return TokenResponse(
-            access_token=access_token,
-            token_type="bearer",
-            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        )
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
 @app.post("/api/query", response_model=QueryResponse)
 @limiter.limit("30/minute")
 async def process_query(
     request: Request,
-    query_request: QueryRequest,
-    current_user: str = Depends(get_current_user)
+    query_request: QueryRequest
 ):
     """Process natural language query and return structured response"""
     try:
@@ -315,7 +250,7 @@ async def process_query(
         if redis_client:
             query_history = QueryHistoryEntry(
                 query_id=query_id,
-                user_id=current_user,
+                user_id="anonymous",  # No authentication needed
                 query_text=query_request.query,
                 query_intent=mock_intent.dict(),
                 response_data=mock_result.dict(),
@@ -352,12 +287,149 @@ async def process_query(
         )
 
 
+@app.get("/api/database/sample-data")
+@limiter.limit("30/minute")
+async def get_sample_database_data(request: Request):
+    """Get sample data from different tables to verify database functionality"""
+    try:
+        from database.connection import get_database
+        db = get_database()
+        
+        sample_data = {
+            "connection_status": "healthy" if db.health_check() else "unhealthy",
+            "database_info": {
+                "name": "Agentic_BI",
+                "type": "TiDB Cloud"
+            },
+            "tables": {}
+        }
+        
+        # Get sample data from each table
+        tables_to_sample = [
+            ("financial_overview", "SELECT * FROM financial_overview LIMIT 2"),
+            ("departments", "SELECT * FROM departments LIMIT 5"),
+            ("investments", "SELECT * FROM investments WHERE status = 'active' LIMIT 2"),
+            ("cash_flow", "SELECT * FROM cash_flow ORDER BY period_date DESC LIMIT 2"),
+            ("budget_tracking", "SELECT * FROM budget_tracking LIMIT 2")
+        ]
+        
+        for table_name, query in tables_to_sample:
+            try:
+                # Get sample data
+                data = db.execute_query(query)
+                
+                # Get record count
+                count_result = db.execute_query(f"SELECT COUNT(*) as count FROM {table_name}", fetch_one=True)
+                total_count = count_result['count'] if count_result else 0
+                
+                sample_data["tables"][table_name] = {
+                    "total_records": total_count,
+                    "sample_data": data if data else [],
+                    "sample_count": len(data) if data else 0
+                }
+                
+            except Exception as e:
+                sample_data["tables"][table_name] = {
+                    "error": str(e),
+                    "total_records": 0,
+                    "sample_data": [],
+                    "sample_count": 0
+                }
+        
+        return sample_data
+        
+    except Exception as e:
+        logger.error(f"Database sample data query failed: {e}")
+        return {
+            "connection_status": "error",
+            "error": str(e),
+            "database_info": {},
+            "tables": {}
+        }
+
+
+@app.get("/api/database/test")
+@limiter.limit("30/minute")
+async def test_database(request: Request):
+    """Test database connectivity and get detailed information"""
+    try:
+        from database.connection import get_database
+        db = get_database()
+        
+        # Get database information
+        db_info = db.get_database_info()
+        
+        # Test basic queries
+        test_results = {
+            "connection_status": "healthy" if db.health_check() else "unhealthy",
+            "database_info": db_info,
+            "test_queries": {}
+        }
+        
+        # Test basic SELECT query
+        try:
+            version_result = db.execute_query("SELECT VERSION() as version", fetch_one=True)
+            test_results["test_queries"]["version_query"] = {
+                "status": "success",
+                "result": version_result
+            }
+        except Exception as e:
+            test_results["test_queries"]["version_query"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # Test SHOW DATABASES
+        try:
+            databases_result = db.execute_query("SHOW DATABASES")
+            test_results["test_queries"]["show_databases"] = {
+                "status": "success",
+                "result": databases_result,
+                "count": len(databases_result) if databases_result else 0
+            }
+        except Exception as e:
+            test_results["test_queries"]["show_databases"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        # Test current database and tables
+        try:
+            current_db = db.execute_query("SELECT DATABASE() as current_db", fetch_one=True)
+            test_results["test_queries"]["current_database"] = {
+                "status": "success",
+                "result": current_db
+            }
+            
+            # If we have a current database, show tables
+            if current_db and current_db.get("current_db"):
+                tables_result = db.execute_query("SHOW TABLES")
+                test_results["test_queries"]["show_tables"] = {
+                    "status": "success",
+                    "result": tables_result,
+                    "count": len(tables_result) if tables_result else 0
+                }
+        except Exception as e:
+            test_results["test_queries"]["current_database"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
+        return test_results
+        
+    except Exception as e:
+        logger.error(f"Database test failed: {e}")
+        return {
+            "connection_status": "error",
+            "error": str(e),
+            "database_info": {},
+            "test_queries": {}
+        }
+
+
 @app.get("/api/suggestions", response_model=List[str])
 @limiter.limit("60/minute")
-async def get_suggestions(
-    request: Request,
-    current_user: str = Depends(get_current_user)
-):
+async def get_suggestions(request: Request):
     """Get personalized query suggestions for user"""
     try:
         # TODO: Integrate with Personalization Agent
@@ -381,8 +453,7 @@ async def get_suggestions(
 @limiter.limit("60/minute")
 async def get_dashboard_layout(
     request: Request,
-    layout_id: str,
-    current_user: str = Depends(get_current_user)
+    layout_id: str
 ):
     """Get dashboard layout configuration"""
     try:
@@ -390,7 +461,7 @@ async def get_dashboard_layout(
         # For now, return mock layout
         mock_layout = BentoGridLayout(
             layout_id=layout_id,
-            user_id=current_user,
+            user_id="anonymous",
             layout_name="Executive Dashboard",
             grid_columns=6,
             cards=[
@@ -422,14 +493,12 @@ async def get_dashboard_layout(
 async def save_dashboard_layout(
     request: Request,
     layout_id: str,
-    layout: BentoGridLayout,
-    current_user: str = Depends(get_current_user)
+    layout: BentoGridLayout
 ):
     """Save dashboard layout configuration"""
     try:
-        # Validate user owns the layout
-        if layout.user_id != current_user:
-            raise HTTPException(status_code=403, detail="Access denied")
+        # Set user_id to anonymous since no authentication
+        layout.user_id = "anonymous"
         
         # TODO: Save to database
         # For now, store in Redis
@@ -451,8 +520,7 @@ async def save_dashboard_layout(
 @limiter.limit("60/minute")
 async def submit_feedback(
     request: Request,
-    feedback: FeedbackRequest,
-    current_user: str = Depends(get_current_user)
+    feedback: FeedbackRequest
 ):
     """Submit user feedback for query results"""
     try:
@@ -461,7 +529,7 @@ async def submit_feedback(
         if redis_client:
             feedback_data = {
                 "query_id": feedback.query_id,
-                "user_id": current_user,
+                "user_id": "anonymous",
                 "rating": feedback.rating,
                 "feedback_text": feedback.feedback_text,
                 "timestamp": datetime.utcnow().isoformat()
@@ -481,16 +549,13 @@ async def submit_feedback(
 
 @app.get("/api/profile", response_model=UserProfile)
 @limiter.limit("60/minute")
-async def get_user_profile(
-    request: Request,
-    current_user: str = Depends(get_current_user)
-):
+async def get_user_profile(request: Request):
     """Get user profile and preferences"""
     try:
         # TODO: Retrieve from database
         # For now, return mock profile
         mock_profile = UserProfile(
-            user_id=current_user,
+            user_id="anonymous",
             chart_preferences={
                 "revenue": "line_chart",
                 "expenses": "bar_chart",

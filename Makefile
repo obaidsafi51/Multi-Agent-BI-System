@@ -20,7 +20,19 @@ setup-uv: ## Initialize uv projects for local development
 
 build: ## Build all Docker containers
 	@echo "🔨 Building containers..."
-	@docker-compose build
+	@export DOCKER_BUILDKIT=1 && export COMPOSE_DOCKER_CLI_BUILD=1 && docker-compose build --parallel
+
+build-fast: ## Build containers with optimizations (faster)
+	@echo "🚀 Building containers with optimizations..."
+	@export DOCKER_BUILDKIT=1 && export COMPOSE_DOCKER_CLI_BUILD=1 && docker-compose build --parallel --build-arg BUILDKIT_INLINE_CACHE=1
+
+build-no-cache: ## Build containers without cache (clean build)
+	@echo "🧹 Building containers without cache..."
+	@export DOCKER_BUILDKIT=1 && export COMPOSE_DOCKER_CLI_BUILD=1 && docker-compose build --no-cache --parallel
+
+optimize-builds: ## Optimize Docker builds for faster development
+	@echo "🚀 Optimizing Docker builds..."
+	@./scripts/optimize-builds.sh
 
 up: ## Start all services
 	@echo "🚀 Starting services..."
