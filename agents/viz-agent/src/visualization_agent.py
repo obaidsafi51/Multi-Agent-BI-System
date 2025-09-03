@@ -6,6 +6,7 @@ import logging
 import asyncio
 import json
 import time
+import numpy as np
 from typing import Dict, List, Any, Optional
 import plotly.graph_objects as go
 from .models import (
@@ -35,6 +36,23 @@ class VisualizationAgent:
         # Cache for generated charts
         self.chart_cache = {}
         self.cache_ttl = 3600  # 1 hour
+    
+    def _convert_numpy_to_json_serializable(self, obj):
+        """Convert numpy arrays and other non-serializable objects to JSON-serializable format"""
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, dict):
+            return {key: self._convert_numpy_to_json_serializable(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_to_json_serializable(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._convert_numpy_to_json_serializable(item) for item in obj)
+        else:
+            return obj
     
     async def process_visualization_request(self, request: VisualizationRequest) -> VisualizationResponse:
         """Process a visualization request and generate chart"""
@@ -109,7 +127,7 @@ class VisualizationAgent:
                 request_id=request.request_id,
                 chart_spec=chart_spec,
                 chart_html=fig.to_html(include_plotlyjs=True, div_id=f"chart-{request.request_id}"),
-                chart_json=fig.to_dict(),
+                chart_json=self._convert_numpy_to_json_serializable(fig.to_dict()),
                 export_urls=export_urls,
                 processing_time_ms=int((time.time() - start_time) * 1000),
                 success=True

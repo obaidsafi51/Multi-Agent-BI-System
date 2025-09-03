@@ -7,6 +7,7 @@ import os
 import logging
 import json
 import asyncio
+import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
@@ -141,11 +142,22 @@ class QueryResponse(BaseModel):
     result: Optional[QueryResult] = None
     visualization: Optional[Dict[str, Any]] = None
     error: Optional[ErrorResponse] = None
+    agent_performance: Optional[Dict[str, Any]] = None
 
 class FeedbackRequest(BaseModel):
     query_id: str
     rating: int  # 1-5
     feedback_text: Optional[str] = None
+
+class QueryHistoryEntry(BaseModel):
+    query_id: str
+    user_id: str
+    query_text: str
+    query_intent: Dict[str, Any]
+    response_data: Dict[str, Any]
+    processing_time_ms: int
+    agent_workflow: Optional[Dict[str, Any]] = None
+    timestamp: Optional[str] = None
 
 
 # API Endpoints
@@ -222,56 +234,82 @@ async def process_query(
     request: Request,
     query_request: QueryRequest
 ):
-    """Process natural language query and return structured response"""
+    """Process natural language query through multi-agent workflow"""
     try:
         query_id = f"q_{datetime.utcnow().timestamp()}"
+        logger.info(f"Starting multi-agent workflow for query: {query_request.query}")
         
-        # TODO: Integrate with NLP Agent for actual query processing
-        # For now, return mock response
-        mock_intent = QueryIntent(
-            metric_type="revenue",
-            time_period="Q1 2024",
-            aggregation_level="monthly",
-            visualization_hint="line_chart"
-        )
+        # Step 1: Send query to NLP Agent
+        nlp_result = await send_to_nlp_agent(query_request.query, query_id)
+        if not nlp_result.get("success", False):
+            raise HTTPException(status_code=400, detail=f"NLP processing failed: {nlp_result.get('error', 'Unknown error')}")
         
-        mock_result = QueryResult(
-            data=[
-                {"period": "2024-01", "revenue": 1000000},
-                {"period": "2024-02", "revenue": 1200000},
-                {"period": "2024-03", "revenue": 1100000}
-            ],
-            columns=["period", "revenue"],
-            row_count=3,
-            processing_time_ms=250
+        # Step 2: Send SQL context to Data Agent
+        data_result = await send_to_data_agent(nlp_result["sql_query"], nlp_result["query_context"], query_id)
+        if not data_result.get("success", False):
+            raise HTTPException(status_code=500, detail=f"Data processing failed: {data_result.get('error', 'Unknown error')}")
+        
+        # Step 3: Send data and context to Viz Agent
+        viz_result = await send_to_viz_agent(data_result["processed_data"], nlp_result["query_context"], query_id)
+        if not viz_result.get("success", False):
+            logger.warning(f"Visualization failed, using default: {viz_result.get('error')}")
+            # Continue with basic visualization
+            viz_result = create_default_visualization(data_result["processed_data"])
+        
+        # Step 4: Combine results
+        query_intent = QueryIntent(**nlp_result["query_intent"])
+        query_result = QueryResult(
+            data=data_result["processed_data"],
+            columns=data_result["columns"],
+            row_count=len(data_result["processed_data"]),
+            processing_time_ms=data_result.get("processing_time_ms", 250)
         )
         
         # Store query in history (Redis)
         if redis_client:
             query_history = QueryHistoryEntry(
                 query_id=query_id,
-                user_id="anonymous",  # No authentication needed
+                user_id="anonymous",
                 query_text=query_request.query,
-                query_intent=mock_intent.dict(),
-                response_data=mock_result.dict(),
-                processing_time_ms=250
+                query_intent=query_intent.dict(),
+                response_data=query_result.dict(),
+                processing_time_ms=query_result.processing_time_ms,
+                agent_workflow={
+                    "nlp_agent": nlp_result.get("processing_time_ms", 0),
+                    "data_agent": data_result.get("processing_time_ms", 0),
+                    "viz_agent": viz_result.get("processing_time_ms", 0)
+                }
             )
             await redis_client.setex(
                 f"query_history:{query_id}",
-                3600,  # 1 hour expiry
+                3600,
                 json.dumps(query_history.dict(), default=str)
             )
         
-        return QueryResponse(
+        # Create response with visualization
+        response = QueryResponse(
             query_id=query_id,
-            intent=mock_intent,
-            result=mock_result,
-            visualization={
-                "chart_type": "line_chart",
-                "title": "Revenue Trend",
-                "config": {"show_trend": True}
+            intent=query_intent,
+            result=query_result,
+            visualization=viz_result.get("chart_config", {
+                "chart_type": "table",
+                "title": "Financial Data",
+                "config": {"responsive": True}
+            }),
+            agent_performance={
+                "nlp_processing_ms": nlp_result.get("processing_time_ms", 0),
+                "data_processing_ms": data_result.get("processing_time_ms", 0),
+                "viz_processing_ms": viz_result.get("processing_time_ms", 0),
+                "total_processing_ms": (
+                    nlp_result.get("processing_time_ms", 0) +
+                    data_result.get("processing_time_ms", 0) +
+                    viz_result.get("processing_time_ms", 0)
+                )
             }
         )
+        
+        logger.info(f"Multi-agent workflow completed for query {query_id}")
+        return response
         
     except Exception as e:
         logger.error(f"Query processing failed: {e}")
@@ -631,6 +669,379 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
 
 # Error handlers
+
+
+# Helper functions for query processing
+# Agent Communication Functions
+async def send_to_nlp_agent(query: str, query_id: str) -> dict:
+    """Send query to NLP Agent for processing"""
+    try:
+        # For now, we'll make HTTP requests to the agent services
+        # In production, this would use MCP/A2A protocols
+        
+        nlp_agent_url = os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
+        
+        payload = {
+            "query": query,
+            "query_id": query_id,
+            "user_id": "anonymous",
+            "session_id": f"session_{query_id}",
+            "context": {
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "backend_api"
+            }
+        }
+        
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{nlp_agent_url}/process", json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"NLP Agent processed query {query_id} successfully")
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"NLP Agent error {response.status}: {error_text}")
+                    return {"success": False, "error": f"NLP Agent returned {response.status}: {error_text}"}
+                    
+    except asyncio.TimeoutError:
+        logger.error(f"NLP Agent timeout for query {query_id}")
+        return {"success": False, "error": "NLP Agent timeout"}
+    except Exception as e:
+        logger.error(f"NLP Agent communication failed: {e}")
+        # Fallback to simple query processing
+        return await fallback_nlp_processing(query, query_id)
+
+
+async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str) -> dict:
+    """Send SQL query to Data Agent for execution"""
+    try:
+        data_agent_url = os.getenv("DATA_AGENT_URL", "http://data-agent:8002")
+        
+        payload = {
+            "sql_query": sql_query,
+            "query_context": query_context,
+            "query_id": query_id,
+            "execution_config": {
+                "use_cache": True,
+                "validate_result": True,
+                "optimize_query": True
+            }
+        }
+        
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{data_agent_url}/execute", json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"Data Agent processed query {query_id} successfully")
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Data Agent error {response.status}: {error_text}")
+                    return {"success": False, "error": f"Data Agent returned {response.status}: {error_text}"}
+                    
+    except asyncio.TimeoutError:
+        logger.error(f"Data Agent timeout for query {query_id}")
+        return {"success": False, "error": "Data Agent timeout"}
+    except Exception as e:
+        logger.error(f"Data Agent communication failed: {e}")
+        # Fallback to direct database query
+        return await fallback_data_processing(sql_query, query_context, query_id)
+
+
+async def send_to_viz_agent(data: list, query_context: dict, query_id: str) -> dict:
+    """Send data to Visualization Agent for chart generation"""
+    try:
+        viz_agent_url = os.getenv("VIZ_AGENT_URL", "http://viz-agent:8003")
+        
+        payload = {
+            "data": data,
+            "query_context": query_context,
+            "query_id": query_id,
+            "visualization_config": {
+                "auto_select_chart_type": True,
+                "enable_interactions": True,
+                "color_scheme": "corporate",
+                "responsive": True
+            }
+        }
+        
+        timeout = aiohttp.ClientTimeout(total=45)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{viz_agent_url}/visualize", json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(f"Viz Agent processed query {query_id} successfully")
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Viz Agent error {response.status}: {error_text}")
+                    return {"success": False, "error": f"Viz Agent returned {response.status}: {error_text}"}
+                    
+    except asyncio.TimeoutError:
+        logger.error(f"Viz Agent timeout for query {query_id}")
+        return {"success": False, "error": "Viz Agent timeout"}
+    except Exception as e:
+        logger.error(f"Viz Agent communication failed: {e}")
+        return {"success": False, "error": f"Viz Agent communication failed: {str(e)}"}
+
+
+# Fallback Functions for Agent Communication Failures
+async def fallback_nlp_processing(query: str, query_id: str) -> dict:
+    """Fallback NLP processing when agent is unavailable"""
+    logger.warning(f"Using fallback NLP processing for query {query_id}")
+    
+    # Simple intent extraction
+    query_lower = query.lower()
+    
+    # Determine metric type
+    if any(word in query_lower for word in ["revenue", "sales", "income"]):
+        metric_type = "revenue"
+    elif any(word in query_lower for word in ["profit", "earnings", "net"]):
+        metric_type = "profit"
+    elif any(word in query_lower for word in ["expense", "cost", "spending"]):
+        metric_type = "expenses"
+    elif any(word in query_lower for word in ["cash", "flow"]):
+        metric_type = "cash_flow"
+    else:
+        metric_type = "revenue"  # default
+    
+    # Determine time period
+    if any(word in query_lower for word in ["month", "monthly"]):
+        aggregation = "monthly"
+        time_period = "monthly"
+    elif any(word in query_lower for word in ["quarter", "quarterly", "q1", "q2", "q3", "q4"]):
+        aggregation = "quarterly"
+        time_period = "quarterly"
+    elif any(word in query_lower for word in ["year", "yearly", "annual"]):
+        aggregation = "yearly"
+        time_period = "yearly"
+    else:
+        aggregation = "monthly"
+        time_period = "monthly"
+    
+    # Generate simple SQL query
+    sql_query = f"""
+    SELECT 
+        DATE_FORMAT(period_date, '%Y-%m') as period,
+        SUM({metric_type}) as {metric_type}
+    FROM financial_overview 
+    WHERE period_date >= '2025-01-01'
+    GROUP BY DATE_FORMAT(period_date, '%Y-%m')
+    ORDER BY period
+    """
+    
+    return {
+        "success": True,
+        "sql_query": sql_query,
+        "query_intent": {
+            "metric_type": metric_type,
+            "time_period": time_period,
+            "aggregation_level": aggregation,
+            "visualization_hint": "line_chart"
+        },
+        "query_context": {
+            "query_id": query_id,
+            "original_query": query,
+            "intent_confidence": 0.6,
+            "processing_method": "fallback",
+            "schema_context": {
+                "tables": ["financial_overview"],
+                "columns": ["period_date", metric_type]
+            }
+        },
+        "processing_time_ms": 50
+    }
+
+
+async def fallback_data_processing(sql_query: str, query_context: dict, query_id: str) -> dict:
+    """Fallback data processing when data agent is unavailable"""
+    logger.warning(f"Using fallback data processing for query {query_id}")
+    
+    try:
+        from database.connection import get_database
+        db = get_database()
+        
+        # Execute query directly
+        raw_data = db.execute_query(sql_query, [], fetch_all=True)
+        
+        # Transform to expected format
+        processed_data = []
+        columns = []
+        
+        if raw_data:
+            columns = list(raw_data[0].keys()) if raw_data else []
+            for row in raw_data:
+                processed_data.append(dict(row))
+        
+        return {
+            "success": True,
+            "processed_data": processed_data,
+            "columns": columns,
+            "row_count": len(processed_data),
+            "processing_time_ms": 200,
+            "processing_method": "fallback",
+            "data_quality": {
+                "is_valid": len(processed_data) > 0,
+                "completeness": 1.0 if processed_data else 0.0,
+                "consistency": 1.0
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Fallback data processing failed: {e}")
+        return {
+            "success": False,
+            "error": f"Database query failed: {str(e)}",
+            "processed_data": [],
+            "columns": [],
+            "row_count": 0
+        }
+
+
+def create_default_visualization(data: list) -> dict:
+    """Create default visualization when viz agent fails"""
+    return {
+        "success": True,
+        "chart_type": "table",
+        "chart_config": {
+            "title": "Financial Data",
+            "type": "table",
+            "responsive": True
+        },
+        "processing_time_ms": 10,
+        "processing_method": "fallback"
+    }
+
+
+    """Parse natural language query and extract intent"""
+    query_lower = query.lower()
+    
+    # Simple rule-based intent extraction
+    # In production, this would call the NLP agent
+    
+    # Determine metric type
+    metric_type = "revenue"  # default
+    if "cash flow" in query_lower or "cash" in query_lower:
+        metric_type = "cash_flow"
+    elif "budget" in query_lower or "expense" in query_lower:
+        metric_type = "budget_variance" 
+    elif "investment" in query_lower or "roi" in query_lower:
+        metric_type = "investment_performance"
+    elif "profit" in query_lower or "margin" in query_lower:
+        metric_type = "profit_margin"
+    
+    # Determine time period
+    time_period = "this_year"  # default
+    if "month" in query_lower:
+        time_period = "this_month"
+    elif "quarter" in query_lower or "q1" in query_lower or "q2" in query_lower:
+        time_period = "this_quarter"
+    elif "year" in query_lower:
+        time_period = "this_year"
+    
+    # Determine aggregation
+    aggregation_level = "monthly"
+    if "daily" in query_lower or "day" in query_lower:
+        aggregation_level = "daily"
+    elif "weekly" in query_lower or "week" in query_lower:
+        aggregation_level = "weekly"
+    elif "quarterly" in query_lower or "quarter" in query_lower:
+        aggregation_level = "quarterly"
+    elif "yearly" in query_lower or "annual" in query_lower:
+        aggregation_level = "yearly"
+    
+    return QueryIntent(
+        metric_type=metric_type,
+        time_period=time_period,
+        aggregation_level=aggregation_level,
+        visualization_hint="line_chart",
+        confidence_score=0.8
+    )
+
+
+def generate_sql_from_intent(intent: QueryIntent) -> tuple[str, tuple]:
+    """Generate SQL query from query intent"""
+    
+    # Map metric types to tables and columns
+    if intent.metric_type == "revenue":
+        base_query = """
+        SELECT 
+            DATE_FORMAT(period_date, %s) as period,
+            SUM(revenue) as revenue
+        FROM financial_overview 
+        WHERE period_date >= %s
+        GROUP BY DATE_FORMAT(period_date, %s)
+        ORDER BY period
+        """
+        
+        # Determine date format and filter based on aggregation
+        if intent.aggregation_level == "daily":
+            date_format = "%Y-%m-%d"
+            date_filter = "2025-01-01"  # Use fixed date within our data range
+        elif intent.aggregation_level == "weekly":
+            date_format = "%Y-W%u"
+            date_filter = "2025-01-01"
+        elif intent.aggregation_level == "monthly":
+            date_format = "%Y-%m"
+            date_filter = "2025-01-01"
+        elif intent.aggregation_level == "quarterly":
+            date_format = "%Y-Q%q"
+            date_filter = "2024-01-01"
+        else:  # yearly
+            date_format = "%Y"
+            date_filter = "2022-01-01"
+        
+        return base_query, (date_format, date_filter, date_format)
+    
+    elif intent.metric_type == "cash_flow":
+        base_query = """
+        SELECT 
+            DATE_FORMAT(period_date, %s) as period,
+            SUM(operating_cash_flow) as operating_cash_flow,
+            SUM(investing_cash_flow) as investing_cash_flow,
+            SUM(financing_cash_flow) as financing_cash_flow,
+            SUM(net_cash_flow) as net_cash_flow
+        FROM cash_flow 
+        WHERE period_date >= %s
+        GROUP BY DATE_FORMAT(period_date, %s)
+        ORDER BY period
+        """
+        
+        date_format = "%Y-%m" if intent.aggregation_level == "monthly" else "%Y-Q%q"
+        date_filter = "DATE_SUB(CURDATE(), INTERVAL 12 MONTH)"
+        
+        return base_query, (date_format, date_filter, date_format)
+    
+    elif intent.metric_type == "investment_performance":
+        base_query = """
+        SELECT 
+            investment_name,
+            roi_percentage,
+            status,
+            initial_amount,
+            current_value
+        FROM investments 
+        WHERE status = 'active'
+        ORDER BY roi_percentage DESC
+        LIMIT 10
+        """
+        return base_query, ()
+    
+    else:  # Default to revenue
+        base_query = """
+        SELECT 
+            DATE_FORMAT(period_date, '%Y-%m') as period,
+            SUM(revenue) as revenue
+        FROM financial_overview 
+        WHERE period_date >= '2025-01-01'
+        GROUP BY DATE_FORMAT(period_date, '%Y-%m')
+        ORDER BY period
+        """
+        return base_query, ()
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Custom HTTP exception handler"""

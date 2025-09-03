@@ -1,20 +1,23 @@
 """
-Visualization Agent with Plotly
-Dynamic chart generation with CFO-specific styling and interactive features
+Visualization Agent with HTTP API
+Main entry point for the Visualization Agent service
 """
 
 import asyncio
 import logging
 import os
-import signal
 import sys
-import json
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from dotenv import load_dotenv
-import redis
-import pika
+
 from src.visualization_agent import VisualizationAgent
-from src.models import VisualizationRequest
+from src.models import VisualizationRequest, ChartType
 
 # Load environment variables
 load_dotenv()
@@ -26,199 +29,173 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global flag for graceful shutdown
-shutdown_event = asyncio.Event()
+# Pydantic models
+class VisualizeRequest(BaseModel):
+    data: List[Dict[str, Any]]
+    query_context: Dict[str, Any]
+    query_id: str
+    visualization_config: Optional[Dict[str, Any]] = None
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    shutdown_event.set()
+class VisualizeResponse(BaseModel):
+    success: bool
+    query_id: str
+    chart_config: Optional[Dict[str, Any]] = None
+    chart_html: Optional[str] = None
+    chart_json: Optional[Dict[str, Any]] = None
+    processing_time_ms: int
+    error: Optional[str] = None
 
-class VisualizationAgentService:
-    """Service wrapper for the Visualization Agent"""
-    
-    def __init__(self):
-        self.agent = VisualizationAgent()
-        self.redis_client = None
-        self.rabbitmq_connection = None
-        self.rabbitmq_channel = None
-    
-    async def initialize(self):
-        """Initialize connections and services"""
-        try:
-            # Initialize Redis connection
-            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-            self.redis_client = redis.from_url(redis_url, decode_responses=True)
-            
-            # Test Redis connection
-            self.redis_client.ping()
-            logger.info("Redis connection established")
-            
-            # Initialize RabbitMQ connection
-            rabbitmq_url = os.getenv('RABBITMQ_URL', 'amqp://localhost:5672')
-            self.rabbitmq_connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
-            self.rabbitmq_channel = self.rabbitmq_connection.channel()
-            
-            # Declare queues
-            self.rabbitmq_channel.queue_declare(queue='visualization_requests', durable=True)
-            self.rabbitmq_channel.queue_declare(queue='visualization_responses', durable=True)
-            
-            logger.info("RabbitMQ connection established")
-            
-            # Set up message consumption
-            self.rabbitmq_channel.basic_consume(
-                queue='visualization_requests',
-                on_message_callback=self.handle_visualization_request,
-                auto_ack=False
-            )
-            
-            logger.info("Visualization Agent initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Visualization Agent: {e}")
-            raise
-    
-    def handle_visualization_request(self, ch, method, properties, body):
-        """Handle incoming visualization requests"""
-        try:
-            # Parse request
-            request_data = json.loads(body.decode('utf-8'))
-            request = VisualizationRequest(**request_data)
-            
-            logger.info(f"Processing visualization request {request.request_id}")
-            
-            # Process request asynchronously
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            response = loop.run_until_complete(self.agent.process_visualization_request(request))
-            loop.close()
-            
-            # Send response
-            response_data = response.model_dump()
-            self.rabbitmq_channel.basic_publish(
-                exchange='',
-                routing_key='visualization_responses',
-                body=json.dumps(response_data),
-                properties=pika.BasicProperties(
-                    correlation_id=properties.correlation_id,
-                    delivery_mode=2  # Make message persistent
-                )
-            )
-            
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            
-            logger.info(f"Completed visualization request {request.request_id}")
-            
-        except Exception as e:
-            logger.error(f"Error processing visualization request: {e}")
-            # Reject message and requeue
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-    
-    async def run(self):
-        """Run the visualization agent service"""
-        try:
-            logger.info("Starting message consumption...")
-            
-            # Start consuming messages in a separate thread
-            import threading
-            
-            def consume_messages():
-                try:
-                    self.rabbitmq_channel.start_consuming()
-                except Exception as e:
-                    logger.error(f"Error in message consumption: {e}")
-            
-            consumer_thread = threading.Thread(target=consume_messages)
-            consumer_thread.daemon = True
-            consumer_thread.start()
-            
-            # Keep the service running
-            while not shutdown_event.is_set():
-                await asyncio.sleep(1)
-                
-                # Perform health checks
-                if hasattr(self, '_last_health_check'):
-                    if asyncio.get_event_loop().time() - self._last_health_check > 300:  # 5 minutes
-                        await self.perform_health_check()
-                else:
-                    await self.perform_health_check()
-            
-        except Exception as e:
-            logger.error(f"Error running visualization agent service: {e}")
-            raise
-        finally:
-            await self.cleanup()
-    
-    async def perform_health_check(self):
-        """Perform periodic health check"""
-        try:
-            health_status = await self.agent.health_check()
-            logger.info(f"Health check: {health_status['status']}")
-            
-            # Store health status in Redis
-            if self.redis_client:
-                self.redis_client.setex(
-                    'viz_agent_health',
-                    300,  # 5 minutes TTL
-                    json.dumps(health_status)
-                )
-            
-            self._last_health_check = asyncio.get_event_loop().time()
-            
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-    
-    async def cleanup(self):
-        """Clean up connections and resources"""
-        logger.info("Cleaning up Visualization Agent...")
-        
-        try:
-            if self.rabbitmq_channel:
-                self.rabbitmq_channel.stop_consuming()
-                self.rabbitmq_channel.close()
-            
-            if self.rabbitmq_connection:
-                self.rabbitmq_connection.close()
-            
-            if self.redis_client:
-                self.redis_client.close()
-                
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+# Global references
+viz_agent: Optional[VisualizationAgent] = None
+app = FastAPI(title="Visualization Agent API", version="1.0.0")
 
-async def main():
-    # Register signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize Visualization Agent on startup"""
+    global viz_agent
     
-    logger.info("Visualization Agent starting...")
-    
-    # Validate environment variables
-    required_env_vars = ['REDIS_URL', 'RABBITMQ_URL']
-    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        logger.error(f"Missing required environment variables: {missing_vars}")
-        sys.exit(1)
-    
-    logger.info("Environment variables validated successfully")
-    
-    # Initialize and run the service
-    service = VisualizationAgentService()
+    logger.info("Starting Visualization Agent...")
     
     try:
-        await service.initialize()
-        await service.run()
+        # Initialize Visualization Agent
+        viz_agent = VisualizationAgent()
+        logger.info("Visualization Agent started successfully")
+        
     except Exception as e:
-        logger.error(f"Visualization Agent failed: {e}")
-        sys.exit(1)
+        logger.error(f"Failed to start Visualization Agent: {e}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup Visualization Agent on shutdown"""
+    global viz_agent
+    
+    if viz_agent:
+        logger.info("Visualization Agent stopped")
+
+@app.post("/visualize", response_model=VisualizeResponse)
+async def create_visualization(request: VisualizeRequest) -> VisualizeResponse:
+    """Create visualization from data and context"""
+    if not viz_agent:
+        raise HTTPException(status_code=503, detail="Visualization Agent not initialized")
+    
+    start_time = datetime.now()
+    
+    try:
+        logger.info(f"Creating visualization for query {request.query_id}")
+        
+        # Create visualization request
+        viz_request = VisualizationRequest(
+            request_id=request.query_id,
+            user_id="anonymous",
+            query_intent=request.query_context.get("query_intent", {}),
+            data=request.data,
+            preferences=request.visualization_config or {}
+        )
+        
+        # Process visualization through the agent
+        result = await viz_agent.process_visualization_request(viz_request)
+        
+        if not result.success:
+            return VisualizeResponse(
+                success=False,
+                query_id=request.query_id,
+                processing_time_ms=result.processing_time_ms,
+                error=result.error_message
+            )
+        
+        # Build response
+        response = VisualizeResponse(
+            success=True,
+            query_id=request.query_id,
+            chart_config={
+                "chart_type": result.chart_spec.chart_config.chart_type.value,
+                "title": result.chart_spec.chart_config.title,
+                "x_axis_label": result.chart_spec.chart_config.x_axis_label,
+                "y_axis_label": result.chart_spec.chart_config.y_axis_label,
+                "color_scheme": result.chart_spec.chart_config.color_scheme,
+                "interactive": result.chart_spec.chart_config.interactive,
+                "height": result.chart_spec.chart_config.height,
+                "width": result.chart_spec.chart_config.width
+            },
+            chart_html=result.chart_html,
+            chart_json=result.chart_json,
+            processing_time_ms=result.processing_time_ms
+        )
+        
+        logger.info(f"Successfully created visualization for query {request.query_id} in {result.processing_time_ms}ms")
+        return response
+        
+    except Exception as e:
+        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        logger.error(f"Visualization creation failed for {request.query_id}: {e}")
+        
+        return VisualizeResponse(
+            success=False,
+            query_id=request.query_id,
+            processing_time_ms=processing_time,
+            error=str(e)
+        )
+
+@app.get("/chart-alternatives/{query_id}")
+async def get_chart_alternatives(query_id: str, data: List[Dict[str, Any]]):
+    """Get alternative chart types for the given data"""
+    if not viz_agent:
+        raise HTTPException(status_code=503, detail="Visualization Agent not initialized")
+    
+    try:
+        # Create visualization request for alternatives
+        viz_request = VisualizationRequest(
+            request_id=query_id,
+            user_id="anonymous",
+            query_intent={},
+            data=data
+        )
+        
+        alternatives = await viz_agent.get_chart_alternatives(viz_request)
+        return {"alternatives": alternatives}
+        
+    except Exception as e:
+        logger.error(f"Failed to get chart alternatives: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    if not viz_agent:
+        raise HTTPException(status_code=503, detail="Visualization Agent not initialized")
+    
+    try:
+        health_status = await viz_agent.health_check()
+        return health_status
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/status")
+async def get_status():
+    """Get agent status"""
+    return {
+        "agent_type": "viz-agent",
+        "status": "running" if viz_agent else "stopped",
+        "timestamp": datetime.now().isoformat(),
+        "cache_size": len(viz_agent.chart_cache) if viz_agent else 0
+    }
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Visualization Agent stopped by user")
-    except Exception as e:
-        logger.error(f"Visualization Agent failed: {e}")
-        sys.exit(1)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8003,
+        reload=False,
+        log_level="info"
+    )
