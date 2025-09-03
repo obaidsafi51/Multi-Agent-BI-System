@@ -57,6 +57,13 @@ class DatabaseConfig:
         
         # Add SSL configuration for TiDB Cloud
         if not self.ssl_disabled:
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            config["ssl"] = ssl_context
+            
+            # Legacy SSL options (for compatibility)
             if self.ssl_ca:
                 config["ssl_ca"] = self.ssl_ca
             if self.ssl_verify_cert:

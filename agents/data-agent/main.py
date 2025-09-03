@@ -1,16 +1,20 @@
 """
 Data Agent with TiDB Integration
-Main entry point for the Data Agent service with comprehensive TiDB integration,
-query processing, caching, validation, and optimization capabilities.
+Main entry point for the Data Agent service with HTTP API
 """
 
 import asyncio
 import json
 import logging
 import os
-import signal
 import sys
-from typing import Dict, Any
+from datetime import datetime
+from typing import Dict, Any, Optional
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 import structlog
@@ -26,217 +30,168 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
+logger = logging.getLogger(__name__)
+
+# Pydantic models
+class QueryExecuteRequest(BaseModel):
+    sql_query: str
+    query_context: Dict[str, Any]
+    query_id: str
+    execution_config: Optional[Dict[str, Any]] = None
+
+class QueryExecuteResponse(BaseModel):
+    success: bool
+    query_id: str
+    processed_data: list
+    columns: list
+    row_count: int
+    processing_time_ms: int
+    error: Optional[str] = None
+    data_quality: Optional[Dict[str, Any]] = None
+
+# Global references
+data_agent = None
+app = FastAPI(title="Data Agent API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-logger = structlog.get_logger(__name__)
-
-# Global flag for graceful shutdown
-shutdown_event = asyncio.Event()
-data_agent = None
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    logger.info("Received shutdown signal", signal=signum)
-    shutdown_event.set()
-
-async def health_check_loop():
-    """Periodic health check loop"""
+@app.on_event("startup")
+async def startup_event():
+    """Initialize Data Agent on startup"""
     global data_agent
     
-    while not shutdown_event.is_set():
-        try:
-            if data_agent:
-                health_status = await data_agent.health_check()
-                
-                if health_status['status'] != 'healthy':
-                    logger.warning("Data Agent health check warning", health_status=health_status)
-                else:
-                    logger.debug("Data Agent health check passed")
-            
-            await asyncio.sleep(60)  # Check every minute
-            
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("Health check failed", error=str(e))
-            await asyncio.sleep(60)
-
-async def metrics_reporting_loop():
-    """Periodic metrics reporting loop"""
-    global data_agent
-    
-    while not shutdown_event.is_set():
-        try:
-            if data_agent:
-                metrics = await data_agent.get_metrics()
-                logger.info("Data Agent metrics", metrics=metrics)
-            
-            await asyncio.sleep(300)  # Report every 5 minutes
-            
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            logger.error("Metrics reporting failed", error=str(e))
-            await asyncio.sleep(300)
-
-async def process_sample_queries():
-    """Process sample queries for testing and demonstration"""
-    global data_agent
-    
-    if not data_agent:
-        return
-    
-    sample_queries = [
-        {
-            'metric_type': 'revenue',
-            'time_period': 'this year',
-            'aggregation_level': 'monthly',
-            'filters': {},
-            'comparison_periods': ['last year']
-        },
-        {
-            'metric_type': 'cash_flow',
-            'time_period': 'Q1 2024',
-            'aggregation_level': 'monthly',
-            'filters': {},
-            'comparison_periods': []
-        },
-        {
-            'metric_type': 'budget_variance',
-            'time_period': 'this month',
-            'aggregation_level': 'daily',
-            'filters': {'department': 'sales'},  # This will be converted to department_id
-            'comparison_periods': []
-        }
-    ]
-    
-    logger.info("Processing sample queries for demonstration")
-    
-    for i, query_intent in enumerate(sample_queries):
-        try:
-            logger.info("Processing sample query", query_number=i+1, query_intent=query_intent)
-            
-            result = await data_agent.process_query(query_intent)
-            
-            logger.info(
-                "Sample query completed",
-                query_number=i+1,
-                success=result['success'],
-                row_count=result.get('row_count', 0),
-                processing_time_ms=result['metadata']['processing_time_ms']
-            )
-            
-        except Exception as e:
-            logger.error("Sample query failed", query_number=i+1, error=str(e))
-        
-        # Small delay between queries
-        await asyncio.sleep(2)
-
-async def main():
-    global data_agent
-    
-    # Add debug output to see what's happening
-    print("=== DEBUG: Starting main() function ===")
-    
-    # Register signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    print("=== DEBUG: Signal handlers registered ===")
-    
-    logger.info("Data Agent starting...")
-    print("=== DEBUG: Logger info called ===")
-    sys.stdout.flush()
-    
-    # Validate environment variables
-    required_env_vars = ['DATABASE_URL', 'REDIS_URL']
-    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-    
-    print(f"=== DEBUG: Environment variables check - missing: {missing_vars} ===")
-    
-    if missing_vars:
-        logger.error("Missing required environment variables", missing_vars=missing_vars)
-        sys.exit(1)
-    
-    logger.info("Environment variables validated successfully")
-    print("=== DEBUG: Environment variables validated ===")
-    sys.stdout.flush()
+    logger.info("Starting Data Agent...")
     
     try:
         # Initialize Data Agent
-        print("=== DEBUG: About to initialize Data Agent ===")
-        logger.info("Initializing Data Agent...")
-        print("=== DEBUG: Logger.info called for initialization ===")
         data_agent = await get_data_agent()
-        print("=== DEBUG: Data Agent created successfully ===")
-        logger.info("Data Agent initialized successfully")
-        print("=== DEBUG: Data Agent initialization logged ===")
-        
-        # Start background tasks
-        print("=== DEBUG: Starting background tasks ===")
-        health_task = asyncio.create_task(health_check_loop())
-        metrics_task = asyncio.create_task(metrics_reporting_loop())
-        print("=== DEBUG: Background tasks created ===")
-        
-        # Process sample queries for demonstration
-        print("=== DEBUG: About to process sample queries ===")
-        await process_sample_queries()
-        print("=== DEBUG: Sample queries processed ===")
-        
-        logger.info("Data Agent is ready and running")
-        print("=== DEBUG: Data Agent ready message logged ===")
-        
-        # Keep the service running until shutdown signal
-        print("=== DEBUG: Entering main loop ===")
-        while not shutdown_event.is_set():
-            await asyncio.sleep(10)
-            logger.debug("Data Agent heartbeat")
-            print("=== DEBUG: Heartbeat ===")
-        
-        print("=== DEBUG: Shutdown signal received ===")
-        logger.info("Shutdown signal received, stopping Data Agent...")
-        
-        # Cancel background tasks
-        health_task.cancel()
-        metrics_task.cancel()
-        
-        # Wait for tasks to complete
-        await asyncio.gather(health_task, metrics_task, return_exceptions=True)
+        logger.info("Data Agent started successfully")
         
     except Exception as e:
-        logger.error("Data Agent initialization failed", error=str(e))
-        sys.exit(1)
+        logger.error(f"Failed to start Data Agent: {e}")
+        raise
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup Data Agent on shutdown"""
+    global data_agent
     
-    finally:
-        # Cleanup
-        if data_agent:
-            try:
-                await close_data_agent()
-                logger.info("Data Agent closed successfully")
-            except Exception as e:
-                logger.error("Error closing Data Agent", error=str(e))
+    if data_agent:
+        await close_data_agent()
+        logger.info("Data Agent stopped")
+
+@app.post("/execute", response_model=QueryExecuteResponse)
+async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
+    """Execute SQL query and return processed data"""
+    if not data_agent:
+        raise HTTPException(status_code=503, detail="Data Agent not initialized")
+    
+    start_time = datetime.now()
+    
+    try:
+        logger.info(f"Executing query {request.query_id}")
+        
+        # Convert query context to intent format expected by data agent
+        query_intent = {
+            "metric_type": request.query_context.get("metric_type", "revenue"),
+            "time_period": request.query_context.get("time_period", "monthly"),
+            "aggregation_level": request.query_context.get("aggregation_level", "monthly"),
+            "filters": request.query_context.get("filters", {}),
+            "comparison_periods": request.query_context.get("comparison_periods", [])
+        }
+        
+        # Process query through the data agent
+        result = await data_agent.process_query(query_intent, user_context={
+            "query_id": request.query_id,
+            "sql_query": request.sql_query
+        })
+        
+        if not result.get("success", False):
+            return QueryExecuteResponse(
+                success=False,
+                query_id=request.query_id,
+                processed_data=[],
+                columns=[],
+                row_count=0,
+                processing_time_ms=int((datetime.now() - start_time).total_seconds() * 1000),
+                error=result.get("error", {}).get("message", "Unknown error")
+            )
+        
+        # Build response
+        response = QueryExecuteResponse(
+            success=True,
+            query_id=request.query_id,
+            processed_data=result.get("data", []),
+            columns=result.get("columns", []),
+            row_count=result.get("row_count", 0),
+            processing_time_ms=result.get("metadata", {}).get("processing_time_ms", 0),
+            data_quality=result.get("metadata", {}).get("data_quality", {})
+        )
+        
+        logger.info(f"Successfully executed query {request.query_id} in {response.processing_time_ms}ms")
+        return response
+        
+    except Exception as e:
+        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        logger.error(f"Query execution failed for {request.query_id}: {e}")
+        
+        return QueryExecuteResponse(
+            success=False,
+            query_id=request.query_id,
+            processed_data=[],
+            columns=[],
+            row_count=0,
+            processing_time_ms=processing_time,
+            error=str(e)
+        )
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    if not data_agent:
+        raise HTTPException(status_code=503, detail="Data Agent not initialized")
+    
+    try:
+        health_status = await data_agent.health_check()
+        return health_status
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/status")
+async def get_status():
+    """Get agent status"""
+    return {
+        "agent_type": "data-agent",
+        "status": "running" if data_agent and data_agent.is_initialized else "stopped",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get agent metrics"""
+    if not data_agent:
+        raise HTTPException(status_code=503, detail="Data Agent not initialized")
+    
+    try:
+        metrics = await data_agent.get_metrics()
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Data Agent stopped by user")
-    except Exception as e:
-        logger.error("Data Agent failed", error=str(e))
-        sys.exit(1)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8002,
+        reload=False,
+        log_level="info"
+    )
