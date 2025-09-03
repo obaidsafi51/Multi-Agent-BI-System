@@ -110,6 +110,8 @@ services:
     build:
       context: ./agents/viz-agent
       dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
     environment:
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
