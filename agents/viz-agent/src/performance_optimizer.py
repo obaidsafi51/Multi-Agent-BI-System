@@ -46,7 +46,7 @@ class PerformanceOptimizer:
         try:
             # Check if optimization is needed
             if not self._needs_optimization(data, chart_type):
-                processing_time = int((time.time() - start_time) * 1000)
+                processing_time = max(1, int((time.time() - start_time) * 1000))  # Ensure minimum 1ms
                 return data, PerformanceMetrics(
                     data_processing_time_ms=processing_time,
                     chart_generation_time_ms=0,
@@ -58,7 +58,7 @@ class PerformanceOptimizer:
             optimized_data = self._apply_optimization_strategy(data, chart_type)
             
             # Calculate metrics
-            processing_time = int((time.time() - start_time) * 1000)
+            processing_time = max(1, int((time.time() - start_time) * 1000))  # Ensure minimum 1ms
             memory_usage = self._get_memory_usage() - start_memory
             
             logger.info(f"Optimized dataset from {original_count} to {len(optimized_data)} points "
@@ -74,7 +74,7 @@ class PerformanceOptimizer:
         except Exception as e:
             logger.error(f"Error optimizing data: {str(e)}")
             # Return original data if optimization fails
-            processing_time = int((time.time() - start_time) * 1000)
+            processing_time = max(1, int((time.time() - start_time) * 1000))  # Ensure minimum 1ms
             return data, PerformanceMetrics(
                 data_processing_time_ms=processing_time,
                 chart_generation_time_ms=0,
@@ -158,7 +158,7 @@ class PerformanceOptimizer:
             # Determine appropriate frequency
             time_span = df.index.max() - df.index.min()
             if time_span.days > 365:
-                freq = 'M'  # Monthly
+                freq = 'ME'  # Monthly (updated from deprecated 'M')
             elif time_span.days > 30:
                 freq = 'W'  # Weekly
             else:

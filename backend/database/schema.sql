@@ -1,5 +1,19 @@
--- AI CFO BI Agent Database Schema
+-- ============================================================================
+-- AI CFO BI Agent Database Schema (Normalized)
 -- TiDB Database Schema for Financial Data and User Personalization
+-- ============================================================================
+
+-- ============================================================================
+-- MASTER DATA
+-- ============================================================================
+
+-- Department Master Table
+CREATE TABLE IF NOT EXISTS departments (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    department_name VARCHAR(100) UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 
 -- ============================================================================
 -- FINANCIAL DATA TABLES
@@ -16,6 +30,7 @@ CREATE TABLE IF NOT EXISTS financial_overview (
     operating_expenses DECIMAL(15,2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_period (period_date, period_type),
     INDEX idx_period_date (period_date),
     INDEX idx_period_type (period_type),
     INDEX idx_period_date_type (period_date, period_type)
@@ -24,6 +39,7 @@ CREATE TABLE IF NOT EXISTS financial_overview (
 -- Cash Flow Data
 CREATE TABLE IF NOT EXISTS cash_flow (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    department_id BIGINT NOT NULL,
     period_date DATE NOT NULL,
     operating_cash_flow DECIMAL(15,2),
     investing_cash_flow DECIMAL(15,2),
@@ -32,22 +48,26 @@ CREATE TABLE IF NOT EXISTS cash_flow (
     cash_balance DECIMAL(15,2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_period_date (period_date)
+    UNIQUE KEY uk_department_period (department_id, period_date),
+    INDEX idx_period_date (period_date),
+    CONSTRAINT fk_cashflow_department FOREIGN KEY (department_id) REFERENCES departments(id)
 );
 
 -- Budget Tracking
 CREATE TABLE IF NOT EXISTS budget_tracking (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    department VARCHAR(100) NOT NULL,
+    department_id BIGINT NOT NULL,
     period_date DATE NOT NULL,
     budgeted_amount DECIMAL(15,2),
     actual_amount DECIMAL(15,2),
     variance_amount DECIMAL(15,2),
-    variance_percentage DECIMAL(5,2),
+    variance_percentage DECIMAL(7,2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_department_period (department, period_date),
-    INDEX idx_period_date (period_date)
+    UNIQUE KEY uk_department_period (department_id, period_date),
+    INDEX idx_department_period (department_id, period_date),
+    INDEX idx_period_date (period_date),
+    CONSTRAINT fk_budget_department FOREIGN KEY (department_id) REFERENCES departments(id)
 );
 
 -- Investment Performance
@@ -63,6 +83,7 @@ CREATE TABLE IF NOT EXISTS investments (
     end_date DATE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_investment (investment_name, start_date),
     INDEX idx_status (status),
     INDEX idx_category (investment_category),
     INDEX idx_start_date (start_date)
@@ -79,6 +100,7 @@ CREATE TABLE IF NOT EXISTS financial_ratios (
     net_margin DECIMAL(5,2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_period (period_date),
     INDEX idx_period_date (period_date)
 );
 

@@ -20,6 +20,12 @@ from src.agent import get_data_agent, close_data_agent
 load_dotenv()
 
 # Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+
 structlog.configure(
     processors=[
         structlog.stdlib.filter_by_level,
@@ -115,7 +121,7 @@ async def process_sample_queries():
             'metric_type': 'budget_variance',
             'time_period': 'this month',
             'aggregation_level': 'daily',
-            'filters': {'department': 'sales'},
+            'filters': {'department': 'sales'},  # This will be converted to department_id
             'comparison_periods': []
         }
     ]
@@ -145,42 +151,65 @@ async def process_sample_queries():
 async def main():
     global data_agent
     
+    # Add debug output to see what's happening
+    print("=== DEBUG: Starting main() function ===")
+    
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    print("=== DEBUG: Signal handlers registered ===")
+    
     logger.info("Data Agent starting...")
+    print("=== DEBUG: Logger info called ===")
+    sys.stdout.flush()
     
     # Validate environment variables
     required_env_vars = ['DATABASE_URL', 'REDIS_URL']
     missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+    
+    print(f"=== DEBUG: Environment variables check - missing: {missing_vars} ===")
     
     if missing_vars:
         logger.error("Missing required environment variables", missing_vars=missing_vars)
         sys.exit(1)
     
     logger.info("Environment variables validated successfully")
+    print("=== DEBUG: Environment variables validated ===")
+    sys.stdout.flush()
     
     try:
         # Initialize Data Agent
+        print("=== DEBUG: About to initialize Data Agent ===")
         logger.info("Initializing Data Agent...")
+        print("=== DEBUG: Logger.info called for initialization ===")
         data_agent = await get_data_agent()
+        print("=== DEBUG: Data Agent created successfully ===")
         logger.info("Data Agent initialized successfully")
+        print("=== DEBUG: Data Agent initialization logged ===")
         
         # Start background tasks
+        print("=== DEBUG: Starting background tasks ===")
         health_task = asyncio.create_task(health_check_loop())
         metrics_task = asyncio.create_task(metrics_reporting_loop())
+        print("=== DEBUG: Background tasks created ===")
         
         # Process sample queries for demonstration
+        print("=== DEBUG: About to process sample queries ===")
         await process_sample_queries()
+        print("=== DEBUG: Sample queries processed ===")
         
         logger.info("Data Agent is ready and running")
+        print("=== DEBUG: Data Agent ready message logged ===")
         
         # Keep the service running until shutdown signal
+        print("=== DEBUG: Entering main loop ===")
         while not shutdown_event.is_set():
             await asyncio.sleep(10)
             logger.debug("Data Agent heartbeat")
+            print("=== DEBUG: Heartbeat ===")
         
+        print("=== DEBUG: Shutdown signal received ===")
         logger.info("Shutdown signal received, stopping Data Agent...")
         
         # Cancel background tasks

@@ -46,9 +46,9 @@ class ExportManager:
     def _configure_plotly_export(self):
         """Configure Plotly for static image export"""
         try:
-            # Set default image export engine
-            pio.kaleido.scope.default_format = "png"
-            pio.kaleido.scope.default_engine = "kaleido"
+            # Use new non-deprecated Plotly defaults (post Sept 2025)
+            pio.defaults.default_format = "png"
+            # Note: default_engine is no longer needed as Kaleido is the only engine
         except Exception as e:
             logger.warning(f"Could not configure Plotly export engine: {e}")
     

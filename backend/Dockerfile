@@ -1,22 +1,31 @@
-FROM python:3.11-slim
+# Use slim-buster for better compatibility and smaller size
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# Install system dependencies and uv
+# Install system dependencies in a single RUN command
 RUN apt-get update && apt-get install -y \
     gcc \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install uv
+    && pip install --no-cache-dir uv
 
-# Copy pyproject.toml and uv.lock first for better caching
-COPY pyproject.toml uv.lock* ./
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser && \
+    chown -R appuser:appuser /app
 
-# Install Python dependencies with uv
-RUN uv sync --frozen
+# Copy dependency files first for better layer caching
+COPY --chown=appuser:appuser pyproject.toml uv.lock* ./
+
+# Install Python dependencies with uv (faster than pip)
+RUN uv sync --frozen --no-dev
 
 # Copy source code
-COPY . .
+COPY --chown=appuser:appuser . .
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000

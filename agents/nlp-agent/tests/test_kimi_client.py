@@ -51,14 +51,14 @@ class TestKimiClient:
         """Test KimiClient initialization with API key"""
         client = KimiClient(api_key="test-key")
         assert client.api_key == "test-key"
-        assert client.base_url == "https://api.moonshot.cn/v1"
+        assert client.base_url == "https://api.moonshot.ai/v1"
         assert client.timeout == 30
         assert client.max_retries == 3
     
     def test_init_without_api_key_raises_error(self):
         """Test that missing API key raises ValueError"""
         with patch.dict('os.environ', {}, clear=True):
-            with pytest.raises(ValueError, match="KIMI API key is required"):
+            with pytest.raises(ValueError, match="MOONSHOT API key is required"):
                 KimiClient()
     
     @pytest.mark.asyncio

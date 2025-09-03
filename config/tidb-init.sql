@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS budget_tracking (
     variance_amount DECIMAL(15,2),
     variance_percentage DECIMAL(5,2),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_period_date (period_date),
     INDEX idx_department_period (department, period_date)
 );
 

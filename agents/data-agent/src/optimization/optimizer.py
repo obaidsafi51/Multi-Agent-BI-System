@@ -76,8 +76,8 @@ class QueryOptimizer:
             'row_count': 100000,
             'avg_row_size': 128,
             'index_selectivity': {
-                'idx_department_period': 0.02,
-                'idx_period_date': 0.1
+                'idx_period_date': 0.1,
+                'idx_department_period': 0.02
             }
         },
         'investments': {
@@ -111,7 +111,7 @@ class QueryOptimizer:
         OptimizationRule(
             name="department_budget_index",
             strategy=OptimizationStrategy.INDEX_HINT,
-            condition="department = .* AND .*period_date",
+            condition="department_id = .* AND .*period_date",
             action="USE INDEX (idx_department_period)",
             priority=2,
             estimated_improvement=0.6

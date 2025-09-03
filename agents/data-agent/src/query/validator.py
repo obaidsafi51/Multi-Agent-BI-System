@@ -4,7 +4,7 @@ Ensures data integrity and provides quality scoring for financial data.
 """
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
@@ -385,8 +385,14 @@ class DataValidator:
                 try:
                     if isinstance(period_date, str):
                         date_obj = datetime.strptime(period_date[:10], '%Y-%m-%d')
-                    else:
+                    elif isinstance(period_date, date) and not isinstance(period_date, datetime):
+                        # Convert date to datetime for consistent comparison
+                        date_obj = datetime.combine(period_date, datetime.min.time())
+                    elif isinstance(period_date, datetime):
                         date_obj = period_date
+                    else:
+                        # Try to convert other types
+                        date_obj = datetime.strptime(str(period_date)[:10], '%Y-%m-%d')
                     
                     if latest_date is None or date_obj > latest_date:
                         latest_date = date_obj
@@ -395,6 +401,10 @@ class DataValidator:
                     continue
         
         if latest_date:
+            # Ensure both dates are datetime objects before subtraction
+            if isinstance(latest_date, date) and not isinstance(latest_date, datetime):
+                latest_date = datetime.combine(latest_date, datetime.min.time())
+            
             days_old = (self.current_date - latest_date).days
             
             if days_old > freshness_threshold * 2:

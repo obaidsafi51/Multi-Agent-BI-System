@@ -6,7 +6,7 @@ authors = [
     {name = "AI CFO Team", email = "team@ai-cfo.com"}
 ]
 dependencies = [
-    "pydantic==2.5.0",
+    "pydantic>=2.8.0",
     "redis==5.0.1",
     "pika==1.3.2",
     "sqlalchemy==2.0.23",

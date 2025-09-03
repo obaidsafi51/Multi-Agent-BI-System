@@ -1,4 +1,4 @@
-"""KIMI API client with authentication, retry logic, and error handling"""
+"""MOONSHOT API client with authentication, retry logic, and error handling"""
 
 import asyncio
 import json
@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 class KimiAPIError(Exception):
-    """Base exception for KIMI API errors"""
+    """Base exception for MOONSHOT API errors"""
     pass
 
 
 class KimiAuthenticationError(KimiAPIError):
-    """Authentication error with KIMI API"""
+    """Authentication error with MOONSHOT API"""
     pass
 
 
@@ -35,19 +35,27 @@ class KimiTimeoutError(KimiAPIError):
 
 
 class KimiClient:
-    """KIMI API client with retry logic and error handling"""
+    """MOONSHOT API client with retry logic and error handling"""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://api.moonshot.cn/v1",
+        base_url: str = "https://api.moonshot.ai/v1",
         timeout: int = 30,
         max_retries: int = 3,
         retry_delay: float = 1.0
     ):
         self.api_key = api_key or os.getenv("KIMI_API_KEY")
-        if not self.api_key:
-            raise ValueError("KIMI API key is required")
+        
+        # Check for development mode
+        self.is_development = os.getenv("NODE_ENV") == "development"
+        
+        if not self.api_key or self.api_key in ["your_actual_kimi_api_key_here", "your_moonshot_api_key_here"]:
+            if self.is_development:
+                logger.warning("MOONSHOT API key not configured - running in mock mode for development")
+                self.api_key = "mock-key-for-development"
+            else:
+                raise ValueError("MOONSHOT API key is required. Get one from https://platform.moonshot.ai/console")
         
         self.base_url = base_url
         self.timeout = timeout
@@ -62,7 +70,9 @@ class KimiClient:
             }
         )
         
-        logger.info(f"KIMI client initialized with base URL: {base_url}")
+        logger.info(f"MOONSHOT client initialized with base URL: {base_url}")
+        if self.is_development and self.api_key == "mock-key-for-development":
+            logger.info("Running in development mode with mock MOONSHOT API responses")
     
     async def __aenter__(self):
         return self
@@ -82,6 +92,11 @@ class KimiClient:
         params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make HTTP request with retry logic"""
+        
+        # Return mock response in development mode with invalid key
+        if self.is_development and self.api_key == "mock-key-for-development":
+            return self._get_mock_response(endpoint, data)
+        
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         
         for attempt in range(self.max_retries + 1):
@@ -129,6 +144,31 @@ class KimiClient:
                     raise KimiAPIError(f"Request failed: {e}")
         
         raise KimiAPIError("Max retries exceeded")
+
+    def _get_mock_response(self, endpoint: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Generate mock responses for development mode"""
+        if endpoint == "/chat/completions":
+            return {
+                "id": "chatcmpl-mock-development",
+                "object": "chat.completion",
+                "created": 1694102400,
+                "model": "moonshot-v1-8k",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Mock response for development mode. This is a simulated MOONSHOT/KIMI API response. In production, replace KIMI_API_KEY in .env with your actual API key from https://platform.moonshot.ai/console"
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 35,
+                    "total_tokens": 55
+                }
+            }
+        else:
+            return {"status": "mock", "message": "Mock response for development mode"}
     
     async def chat_completion(
         self,
@@ -138,7 +178,7 @@ class KimiClient:
         max_tokens: int = 2000,
         stream: bool = False
     ) -> KimiResponse:
-        """Create a chat completion using KIMI API"""
+        """Create a chat completion using MOONSHOT API"""
         try:
             request_data = KimiRequest(
                 model=model,
@@ -163,7 +203,7 @@ class KimiClient:
             return kimi_response
             
         except ValidationError as e:
-            logger.error(f"Invalid response format from KIMI API: {e}")
+            logger.error(f"Invalid response format from MOONSHOT API: {e}")
             raise KimiAPIError(f"Invalid response format: {e}")
         except Exception as e:
             logger.error(f"Chat completion failed: {e}")
@@ -241,7 +281,7 @@ Response: {
                     intent_data = json.loads(json_match.group())
                     return intent_data
                 else:
-                    raise KimiAPIError("Could not extract JSON from KIMI response")
+                    raise KimiAPIError("Could not extract JSON from MOONSHOT response")
                     
         except Exception as e:
             logger.error(f"Financial intent extraction failed: {e}")
@@ -327,7 +367,7 @@ Response: [
                     entities_data = json.loads(json_match.group())
                     return entities_data if isinstance(entities_data, list) else []
                 else:
-                    logger.warning("Could not extract JSON array from KIMI response")
+                    logger.warning("Could not extract JSON array from MOONSHOT response")
                     return []
                     
         except Exception as e:
@@ -400,7 +440,7 @@ Response: [
                     ambiguities_data = json.loads(json_match.group())
                     return ambiguities_data if isinstance(ambiguities_data, list) else []
                 else:
-                    logger.warning("Could not extract JSON array from KIMI response")
+                    logger.warning("Could not extract JSON array from MOONSHOT response")
                     return []
                     
         except Exception as e:
@@ -408,7 +448,7 @@ Response: [
             return []
     
     async def health_check(self) -> bool:
-        """Check if KIMI API is accessible"""
+        """Check if MOONSHOT API is accessible"""
         try:
             # Simple test request to verify API connectivity
             messages = [
@@ -423,5 +463,5 @@ Response: [
             return response.choices[0]["message"]["content"] is not None
             
         except Exception as e:
-            logger.error(f"KIMI API health check failed: {e}")
+            logger.error(f"MOONSHOT API health check failed: {e}")
             return False
