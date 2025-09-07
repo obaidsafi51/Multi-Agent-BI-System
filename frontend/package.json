@@ -26,10 +26,21 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "framer-motion": "^12.23.12",
+<<<<<<< Updated upstream
+=======
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
+    "lodash": "^4.17.21",
+>>>>>>> Stashed changes
     "lucide-react": "^0.542.0",
+    "moment": "^2.30.1",
     "next": "15.5.2",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+<<<<<<< Updated upstream
+=======
+    "recharts": "^2.15.4",
+>>>>>>> Stashed changes
     "socket.io-client": "^4.8.1",
     "tailwind-merge": "^3.3.1"
   },

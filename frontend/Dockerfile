@@ -10,7 +10,8 @@ RUN apk update && apk add --no-cache curl
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+RUN npm config set registry https://registry.npmmirror.com/ && \
+    npm ci --only=production
 
 # Copy source code
 COPY . .
@@ -30,7 +31,8 @@ RUN apk update && apk add --no-cache curl
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+RUN npm config set registry https://registry.npmmirror.com/ && \
+    npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/.next ./.next
@@ -66,7 +68,7 @@ RUN apk update && apk add --no-cache curl
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies for development)
-RUN npm config set registry https://registry.npmjs.org/ \
+RUN npm config set registry https://registry.npmmirror.com/ \
     && npm config set fetch-timeout 600000 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
