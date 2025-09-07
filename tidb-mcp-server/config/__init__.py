@@ -1,0 +1,1 @@
+"""Configuration package for TiDB MCP Server."""
