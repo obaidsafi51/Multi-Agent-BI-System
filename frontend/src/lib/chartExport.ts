@@ -12,6 +12,7 @@ export class ChartExportService {
     ): Promise<void> {
         try {
             const html2canvas = (await import("html2canvas")).default;
+
             const canvas = await html2canvas(element, {
                 backgroundColor: "#ffffff",
                 scale: options.quality || 2,
@@ -96,6 +97,7 @@ export class ChartExportService {
         try {
             // Dynamic import of html2canvas for browser
             const html2canvas = (await import("html2canvas")).default;
+
             const canvas = await html2canvas(element, {
                 backgroundColor: "#ffffff",
                 scale: options.quality || 2,
@@ -108,6 +110,7 @@ export class ChartExportService {
             const imgData = canvas.toDataURL("image/png");
             // Dynamic import of jsPDF for browser
             const { jsPDF } = await import("jspdf");
+
             const pdf = new jsPDF({
                 orientation: canvas.width > canvas.height ? "landscape" : "portrait",
                 unit: "px",
@@ -191,6 +194,7 @@ export class ChartExportService {
      * Add branding to PDF
      */
     private static addPDFBranding(pdf: JsPDFType, width: number): void {
+
         pdf.setFontSize(16);
         pdf.setTextColor(31, 41, 55); // #1f2937
         pdf.text("AI CFO BI Agent", 10, 25);

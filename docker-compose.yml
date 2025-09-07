@@ -19,6 +19,8 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
+    # Run stable dev to avoid Turbopack panic from spaces in host path
+    command: ["npm", "run", "dev:stable"]
     depends_on:
       backend:
         condition: service_started
@@ -126,6 +128,68 @@ services:
     networks:
       - ai-cfo-network
     restart: unless-stopped
+
+  # TiDB MCP Server
+  tidb-mcp-server:
+    build:
+      context: ./tidb-mcp-server
+      dockerfile: Dockerfile
+      target: production
+    container_name: tidb-mcp-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # TiDB Connection (required - set in .env file)
+      - TIDB_HOST=${TIDB_HOST}
+      - TIDB_PORT=${TIDB_PORT:-4000}
+      - TIDB_USER=${TIDB_USER}
+      - TIDB_PASSWORD=${TIDB_PASSWORD}
+      - TIDB_DATABASE=${TIDB_DATABASE}
+      - TIDB_SSL_CA=${TIDB_SSL_CA:-}
+      - TIDB_SSL_VERIFY_CERT=${TIDB_SSL_VERIFY_CERT:-true}
+      - TIDB_SSL_VERIFY_IDENTITY=${TIDB_SSL_VERIFY_IDENTITY:-true}
+
+      # MCP Server Configuration
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-tidb-mcp-server}
+      - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-0.1.0}
+      - MCP_MAX_CONNECTIONS=${MCP_MAX_CONNECTIONS:-10}
+      - MCP_REQUEST_TIMEOUT=${MCP_REQUEST_TIMEOUT:-30}
+
+      # Cache Configuration
+      - CACHE_ENABLED=${CACHE_ENABLED:-true}
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-300}
+      - CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-1000}
+
+      # Security Configuration
+      - MAX_QUERY_TIMEOUT=${MAX_QUERY_TIMEOUT:-30}
+      - MAX_SAMPLE_ROWS=${MAX_SAMPLE_ROWS:-100}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+
+      # Logging Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      # Mount logs directory for persistence
+      - ./tidb-mcp-server/logs:/app/logs
+      # Mount SSL certificates if needed
+      - ${SSL_CERT_PATH:-/dev/null}:/app/certs:ro
+    networks:
+      - ai-cfo-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from src.tidb_mcp_server.config import load_config; load_config()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # Personalization Agent
   # personal-agent:

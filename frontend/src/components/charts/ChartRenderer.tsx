@@ -52,7 +52,6 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
     className = "",
     cardSize = CardSize.LARGE,
     onExport,
-    // onConfigChange is not used in this component
 }) => {
     const chartRef = useRef<HTMLDivElement>(null);
     const [zoomLevel, setZoomLevel] = useState(1);
@@ -72,6 +71,7 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
     const colorScheme = useMemo(() => {
         const theme = config.styling?.theme || "corporate";
         return config.styling?.colorScheme || CFO_COLOR_SCHEMES[theme as keyof typeof CFO_COLOR_SCHEMES] || CFO_COLOR_SCHEMES.corporate;
+
     }, [config.styling]);
 
     // Format financial values
@@ -110,6 +110,7 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
         }
         return null;
     };    // Export functionality
+
     const handleExport = useCallback(async (format: ExportOptions["format"]) => {
         if (!chartRef.current || !onExport) return;
 
@@ -118,6 +119,7 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
             const exportOptions: ExportOptions = {
                 format,
                 filename: `chart-${crypto.randomUUID().slice(0, 8)}`,
+
                 quality: 1,
                 width: dimensions.width,
                 height: dimensions.height,

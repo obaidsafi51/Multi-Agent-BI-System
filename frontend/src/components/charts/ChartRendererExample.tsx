@@ -139,6 +139,7 @@ const ChartRendererExample: React.FC = () => {
     setIsLoading(true);
     try {
       const chartElement = typeof window !== 'undefined' ? document.querySelector('[data-chart-container]') as HTMLElement : null;
+
       if (chartElement) {
         await exportChart(chartElement, options);
       }

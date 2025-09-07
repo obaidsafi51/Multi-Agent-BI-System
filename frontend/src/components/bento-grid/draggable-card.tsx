@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { BentoGridCard, CardType } from "@/types/dashboard";
 import { GripVertical, TrendingUp, BarChart3, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
+import ChartCard from "./ChartCard";
 
 interface DraggableCardProps {
   card: BentoGridCard;
@@ -55,6 +56,11 @@ export function DraggableCard({ card }: DraggableCardProps) {
         );
 
       case CardType.CHART:
+        // If we have a chart configuration, render the actual chart
+        if (card.content.chartConfig) {
+          return <ChartCard card={card} />;
+        }
+        // Otherwise, render placeholder
         return (
           <div className="h-full flex items-center justify-center">
             <div className="text-center">

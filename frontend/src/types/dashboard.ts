@@ -14,6 +14,8 @@ export enum CardType {
   CUSTOM = "custom"
 }
 
+import { ChartConfig } from "./chart";
+
 export interface CardContent {
   title: string;
   value?: string;
@@ -21,6 +23,7 @@ export interface CardContent {
   change?: string;
   trend?: "up" | "down";
   chartType?: string;
+  chartConfig?: ChartConfig;
   description?: string;
   headers?: string[];
   rows?: unknown[][];
