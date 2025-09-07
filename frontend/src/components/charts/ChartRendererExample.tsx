@@ -138,7 +138,8 @@ const ChartRendererExample: React.FC = () => {
   const handleExport = async (options: ExportOptions) => {
     setIsLoading(true);
     try {
-      const chartElement = document.querySelector('[data-chart-container]') as HTMLElement;
+      const chartElement = typeof window !== 'undefined' ? document.querySelector('[data-chart-container]') as HTMLElement : null;
+
       if (chartElement) {
         await exportChart(chartElement, options);
       }
