@@ -1,11 +1,14 @@
-"""Main entry point for TiDB MCP Server."""
+"""Main entry point for TiDB MCP Server with HTTP API support."""
 
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from typing import Optional
+
+import uvicorn
 
 from .config import load_config
 from .exceptions import ConfigurationError, DatabaseConnectionError
@@ -39,7 +42,7 @@ def setup_logging(log_level: str, log_format: str) -> None:
 
 
 async def main_async(config=None) -> int:
-    """Async main entry point for the TiDB MCP Server."""
+    """Async main entry point for the TiDB MCP Server with HTTP API."""
     server: Optional[TiDBMCPServer] = None
     
     try:
@@ -49,35 +52,69 @@ async def main_async(config=None) -> int:
         
         logger = logging.getLogger(__name__)
         
-        logger.info(
-            f"Starting TiDB MCP Server v{config.mcp_server_version} "
-            f"connecting to {config.tidb_host}:{config.tidb_port}",
-            extra={
-                "server_version": config.mcp_server_version,
-                "tidb_host": config.tidb_host,
-                "tidb_port": config.tidb_port,
-                "log_level": config.log_level
-            }
-        )
+        # Check if HTTP API mode is enabled
+        use_http_api = os.getenv('USE_HTTP_API', 'true').lower() == 'true'
         
-        # Validate configuration
-        config.validate_configuration()
-        logger.info("Configuration validation successful")
-        
-        # Initialize and start MCP server
-        server = TiDBMCPServer(config)
-        
-        # Set up signal handlers for graceful shutdown
-        def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-            if server:
-                asyncio.create_task(server.shutdown())
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
-        # Start the server
-        await server.start()
+        if use_http_api:
+            logger.info(
+                f"Starting TiDB MCP Server v{config.mcp_server_version} with HTTP API "
+                f"connecting to {config.tidb_host}:{config.tidb_port}",
+                extra={
+                    "server_version": config.mcp_server_version,
+                    "tidb_host": config.tidb_host,
+                    "tidb_port": config.tidb_port,
+                    "log_level": config.log_level,
+                    "http_api_enabled": True
+                }
+            )
+            
+            # Start HTTP API server
+            from .http_api import app
+            
+            # Configure uvicorn
+            uvicorn_config = uvicorn.Config(
+                app=app,
+                host="0.0.0.0",
+                port=8000,
+                log_level=config.log_level.lower(),
+                access_log=True
+            )
+            
+            server_instance = uvicorn.Server(uvicorn_config)
+            await server_instance.serve()
+            
+        else:
+            # Original MCP protocol mode
+            logger.info(
+                f"Starting TiDB MCP Server v{config.mcp_server_version} "
+                f"connecting to {config.tidb_host}:{config.tidb_port}",
+                extra={
+                    "server_version": config.mcp_server_version,
+                    "tidb_host": config.tidb_host,
+                    "tidb_port": config.tidb_port,
+                    "log_level": config.log_level,
+                    "http_api_enabled": False
+                }
+            )
+            
+            # Validate configuration
+            config.validate_configuration()
+            logger.info("Configuration validation successful")
+            
+            # Initialize and start MCP server
+            server = TiDBMCPServer(config)
+            
+            # Set up signal handlers for graceful shutdown
+            def signal_handler(signum, frame):
+                logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+                if server:
+                    asyncio.create_task(server.shutdown())
+            
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+            
+            # Start the server
+            await server.start()
         
         return 0
         

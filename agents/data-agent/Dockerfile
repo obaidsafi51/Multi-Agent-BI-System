@@ -1,28 +1,34 @@
-FROM python:3.11-slim-bookworm
+# Ultra-fast data agent build (no venv needed in Docker)
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies in a single RUN command
-RUN apt-get update && apt-get install -y gcc curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir uv
+# Minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
+# Create user
+RUN useradd -m appuser && chown appuser:appuser /app
 
-# Copy dependency files first for better layer caching
-COPY --chown=appuser:appuser pyproject.toml uv.lock* ./
+# Copy source code directly
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser main.py ./
 
-# Install Python dependencies with uv (faster than pip)
-RUN uv sync --frozen --no-dev
+# Install only essential dependencies directly to system Python
+RUN uv pip install --system \
+    fastapi==0.115.5 \
+    uvicorn==0.32.1 \
+    pydantic==2.11.7 \
+    python-dotenv==1.0.0 \
+    redis==5.0.1 \
+    sqlalchemy==2.0.35 \
+    pymysql==1.1.0 \
+    aiomysql==0.2.0 \
+    aiohttp==3.9.0 \
+    structlog==23.2.0
 
-# Copy source code
-COPY --chown=appuser:appuser . .
-
-# Switch to non-root user
 USER appuser
 
-# Start the Data agent using python from venv with unbuffered output
-CMD ["/app/.venv/bin/python", "-u", "main.py"]
+CMD ["python", "-u", "main.py"]
