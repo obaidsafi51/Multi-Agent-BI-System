@@ -27,7 +27,7 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # Backend - FastAPI Gateway
+  # Backend - FastAPI Gateway with MCP integration
   backend:
     build:
       context: ./backend
@@ -45,21 +45,8 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      # MCP Schema Management Configuration
       - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
-      - MCP_CONNECTION_TIMEOUT=${MCP_CONNECTION_TIMEOUT:-30}
-      - MCP_REQUEST_TIMEOUT=${MCP_REQUEST_TIMEOUT:-60}
-      - MCP_MAX_RETRIES=${MCP_MAX_RETRIES:-3}
-      - MCP_RETRY_DELAY=${MCP_RETRY_DELAY:-1.0}
-      - MCP_CACHE_TTL=${MCP_CACHE_TTL:-300}
-      - MCP_ENABLE_CACHING=${MCP_ENABLE_CACHING:-true}
-      - MCP_FALLBACK_ENABLED=${MCP_FALLBACK_ENABLED:-true}
-      # Schema Validation Configuration
-      - SCHEMA_STRICT_MODE=${SCHEMA_STRICT_MODE:-false}
-      - SCHEMA_VALIDATE_TYPES=${SCHEMA_VALIDATE_TYPES:-true}
-      - SCHEMA_VALIDATE_CONSTRAINTS=${SCHEMA_VALIDATE_CONSTRAINTS:-true}
-      - SCHEMA_VALIDATE_RELATIONSHIPS=${SCHEMA_VALIDATE_RELATIONSHIPS:-true}
-      - SCHEMA_ALLOW_UNKNOWN_COLUMNS=${SCHEMA_ALLOW_UNKNOWN_COLUMNS:-false}
+      - USE_MCP_CLIENT=true
     volumes:
       - ./backend:/app
     depends_on:
@@ -68,16 +55,10 @@ services:
       rabbitmq:
         condition: service_healthy
       tidb-mcp-server:
-        condition: service_healthy
+        condition: service_started
     networks:
       - ai-cfo-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "/app/health_check_script.py"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   # NLP Agent with KIMI Integration
   nlp-agent:
@@ -103,7 +84,7 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # Data Agent with TiDB Integration
+  # Data Agent with TiDB MCP Integration
   data-agent:
     build:
       context: ./agents/data-agent
@@ -117,22 +98,8 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      - USE_MCP_CLIENT=${USE_MCP_CLIENT:-true}
-      # MCP Schema Management Configuration
+      - USE_MCP_CLIENT=true
       - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
-      - MCP_CONNECTION_TIMEOUT=${MCP_CONNECTION_TIMEOUT:-30}
-      - MCP_REQUEST_TIMEOUT=${MCP_REQUEST_TIMEOUT:-60}
-      - MCP_MAX_RETRIES=${MCP_MAX_RETRIES:-3}
-      - MCP_RETRY_DELAY=${MCP_RETRY_DELAY:-1.0}
-      - MCP_CACHE_TTL=${MCP_CACHE_TTL:-300}
-      - MCP_ENABLE_CACHING=${MCP_ENABLE_CACHING:-true}
-      - MCP_FALLBACK_ENABLED=${MCP_FALLBACK_ENABLED:-true}
-      # Schema Validation Configuration
-      - SCHEMA_STRICT_MODE=${SCHEMA_STRICT_MODE:-false}
-      - SCHEMA_VALIDATE_TYPES=${SCHEMA_VALIDATE_TYPES:-true}
-      - SCHEMA_VALIDATE_CONSTRAINTS=${SCHEMA_VALIDATE_CONSTRAINTS:-true}
-      - SCHEMA_VALIDATE_RELATIONSHIPS=${SCHEMA_VALIDATE_RELATIONSHIPS:-true}
-      - SCHEMA_ALLOW_UNKNOWN_COLUMNS=${SCHEMA_ALLOW_UNKNOWN_COLUMNS:-false}
     # Remove volumes mount to avoid permission issues
     # volumes:
     #   - ./agents/data-agent:/app
@@ -142,22 +109,10 @@ services:
       rabbitmq:
         condition: service_healthy
       tidb-mcp-server:
-        condition: service_healthy
+        condition: service_started
     networks:
       - ai-cfo-network
     restart: unless-stopped
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import asyncio; import sys; sys.path.append('/app/src'); from cache.manager import CacheManager; print('Data agent healthy')",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   # Visualization Agent
   viz-agent:
@@ -224,7 +179,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-json}
     ports:
-      - "8000:8000" # Expose HTTP API port
+      - "8000:8000"  # Expose HTTP API port
     volumes:
       # Mount logs directory for persistence
       - ./tidb-mcp-server/logs:/app/logs
@@ -241,11 +196,7 @@ services:
           memory: 256M
           cpus: "0.25"
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -f http://localhost:8000/health || python -c 'from src.tidb_mcp_server.config import load_config; load_config()'",
-        ]
+      test: ["CMD", "python", "-c", "from src.tidb_mcp_server.config import load_config; load_config()"]
       interval: 30s
       timeout: 10s
       retries: 3
