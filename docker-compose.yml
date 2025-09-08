@@ -27,7 +27,7 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # Backend - FastAPI Gateway
+  # Backend - FastAPI Gateway with MCP integration
   backend:
     build:
       context: ./backend
@@ -45,6 +45,8 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
+      - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
+      - USE_MCP_CLIENT=true
     volumes:
       - ./backend:/app
     depends_on:
@@ -52,6 +54,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      tidb-mcp-server:
+        condition: service_started
     networks:
       - ai-cfo-network
     restart: unless-stopped
@@ -80,7 +84,7 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # Data Agent with TiDB Integration
+  # Data Agent with TiDB MCP Integration
   data-agent:
     build:
       context: ./agents/data-agent
@@ -94,7 +98,7 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      - USE_MCP_CLIENT=${USE_MCP_CLIENT:-true}
+      - USE_MCP_CLIENT=true
       - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
     # Remove volumes mount to avoid permission issues
     # volumes:

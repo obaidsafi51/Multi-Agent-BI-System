@@ -173,10 +173,14 @@ class ApiService {
 
   // Transform API response data to frontend format
   transformToKpiCard(
-    data: unknown,
+    data: { value: number; change_percent?: number } | number,
     title: string,
     position: { row: number; col: number }
   ): BentoGridCard {
+    // Handle both object and direct number input
+    const value = typeof data === 'number' ? data : data.value;
+    const changePercent = typeof data === 'object' && data.change_percent ? data.change_percent : 0;
+    
     return {
       id: `kpi_${crypto.randomUUID()}`,
       cardType: CardType.KPI,
@@ -184,10 +188,10 @@ class ApiService {
       position,
       content: {
         title,
-        value: this.formatValue(data),
+        value: this.formatValue(value),
         label: "Current",
-        change: "+12.5%",
-        trend: "up" as const,
+        change: `${changePercent > 0 ? '+' : ''}${changePercent.toFixed(1)}%`,
+        trend: changePercent >= 0 ? "up" as const : "down" as const,
       },
     };
   }

@@ -15,21 +15,8 @@ from typing import Any, Dict, Optional
 
 from fastmcp import FastMCP
 
-# Add the backend directory to the Python path to import DatabaseManager
-backend_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'backend')
-sys.path.insert(0, os.path.abspath(backend_path))
-
-try:
-    from database.connection import DatabaseManager
-except ImportError:
-    # For testing, create mock class if backend is not available
-    class DatabaseManager:
-        def __init__(self, *args, **kwargs):
-            pass
-        def test_connection(self):
-            return True
-        def close(self):
-            pass
+# Import local database manager
+from .database import get_database_manager, DatabaseManager
 
 from .cache_manager import CacheManager
 from .config import ServerConfig
@@ -214,7 +201,7 @@ class TiDBMCPServer:
         for attempt in range(max_retries):
             try:
                 # Create database manager
-                self.db_manager = DatabaseManager()
+                self.db_manager = get_database_manager()
                 
                 # Test connection
                 if hasattr(self.db_manager, 'test_connection'):

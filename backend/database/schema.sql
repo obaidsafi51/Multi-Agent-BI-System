@@ -1,149 +1,144 @@
--- ============================================================================
--- AI CFO BI Agent Database Schema (Normalized)
--- TiDB Database Schema for Financial Data and User Personalization
--- ============================================================================
+-- ==============================
+-- Core Financial Tables
+-- ==============================
 
--- ============================================================================
--- MASTER DATA
--- ============================================================================
-
--- Department Master Table
-CREATE TABLE IF NOT EXISTS departments (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    department_name VARCHAR(100) UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+CREATE TABLE general_ledger (
+    transaction_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    account VARCHAR(100) NOT NULL, -- Revenue, COGS, OPEX, Tax, etc.
+    store_id INT NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    currency VARCHAR(10) DEFAULT 'PKR'
 );
 
--- ============================================================================
--- FINANCIAL DATA TABLES
--- ============================================================================
-
--- Company Financial Overview
-CREATE TABLE IF NOT EXISTS financial_overview (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    period_date DATE NOT NULL,
-    period_type ENUM('daily', 'monthly', 'quarterly', 'yearly') NOT NULL,
-    revenue DECIMAL(15,2),
-    gross_profit DECIMAL(15,2),
-    net_profit DECIMAL(15,2),
-    operating_expenses DECIMAL(15,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_period (period_date, period_type),
-    INDEX idx_period_date (period_date),
-    INDEX idx_period_type (period_type),
-    INDEX idx_period_date_type (period_date, period_type)
+CREATE TABLE revenue (
+    invoice_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    store_id INT NOT NULL,
+    product_category VARCHAR(100) NOT NULL,
+    units_sold INT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    total_revenue DECIMAL(15,2) NOT NULL
 );
 
--- Cash Flow Data
-CREATE TABLE IF NOT EXISTS cash_flow (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    department_id BIGINT NOT NULL,
-    period_date DATE NOT NULL,
-    operating_cash_flow DECIMAL(15,2),
-    investing_cash_flow DECIMAL(15,2),
-    financing_cash_flow DECIMAL(15,2),
-    net_cash_flow DECIMAL(15,2),
-    cash_balance DECIMAL(15,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_department_period (department_id, period_date),
-    INDEX idx_period_date (period_date),
-    CONSTRAINT fk_cashflow_department FOREIGN KEY (department_id) REFERENCES departments(id)
+CREATE TABLE expenses (
+    expense_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    store_id INT NOT NULL,
+    expense_category VARCHAR(100) NOT NULL, -- Rent, Salaries, Utilities, etc.
+    amount DECIMAL(15,2) NOT NULL,
+    approved_by VARCHAR(100)
 );
 
--- Budget Tracking
-CREATE TABLE IF NOT EXISTS budget_tracking (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    department_id BIGINT NOT NULL,
-    period_date DATE NOT NULL,
-    budgeted_amount DECIMAL(15,2),
-    actual_amount DECIMAL(15,2),
-    variance_amount DECIMAL(15,2),
-    variance_percentage DECIMAL(7,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_department_period (department_id, period_date),
-    INDEX idx_department_period (department_id, period_date),
-    INDEX idx_period_date (period_date),
-    CONSTRAINT fk_budget_department FOREIGN KEY (department_id) REFERENCES departments(id)
+CREATE TABLE pnl_statement (
+    pnl_id SERIAL PRIMARY KEY,
+    month DATE NOT NULL,
+    store_id INT NOT NULL,
+    revenue DECIMAL(15,2) NOT NULL,
+    cogs DECIMAL(15,2) NOT NULL,
+    gross_profit DECIMAL(15,2) NOT NULL,
+    opex DECIMAL(15,2) NOT NULL,
+    net_profit DECIMAL(15,2) NOT NULL,
+    profit_margin DECIMAL(5,2) NOT NULL
 );
 
--- Investment Performance
-CREATE TABLE IF NOT EXISTS investments (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    investment_name VARCHAR(200) NOT NULL,
-    investment_category VARCHAR(100),
-    initial_amount DECIMAL(15,2),
-    current_value DECIMAL(15,2),
-    roi_percentage DECIMAL(5,2),
-    status ENUM('active', 'completed', 'terminated') DEFAULT 'active',
-    start_date DATE,
-    end_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_investment (investment_name, start_date),
-    INDEX idx_status (status),
-    INDEX idx_category (investment_category),
-    INDEX idx_start_date (start_date)
+CREATE TABLE cashflow (
+    entry_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    category VARCHAR(50) NOT NULL, -- Operating, Investing, Financing
+    description TEXT,
+    cash_in DECIMAL(15,2) DEFAULT 0,
+    cash_out DECIMAL(15,2) DEFAULT 0,
+    net_cashflow DECIMAL(15,2) NOT NULL
 );
 
--- Financial Ratios
-CREATE TABLE IF NOT EXISTS financial_ratios (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    period_date DATE NOT NULL,
-    debt_to_equity DECIMAL(5,2),
-    current_ratio DECIMAL(5,2),
-    quick_ratio DECIMAL(5,2),
-    gross_margin DECIMAL(5,2),
-    net_margin DECIMAL(5,2),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_period (period_date),
-    INDEX idx_period_date (period_date)
+CREATE TABLE balance_sheet (
+    bs_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    store_id INT NOT NULL,
+    assets_current DECIMAL(15,2),
+    assets_fixed DECIMAL(15,2),
+    liabilities_current DECIMAL(15,2),
+    liabilities_longterm DECIMAL(15,2),
+    equity DECIMAL(15,2)
 );
 
--- ============================================================================
--- USER PERSONALIZATION TABLES
--- ============================================================================
-
--- User Preferences
-CREATE TABLE IF NOT EXISTS user_preferences (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id VARCHAR(100) NOT NULL,
-    preference_type VARCHAR(50) NOT NULL,
-    preference_value JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_user_type (user_id, preference_type),
-    INDEX idx_user_id (user_id)
+CREATE TABLE cfo_kpis (
+    kpi_id SERIAL PRIMARY KEY,
+    date DATE NOT NULL,
+    metric VARCHAR(100) NOT NULL, -- EBITDA, ROI, etc.
+    value DECIMAL(15,2) NOT NULL
 );
 
--- Query History
-CREATE TABLE IF NOT EXISTS query_history (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id VARCHAR(100) NOT NULL,
-    query_text TEXT NOT NULL,
-    query_intent JSON,
-    response_data JSON,
-    satisfaction_rating TINYINT,
-    processing_time_ms INT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_user_id (user_id),
-    INDEX idx_created_at (created_at),
-    INDEX idx_user_created (user_id, created_at)
+-- ==============================
+-- Graph-Friendly Extensions
+-- ==============================
+
+CREATE TABLE region_sales (
+    region_id SERIAL PRIMARY KEY,
+    region_name VARCHAR(100) NOT NULL,
+    date DATE NOT NULL,
+    store_count INT NOT NULL,
+    total_revenue DECIMAL(15,2) NOT NULL,
+    total_units_sold INT NOT NULL,
+    avg_ticket_size DECIMAL(10,2) NOT NULL
 );
 
--- User Behavior Analytics
-CREATE TABLE IF NOT EXISTS user_behavior (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id VARCHAR(100) NOT NULL,
-    session_id VARCHAR(100),
-    action_type VARCHAR(50),
-    action_data JSON,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_user_session (user_id, session_id),
-    INDEX idx_timestamp (timestamp),
-    INDEX idx_action_type (action_type)
+CREATE TABLE category_performance (
+    category_id SERIAL PRIMARY KEY,
+    product_category VARCHAR(100) NOT NULL,
+    month DATE NOT NULL,
+    units_sold INT NOT NULL,
+    revenue DECIMAL(15,2) NOT NULL,
+    gross_margin DECIMAL(5,2) NOT NULL
+);
+
+CREATE TABLE store_performance (
+    store_id INT NOT NULL,
+    city VARCHAR(100) NOT NULL,
+    month DATE NOT NULL,
+    footfall INT NOT NULL,
+    conversion_rate DECIMAL(5,2) NOT NULL,
+    revenue DECIMAL(15,2) NOT NULL,
+    profit_margin DECIMAL(5,2) NOT NULL,
+    PRIMARY KEY (store_id, month)
+);
+
+CREATE TABLE forecast_financials (
+    forecast_id SERIAL PRIMARY KEY,
+    month DATE NOT NULL,
+    forecast_revenue DECIMAL(15,2) NOT NULL,
+    forecast_cogs DECIMAL(15,2) NOT NULL,
+    forecast_net_profit DECIMAL(15,2) NOT NULL
+);
+
+CREATE TABLE inventory (
+    inventory_id SERIAL PRIMARY KEY,
+    product_id INT NOT NULL,
+    product_category VARCHAR(100) NOT NULL,
+    store_id INT NOT NULL,
+    date DATE NOT NULL,
+    stock_in INT NOT NULL,
+    stock_out INT NOT NULL,
+    closing_stock INT NOT NULL
+);
+
+CREATE TABLE supplier_payments (
+    payment_id SERIAL PRIMARY KEY,
+    supplier_id INT NOT NULL,
+    supplier_name VARCHAR(200) NOT NULL,
+    date DATE NOT NULL,
+    amount DECIMAL(15,2) NOT NULL,
+    payment_status VARCHAR(50) NOT NULL -- Pending, Completed, Overdue
+);
+
+CREATE TABLE employee_costs (
+    employee_id INT NOT NULL,
+    store_id INT NOT NULL,
+    role VARCHAR(100) NOT NULL,
+    salary DECIMAL(15,2) NOT NULL,
+    bonus DECIMAL(15,2) DEFAULT 0,
+    total_cost DECIMAL(15,2) NOT NULL,
+    month DATE NOT NULL,
+    PRIMARY KEY (employee_id, month)
 );

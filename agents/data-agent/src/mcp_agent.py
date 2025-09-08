@@ -107,7 +107,7 @@ class MCPDataAgent:
             
             if cached_result:
                 self.metrics['cache_hits'] += 1
-                logger.info("Cache hit", query_id=query_id, cache_key=cache_key)
+                logger.info(f"Cache hit for query_id={query_id}, cache_key={cache_key}")
                 
                 # Add cache metadata
                 cached_result['metadata']['cache_hit'] = True
