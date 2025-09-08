@@ -1,6 +1,6 @@
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
+// Dynamic imports for browser-only libraries
 import { ExportOptions } from "@/types/chart";
+import type { jsPDF as JsPDFType } from "jspdf";
 
 export class ChartExportService {
     /**
@@ -11,6 +11,8 @@ export class ChartExportService {
         options: ExportOptions
     ): Promise<void> {
         try {
+            const html2canvas = (await import("html2canvas")).default;
+
             const canvas = await html2canvas(element, {
                 backgroundColor: "#ffffff",
                 scale: options.quality || 2,
@@ -93,6 +95,9 @@ export class ChartExportService {
         options: ExportOptions
     ): Promise<void> {
         try {
+            // Dynamic import of html2canvas for browser
+            const html2canvas = (await import("html2canvas")).default;
+
             const canvas = await html2canvas(element, {
                 backgroundColor: "#ffffff",
                 scale: options.quality || 2,
@@ -103,6 +108,9 @@ export class ChartExportService {
             });
 
             const imgData = canvas.toDataURL("image/png");
+            // Dynamic import of jsPDF for browser
+            const { jsPDF } = await import("jspdf");
+
             const pdf = new jsPDF({
                 orientation: canvas.width > canvas.height ? "landscape" : "portrait",
                 unit: "px",
@@ -185,7 +193,8 @@ export class ChartExportService {
     /**
      * Add branding to PDF
      */
-    private static addPDFBranding(pdf: jsPDF, width: number): void {
+    private static addPDFBranding(pdf: JsPDFType, width: number): void {
+
         pdf.setFontSize(16);
         pdf.setTextColor(31, 41, 55); // #1f2937
         pdf.text("AI CFO BI Agent", 10, 25);

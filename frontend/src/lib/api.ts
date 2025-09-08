@@ -80,16 +80,14 @@ class ApiService {
   }
 
   async processQuery(request: QueryRequest): Promise<QueryResponse> {
-    // Add aggressive cache-busting to ensure fresh results
+    // Simplified request without query modification
     const enhancedRequest = {
       ...request,
-      query: `${request.query} [${Date.now()}]`, // Make query unique
-      context: {
-        ...request.context,
+      metadata: {
         timestamp: Date.now(),
-        cache_bust: true,
-        force_refresh: true,
-        session_id: Math.random().toString(36).substring(7)
+        source: "frontend",
+        user_id: "demo_user",
+        session_id: crypto.randomUUID().slice(0, 8)
       }
     };
     
@@ -180,7 +178,7 @@ class ApiService {
     position: { row: number; col: number }
   ): BentoGridCard {
     return {
-      id: `kpi_${Date.now()}`,
+      id: `kpi_${crypto.randomUUID()}`,
       cardType: CardType.KPI,
       size: CardSize.SMALL,
       position,
@@ -220,7 +218,7 @@ class ApiService {
     position: { row: number; col: number }
   ): BentoGridCard {
     return {
-      id: `table_${Date.now()}`,
+      id: `table_${crypto.randomUUID()}`,
       cardType: CardType.TABLE,
       size: CardSize.LARGE,
       position,
@@ -239,7 +237,7 @@ class ApiService {
     position: { row: number; col: number }
   ): BentoGridCard {
     return {
-      id: `insight_${Date.now()}`,
+      id: `insight_${crypto.randomUUID()}`,
       cardType: CardType.INSIGHT,
       size: CardSize.MEDIUM_V,
       position,
@@ -269,7 +267,7 @@ class ApiService {
       id: `suggestion_${index}`,
       text,
       category: this.categorizeQuery(text),
-      confidence: 0.85 + Math.random() * 0.15, // Random confidence between 0.85-1.0
+      confidence: 0.9, // Use fixed confidence value to avoid hydration mismatch
     }));
   }
 

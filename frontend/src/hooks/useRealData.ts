@@ -2,6 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { BentoGridCard, ChatMessage, QuerySuggestion } from "@/types/dashboard";
 import { apiService, QueryRequest, QueryResponse } from "@/lib/api";
 
+interface FinancialData {
+  revenue?: number;
+  net_profit?: number;
+  operating_expenses?: number;
+}
+
 interface UseRealDataReturn {
   // State
   chatMessages: ChatMessage[];
@@ -9,11 +15,13 @@ interface UseRealDataReturn {
   suggestions: QuerySuggestion[];
   isLoading: boolean;
   error: string | null;
+  refreshSuccess: boolean;
   
   // Actions
   sendMessage: (content: string) => Promise<void>;
   refreshDashboard: () => Promise<void>;
   clearError: () => void;
+  clearRefreshSuccess: () => void;
 }
 
 export function useRealData(): UseRealDataReturn {
@@ -22,40 +30,9 @@ export function useRealData(): UseRealDataReturn {
   const [suggestions, setSuggestions] = useState<QuerySuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshSuccess, setRefreshSuccess] = useState(false);
 
-  // Initialize with welcome message and load initial data
-  useEffect(() => {
-    initializeData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const initializeData = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      // Add welcome message
-      const welcomeMessage: ChatMessage = {
-        id: "welcome",
-        content: "Hello! I'm your AI CFO assistant. I can help you analyze financial data from your database. What would you like to know?",
-        sender: "assistant",
-        timestamp: new Date(),
-      };
-      setChatMessages([welcomeMessage]);
-
-      // Load suggestions
-      await loadSuggestions();
-
-      // Load initial dashboard data
-      await loadInitialDashboard();
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to initialize data");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const loadSuggestions = async () => {
+  const loadSuggestions = useCallback(async () => {
     try {
       const apiSuggestions = await apiService.getSuggestions();
       const transformedSuggestions = apiService.transformSuggestions(apiSuggestions);
@@ -78,9 +55,9 @@ export function useRealData(): UseRealDataReturn {
         },
       ]);
     }
-  };
+  }, []);
 
-  const loadInitialDashboard = async () => {
+  const loadInitialDashboard = useCallback(async () => {
     try {
       // Get sample data to create initial cards
       const sampleData = await apiService.getDatabaseSampleData();
@@ -89,9 +66,9 @@ export function useRealData(): UseRealDataReturn {
       
       // Create KPI cards from financial overview
       if (sampleData.tables.financial_overview && sampleData.tables.financial_overview.sample_data.length > 0) {
-        const finData = sampleData.tables.financial_overview.sample_data[0];
+        const finData = sampleData.tables.financial_overview.sample_data[0] as FinancialData;
         
-        if (finData.revenue) {
+        if (finData?.revenue) {
           initialCards.push(apiService.transformToKpiCard(
             { value: finData.revenue, change_percent: 12.5 },
             "Revenue",
@@ -99,7 +76,7 @@ export function useRealData(): UseRealDataReturn {
           ));
         }
         
-        if (finData.net_profit) {
+        if (finData?.net_profit) {
           initialCards.push(apiService.transformToKpiCard(
             { value: finData.net_profit, change_percent: -3.2 },
             "Net Profit",
@@ -107,7 +84,7 @@ export function useRealData(): UseRealDataReturn {
           ));
         }
         
-        if (finData.operating_expenses) {
+        if (finData?.operating_expenses) {
           initialCards.push(apiService.transformToKpiCard(
             { value: finData.operating_expenses, change_percent: 5.8 },
             "Operating Expenses",
@@ -130,16 +107,52 @@ export function useRealData(): UseRealDataReturn {
       
     } catch (err) {
       console.error("Failed to load initial dashboard:", err);
-      // Create a single error card
-      setBentoCards([
-        apiService.transformToInsightCard(
-          "Unable to connect to database. Please check your connection and try again.",
-          "Connection Error",
-          { row: 0, col: 0 }
-        )
-      ]);
+      // Don't set error for initial dashboard load - just use empty dashboard
+      // This prevents the error dialog from showing on page load
+      setBentoCards([]);
     }
-  };
+  }, []);
+
+  const initializeData = useCallback(async () => {
+    try {
+      setError(null);
+      // Don't set loading true for initial data load - only for user interactions
+
+      // Add welcome message
+      const welcomeMessage: ChatMessage = {
+        id: "welcome",
+        content: "Hello! I'm your AI CFO assistant. I can help you analyze financial data from your database. What would you like to know?",
+        sender: "assistant",
+        timestamp: new Date("2024-01-01T00:00:00Z"), // Fixed timestamp to avoid hydration mismatch
+      };
+      setChatMessages([welcomeMessage]);
+
+      // Load suggestions (don't fail if this fails)
+      try {
+        await loadSuggestions();
+      } catch (err) {
+        console.warn("Failed to load suggestions, using fallbacks:", err);
+      }
+
+      // Load initial dashboard data (don't fail if this fails)
+      try {
+        await loadInitialDashboard();
+      } catch (err) {
+        console.warn("Failed to load initial dashboard, starting with empty dashboard:", err);
+        setBentoCards([]);
+      }
+
+    } catch (err) {
+      console.error("Critical initialization error:", err);
+      setError(err instanceof Error ? err.message : "Failed to initialize data");
+    }
+    // Remove the finally block that was setting loading to false
+  }, [loadSuggestions, loadInitialDashboard]);
+
+  // Initialize with welcome message and load initial data
+  useEffect(() => {
+    initializeData();
+  }, [initializeData]);
 
   const getNextAvailablePosition = useCallback((): { row: number; col: number } => {
     // Simple logic to find next available position
@@ -187,17 +200,7 @@ export function useRealData(): UseRealDataReturn {
       setIsLoading(true);
       setError(null);
 
-      // Add user message immediately
-      const userMessage: ChatMessage = {
-        id: Date.now().toString(),
-        content,
-        sender: "user",
-        timestamp: new Date(),
-      };
-      
-      setChatMessages(prev => [...prev, userMessage]);
-
-      // Process query through API
+      // Process query through API FIRST
       const queryRequest: QueryRequest = {
         query: content,
         context: { user_id: "anonymous" }
@@ -205,12 +208,22 @@ export function useRealData(): UseRealDataReturn {
 
       const response = await apiService.processQuery(queryRequest);
 
+      // Only add user message if API call succeeds
+      const userMessage: ChatMessage = {
+        id: `user_${crypto.randomUUID()}`, // Use crypto.randomUUID() for consistent IDs
+        content,
+        sender: "user",
+        timestamp: new Date(), // This is OK since we're client-side only now
+      };
+      
+      setChatMessages(prev => [...prev, userMessage]);
+
       // Add assistant response
       const assistantMessage: ChatMessage = {
         id: response.query_id,
         content: generateResponseMessage(response),
         sender: "assistant",
-        timestamp: new Date(),
+        timestamp: new Date(), // This is OK since we're client-side only now
         metadata: {
           queryId: response.query_id,
           processingTime: response.result?.processing_time_ms,
@@ -225,17 +238,11 @@ export function useRealData(): UseRealDataReturn {
       }
 
     } catch (err) {
+      console.error("API call failed:", err);
+      
+      // Don't add any messages to chat if API fails
+      // Just set a global error to show the error dialog
       setError(err instanceof Error ? err.message : "Failed to process message");
-      
-      // Add error message
-      const errorMessage: ChatMessage = {
-        id: `error_${Date.now()}`,
-        content: "I'm sorry, I encountered an error processing your request. Please try again.",
-        sender: "assistant",
-        timestamp: new Date(),
-      };
-      
-      setChatMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
@@ -269,11 +276,29 @@ export function useRealData(): UseRealDataReturn {
   };
 
   const refreshDashboard = useCallback(async () => {
-    await loadInitialDashboard();
-  }, []);
+    try {
+      setError(null);
+      setRefreshSuccess(false);
+      setIsLoading(true);
+      await loadInitialDashboard();
+      setRefreshSuccess(true);
+      // Clear success message after 3 seconds
+      setTimeout(() => setRefreshSuccess(false), 3000);
+    } catch (err) {
+      console.error("Failed to refresh dashboard:", err);
+      setError(err instanceof Error ? err.message : "Failed to refresh dashboard");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [loadInitialDashboard]);
 
   const clearError = useCallback(() => {
     setError(null);
+    // Don't reinitialize data when clearing error to preserve chat history
+  }, []);
+
+  const clearRefreshSuccess = useCallback(() => {
+    setRefreshSuccess(false);
   }, []);
 
   return {
@@ -282,8 +307,10 @@ export function useRealData(): UseRealDataReturn {
     suggestions,
     isLoading,
     error,
+    refreshSuccess,
     sendMessage,
     refreshDashboard,
     clearError,
+    clearRefreshSuccess,
   };
 }
