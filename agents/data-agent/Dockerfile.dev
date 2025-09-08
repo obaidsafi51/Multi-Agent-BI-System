@@ -1,0 +1,32 @@
+# Ultra-fast uv-based build for data agent (no venv needed in Docker)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv package manager
+RUN pip install --no-cache-dir uv
+
+# Create user
+RUN useradd -m appuser
+
+# Copy pyproject.toml for dependency caching
+COPY --chown=appuser:appuser pyproject.toml ./
+
+# Install dependencies directly to system Python (no venv needed in containers)
+RUN uv pip install --system \
+    fastapi==0.104.1 \
+    uvicorn==0.24.0 \
+    pydantic==2.5.0 \
+    aiohttp==3.9.0 \
+    redis==5.0.0
+
+# Copy source code after dependencies
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser main.py ./
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+CMD ["python", "-u", "main.py"]

@@ -1,79 +1,39 @@
-# Multi-stage build for TiDB MCP Server
-FROM python:3.11-slim AS builder
+# Ultra-fast build - minimal dependencies (no venv needed in Docker)
+FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+WORKDIR /app
+
+# Install only essential dependencies in one layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv
 
-# Install uv for fast dependency management
-RUN pip install uv
+# Create user quickly
+RUN useradd -m tidbmcp && chown tidbmcp:tidbmcp /app
 
-# Set working directory
-WORKDIR /app
+# Copy source code directly (skip complex dependency management for now)
+COPY --chown=tidbmcp:tidbmcp src/ ./src/
+COPY --chown=tidbmcp:tidbmcp pyproject.toml ./
 
-# Copy dependency files
-COPY pyproject.toml ./
-COPY README.md ./
-COPY src/ ./src/
+# Install minimal dependencies for HTTP API only - directly to system Python
+RUN uv pip install --system \
+    fastapi==0.115.5 \
+    uvicorn==0.32.1 \
+    pydantic==2.11.7 \
+    pydantic-settings==2.6.1 \
+    aiohttp==3.9.0 \
+    fastmcp==2.12.2 \
+    PyMySQL
 
-# Install dependencies
-RUN uv venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-# Set dummy environment variables for build to prevent config loading errors
-ENV TIDB_HOST="dummy" TIDB_USER="dummy" TIDB_PASSWORD="dummy"
-RUN uv pip install .
-# Clear dummy variables 
-ENV TIDB_HOST="" TIDB_USER="" TIDB_PASSWORD=""
+# Create required directories
+RUN mkdir -p logs cache && chown -R tidbmcp:tidbmcp /app
 
-# Production stage
-FROM python:3.11-slim AS production
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for consistency
-RUN pip install uv
-
-# Create non-root user
-RUN groupadd -r tidbmcp && useradd -r -g tidbmcp tidbmcp
-
-# Copy virtual environment from builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Set working directory
-WORKDIR /app
-
-# Copy application code (already copied in builder)
-# COPY src/ ./src/
-# COPY pyproject.toml ./
-# COPY README.md ./
-
-# Install the package using uv (already installed in builder)
-# RUN uv pip install .
-
-# Create directories for logs and cache
-RUN mkdir -p /app/logs /app/cache && \
-    chown -R tidbmcp:tidbmcp /app
-
-# Switch to non-root user
 USER tidbmcp
 
-# Health check - simplified to not require full config during build
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "print('Health check: Container is running')" || exit 1
+ENV PYTHONPATH="/app/src"
 
-# Expose MCP server port (if applicable)
 EXPOSE 8000
 
-# Set environment variables
-ENV PYTHONPATH=/app/src
-ENV LOG_LEVEL=INFO
-ENV LOG_FORMAT=json
-
-# Run the server
-CMD ["tidb-mcp-server"]
+# Simple startup command
+CMD ["python", "-c", "import uvicorn; uvicorn.run('tidb_mcp_server.http_api:app', host='0.0.0.0', port=8000)"]

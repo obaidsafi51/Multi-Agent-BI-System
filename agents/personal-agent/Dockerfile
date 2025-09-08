@@ -15,8 +15,8 @@ RUN useradd --create-home --shell /bin/bash appuser && \
 # Copy dependency files first for better layer caching
 COPY --chown=appuser:appuser pyproject.toml uv.lock* ./
 
-# Install Python dependencies with uv (faster than pip)
-RUN uv sync --frozen --no-dev
+# Install Python dependencies directly to system Python (no venv needed in containers)
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy source code
 COPY --chown=appuser:appuser . .
@@ -24,5 +24,5 @@ COPY --chown=appuser:appuser . .
 # Switch to non-root user
 USER appuser
 
-# Start the Personalization agent using python from venv
-CMD ["/app/.venv/bin/python", "main.py"]
+# Start the Personalization agent using system python
+CMD ["python", "main.py"]

@@ -19,6 +19,13 @@ from dotenv import load_dotenv
 
 import structlog
 from src.agent import get_data_agent, close_data_agent
+from src.mcp_agent import get_mcp_data_agent, close_mcp_data_agent
+
+# Load environment variables
+load_dotenv()
+
+# Check if MCP mode is enabled
+USE_MCP = os.getenv('USE_MCP_CLIENT', 'true').lower() == 'true'
 
 # Load environment variables
 load_dotenv()
@@ -67,12 +74,16 @@ async def startup_event():
     """Initialize Data Agent on startup"""
     global data_agent
     
-    logger.info("Starting Data Agent...")
+    logger.info(f"Starting Data Agent (MCP mode: {USE_MCP})...")
     
     try:
-        # Initialize Data Agent
-        data_agent = await get_data_agent()
-        logger.info("Data Agent started successfully")
+        # Initialize Data Agent (MCP or direct mode)
+        if USE_MCP:
+            data_agent = await get_mcp_data_agent()
+            logger.info("Data Agent started successfully with MCP integration")
+        else:
+            data_agent = await get_data_agent()
+            logger.info("Data Agent started successfully with direct database integration")
         
     except Exception as e:
         logger.error(f"Failed to start Data Agent: {e}")
@@ -84,7 +95,10 @@ async def shutdown_event():
     global data_agent
     
     if data_agent:
-        await close_data_agent()
+        if USE_MCP:
+            await close_mcp_data_agent()
+        else:
+            await close_data_agent()
         logger.info("Data Agent stopped")
 
 @app.post("/execute", response_model=QueryExecuteResponse)
