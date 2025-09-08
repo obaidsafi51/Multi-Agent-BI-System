@@ -9,10 +9,18 @@ from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
 import jwt
 
-from main import app, SECRET_KEY, ALGORITHM, create_access_token
+from main import app
 from models.core import QueryIntent, QueryResult
 from models.ui import BentoGridLayout, BentoGridCard
 from models.user import UserProfile
+
+# Mock authentication constants for testing
+SECRET_KEY = "test-secret-key"
+ALGORITHM = "HS256"
+
+def create_access_token(data: dict):
+    """Mock create_access_token for testing"""
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
 
 
 @pytest.fixture

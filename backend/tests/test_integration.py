@@ -9,8 +9,14 @@ import asyncio
 from datetime import datetime
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
+import jwt
 
-from main import app, create_access_token
+from main import app
+
+# Mock authentication function for testing
+def create_access_token(data: dict):
+    """Mock create_access_token for testing"""
+    return jwt.encode(data, "test-secret-key", algorithm="HS256")
 
 
 @pytest.fixture
