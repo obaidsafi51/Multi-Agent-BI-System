@@ -1,88 +1,44 @@
-# Build stage
-FROM node:22-alpine AS builder
+# Optimized Next.js Dockerfile - Single stage for development, faster builds
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Install curl for health checks
-RUN apk update && apk add --no-cache curl
-
-# Copy package files first for better layer caching
-COPY package*.json ./
-
-# Install dependencies
-RUN npm config set registry https://registry.npmmirror.com/ && \
-    npm ci --only=production
-
-# Copy source code
-COPY . .
-
-# Build the application
-RUN npm run build
-
-# Production stage
-FROM node:22-alpine AS production
-
-WORKDIR /app
-
-# Install curl for health checks
-RUN apk update && apk add --no-cache curl
-
-# Copy package files
-COPY package*.json ./
-
-# Install only production dependencies
-RUN npm config set registry https://registry.npmmirror.com/ && \
-    npm ci --only=production && npm cache clean --force
-
-# Copy built application from builder stage
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
+# Install system dependencies and create user early (curl for health checks)
+RUN apk update && apk add --no-cache curl && \
+    npm config set registry https://registry.npmjs.org/ && \
+    npm config set fetch-timeout 300000 && \
+    addgroup -g 1001 -S nodejs && \
     adduser -S nextjs -u 1001
 
-# Change ownership of the app directory
-RUN chown -R nextjs:nodejs /app
-USER nextjs
-
-# Expose port
-EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000 || exit 1
-
-# Start production server
-CMD ["npm", "start"]
-
-# Development stage (for development builds)
-FROM node:22-alpine AS development
-
-WORKDIR /app
-
-# Install curl for health checks
-RUN apk update && apk add --no-cache curl
-
-# Copy package files
+# Copy package files first for better Docker layer caching
 COPY package*.json ./
 
-# Install all dependencies (including devDependencies for development)
-RUN npm config set registry https://registry.npmmirror.com/ \
-    && npm config set fetch-timeout 600000 \
-    && npm config set fetch-retry-mintimeout 20000 \
-    && npm config set fetch-retry-maxtimeout 120000 \
-    && npm install --prefer-offline --no-audit --progress=false
+# Install dependencies with npm cache optimization (use install instead of ci for development)
+RUN npm install --prefer-offline --no-audit --progress=false && \
+    npm cache clean --force
 
-# Copy source code
+
+# Copy source code (excluding node_modules, .next via .dockerignore)
 COPY . .
+
+# Set ownership and create necessary directories with proper permissions
+RUN chown -R nextjs:nodejs /app && \
+    mkdir -p /app/.next && \
+    chmod 755 /app/.next && \
+    chown -R nextjs:nodejs /app/.next
+
+# Switch to non-root user
+USER nextjs
+
+# Create .next directory with proper permissions as nextjs user
+RUN mkdir -p /app/.next && chmod 755 /app/.next
 
 # Expose port
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:3000 || exit 1
 
-# Start development server
-CMD ["npm", "run", "dev"]
+# Start development server (docker-compose specifies dev:stable to avoid Turbopack issues)
+CMD ["npm", "run", "dev:stable"]
