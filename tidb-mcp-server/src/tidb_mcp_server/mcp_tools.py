@@ -54,8 +54,29 @@ def initialize_tools(schema_inspector: SchemaInspector,
 
 def _ensure_initialized() -> None:
     """Ensure tools are initialized before use."""
+    global _schema_inspector, _query_executor, _cache_manager, _mcp_server
+    
     if not all([_schema_inspector, _query_executor, _cache_manager, _mcp_server]):
-        raise RuntimeError("MCP tools not initialized. Call initialize_tools() first.")
+        # Auto-initialize if not already done
+        try:
+            logger.info("Auto-initializing MCP tools...")
+            
+            from .query_executor import QueryExecutor
+            from .schema_inspector import SchemaInspector
+            from .cache_manager import CacheManager
+            from fastmcp import FastMCP
+            
+            # Create instances directly (without MCP server dependency for now)
+            _query_executor = QueryExecutor()
+            _schema_inspector = SchemaInspector()
+            _cache_manager = CacheManager()
+            _mcp_server = FastMCP(name="tidb-mcp-server", version="0.1.0")  # Minimal instance
+            
+            logger.info("MCP tools auto-initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-initialize MCP tools: {e}")
+            raise RuntimeError(f"MCP tools not initialized and auto-initialization failed: {e}")
 
 
 def discover_databases() -> list[dict[str, Any]]:

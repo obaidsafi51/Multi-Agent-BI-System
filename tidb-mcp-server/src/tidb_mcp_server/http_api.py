@@ -73,6 +73,55 @@ app.add_middleware(
 )
 
 
+@app.post("/admin/initialize")
+async def initialize_mcp_tools():
+    """Initialize MCP tools manually"""
+    global mcp_server
+    
+    try:
+        if mcp_server is None:
+            # Load configuration
+            config = ServerConfig()
+            
+            # Initialize MCP server
+            mcp_server = TiDBMCPServer(config)
+            
+            # Initialize just the MCP server components without starting the full server
+            await mcp_server._initialize_database_connection()
+            await mcp_server._initialize_cache_manager()
+            await mcp_server._initialize_rate_limiter()
+            await mcp_server._initialize_database_components()
+            await mcp_server._initialize_mcp_server()
+            
+            return {"status": "success", "message": "MCP tools initialized successfully"}
+        else:
+            return {"status": "already_initialized", "message": "MCP server already initialized"}
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize MCP tools: {e}")
+        raise HTTPException(status_code=500, detail=f"Initialization failed: {str(e)}")
+
+
+@app.get("/admin/status")
+async def get_mcp_status():
+    """Get MCP initialization status"""
+    global mcp_server
+    
+    import tidb_mcp_server.mcp_tools as mcp_tools
+    
+    status = {
+        "mcp_server_instance": mcp_server is not None,
+        "mcp_tools_initialized": {
+            "query_executor": getattr(mcp_tools, '_query_executor', None) is not None,
+            "schema_inspector": getattr(mcp_tools, '_schema_inspector', None) is not None,
+            "cache_manager": getattr(mcp_tools, '_cache_manager', None) is not None,
+            "mcp_server": getattr(mcp_tools, '_mcp_server', None) is not None,
+        }
+    }
+    
+    return status
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize MCP server on startup"""
@@ -81,14 +130,7 @@ async def startup_event():
     try:
         logger.info("Starting TiDB MCP Server HTTP API...")
         
-        # Load configuration
-        config = ServerConfig()
-        
-        # Initialize MCP server
-        mcp_server = TiDBMCPServer(config)
-        
-        # Start MCP server in background
-        asyncio.create_task(start_mcp_server())
+        # Just start the HTTP API - initialization will be done via /admin/initialize
         
         logger.info("TiDB MCP Server HTTP API started successfully")
         
@@ -257,6 +299,92 @@ async def get_status():
         "tools_available": 8,
         "timestamp": asyncio.get_event_loop().time()
     }
+
+
+# Additional API endpoints for frontend integration
+@app.get("/api/suggestions")
+async def get_query_suggestions():
+    """Get query suggestions for the frontend"""
+    try:
+        # Return sample query suggestions
+        suggestions = [
+            {
+                "id": "revenue_trend",
+                "text": "Show me monthly revenue trends",
+                "description": "Display revenue trends over the last 12 months",
+                "category": "financial"
+            },
+            {
+                "id": "top_customers",
+                "text": "Who are our top 10 customers?",
+                "description": "List customers by total revenue contribution",
+                "category": "customer"
+            },
+            {
+                "id": "profit_margin", 
+                "text": "What's our current profit margin?",
+                "description": "Calculate current profit margins by product/service",
+                "category": "financial"
+            },
+            {
+                "id": "sales_performance",
+                "text": "Compare this quarter vs last quarter sales",
+                "description": "Quarterly sales performance comparison",
+                "category": "sales"
+            }
+        ]
+        return {"suggestions": suggestions, "status": "success"}
+    except Exception as e:
+        logger.error(f"get_suggestions failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/database/sample-data")
+async def get_sample_data_api():
+    """Get sample data for dashboard preview"""
+    try:
+        # Return sample financial data for dashboard
+        sample_data = {
+            "revenue_trends": [
+                {"period": "2025-01", "revenue": 1200000, "profit": 240000},
+                {"period": "2025-02", "revenue": 1350000, "profit": 280000},
+                {"period": "2025-03", "revenue": 1180000, "profit": 220000},
+                {"period": "2025-04", "revenue": 1420000, "profit": 310000},
+                {"period": "2025-05", "revenue": 1380000, "profit": 295000}
+            ],
+            "top_customers": [
+                {"name": "Enterprise Corp", "revenue": 450000, "contracts": 12},
+                {"name": "Global Solutions", "revenue": 380000, "contracts": 8},
+                {"name": "Tech Innovations", "revenue": 320000, "contracts": 15},
+                {"name": "Digital Partners", "revenue": 280000, "contracts": 6}
+            ],
+            "metrics": {
+                "total_revenue": 6530000,
+                "total_profit": 1345000,
+                "profit_margin": 20.6,
+                "customer_count": 156,
+                "avg_contract_value": 41860
+            }
+        }
+        return {"data": sample_data, "status": "success"}
+    except Exception as e:
+        logger.error(f"get_sample_data_api failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/query")
+async def execute_query_api(request: ExecuteQueryRequest):
+    """Execute query via API endpoint"""
+    try:
+        result = mcp_tools.execute_query(
+            query=request.query,
+            timeout=request.timeout,
+            use_cache=request.use_cache
+        )
+        return result
+    except Exception as e:
+        logger.error(f"execute_query_api failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

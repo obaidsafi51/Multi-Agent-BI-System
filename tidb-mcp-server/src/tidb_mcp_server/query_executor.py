@@ -7,23 +7,12 @@ and result size limiting. Only SELECT statements are allowed for security.
 
 import hashlib
 import logging
-import os
 import re
-import sys
 import time
 from typing import Any
 
-# Add the backend directory to the Python path to import DatabaseManager
-backend_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'backend')
-sys.path.insert(0, os.path.abspath(backend_path))
-
-try:
-    from database.connection import DatabaseManager
-except ImportError:
-    # For testing, create mock class if backend is not available
-    class DatabaseManager:
-        def execute_query(self, query, params=None, fetch_all=False, fetch_one=False):
-            pass
+# Import local database manager
+from .database import DatabaseManager
 
 from .cache_manager import CacheKeyGenerator, CacheManager
 from .exceptions import QueryExecutionError, QueryTimeoutError, QueryValidationError
