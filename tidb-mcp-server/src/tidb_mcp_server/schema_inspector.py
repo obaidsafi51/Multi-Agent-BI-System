@@ -10,23 +10,13 @@ import logging
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-import sys
-import os
 
-# Add the backend directory to the Python path to import DatabaseManager
-backend_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'backend')
-sys.path.insert(0, os.path.abspath(backend_path))
+# Use local database module instead of backend
+from .database import DatabaseManager
 
-try:
-    from database.connection import DatabaseManager, DatabaseConfig
-except ImportError:
-    # For testing, create mock classes if backend is not available
-    class DatabaseManager:
-        def execute_query(self, query, params=None, fetch_all=False, fetch_one=False):
-            pass
-    
-    class DatabaseConfig:
-        pass
+# DatabaseConfig is not used in this implementation
+class DatabaseConfig:
+    pass
 from .models import DatabaseInfo, TableInfo, TableSchema, ColumnInfo, IndexInfo, SampleDataResult
 from .cache_manager import CacheManager, CacheKeyGenerator
 
