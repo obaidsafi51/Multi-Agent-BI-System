@@ -1,9 +1,13 @@
 """
 Main Schema Knowledge Base component that orchestrates all sub-components.
+
+This version integrates with MCP-based dynamic schema management while maintaining
+business logic components like term mapping, query templates, and metrics.
 """
 
 import json
 import os
+import asyncio
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from datetime import date
@@ -12,6 +16,7 @@ from .term_mapper import TermMapper
 from .query_template_engine import QueryTemplateEngine
 from .similarity_matcher import SimilarityMatcher
 from .time_processor import TimeProcessor
+from .mcp_schema_adapter import MCPSchemaAdapter
 from .types import (
     TermMapping, 
     GeneratedQuery, 
@@ -27,16 +32,23 @@ class SchemaKnowledgeBase:
     """
     Main Schema Knowledge Base component that provides CFO terminology mapping,
     query template processing, and intelligent time period handling.
+    
+    Now integrates with MCP-based dynamic schema management for real-time
+    schema discovery while maintaining business logic and term mappings.
     """
     
-    def __init__(self, config_path: Optional[str] = None, fiscal_year_start_month: int = 1):
+    def __init__(self, config_path: Optional[str] = None, fiscal_year_start_month: int = 1,
+                 mcp_client: Optional[Any] = None):
         """Initialize the Schema Knowledge Base with all sub-components"""
         if config_path is None:
             config_path = os.path.join(os.path.dirname(__file__), "config")
         
         self.config_path = Path(config_path)
         
-        # Initialize sub-components
+        # Initialize MCP adapter for dynamic schema management
+        self.mcp_adapter = MCPSchemaAdapter(mcp_client=mcp_client)
+        
+        # Initialize business logic sub-components
         self.term_mapper = TermMapper(config_path)
         self.query_engine = QueryTemplateEngine(config_path)
         self.similarity_matcher = SimilarityMatcher()
@@ -445,7 +457,268 @@ class SchemaKnowledgeBase:
         ]
         return "|".join(key_parts)
     
-    def get_statistics(self) -> Dict[str, Any]:
+    async def validate_business_term_mappings(self) -> Dict[str, Any]:
+        """
+        Validate all business term mappings against actual database schema using MCP.
+        
+        Returns:
+            Validation results with detailed information
+        """
+        # Get all term mappings from business terms configuration
+        term_mappings = {}
+        for term, mapping in self.term_mapper.term_mappings.items():
+            if mapping.database_mapping:
+                term_mappings[term] = mapping.database_mapping
+        
+        # Validate against actual schema using MCP
+        validation_results = await self.mcp_adapter.validate_business_term_mappings(term_mappings)
+        
+        # Compile detailed validation report
+        total_terms = len(term_mappings)
+        valid_terms = sum(validation_results.values())
+        invalid_terms = [term for term, valid in validation_results.items() if not valid]
+        
+        return {
+            "total_terms": total_terms,
+            "valid_terms": valid_terms,
+            "invalid_terms": invalid_terms,
+            "validation_rate": (valid_terms / total_terms * 100) if total_terms > 0 else 0,
+            "validation_details": validation_results,
+            "requires_attention": len(invalid_terms) > 0
+        }
+    
+    async def get_available_metrics(self) -> List[Dict[str, Any]]:
+        """
+        Get list of available metrics with their database mappings validated against MCP.
+        
+        Returns:
+            List of available metrics with validation status
+        """
+        metrics = []
+        
+        for term, mapping in self.term_mapper.term_mappings.items():
+            if mapping.category in ["income_statement", "cash_flow_statement", "balance_sheet", "financial_ratios"]:
+                # Check if the mapping is valid using MCP
+                schema_info = await self.mcp_adapter.resolve_business_term_to_schema(term, mapping.database_mapping)
+                
+                metric_info = {
+                    "term": term,
+                    "description": mapping.description,
+                    "category": mapping.category,
+                    "data_type": mapping.data_type,
+                    "aggregation_methods": mapping.aggregation_methods,
+                    "database_mapping": mapping.database_mapping,
+                    "is_available": schema_info is not None,
+                    "synonyms": mapping.synonyms
+                }
+                
+                if schema_info:
+                    metric_info.update({
+                        "table": schema_info.table,
+                        "database": schema_info.database,
+                        "column_count": len(schema_info.columns),
+                        "row_count": schema_info.row_count
+                    })
+                
+                metrics.append(metric_info)
+        
+        return metrics
+    
+    async def generate_dynamic_sql_query(self, query_intent: QueryIntent, 
+                                       target_database: Optional[str] = None) -> GeneratedQuery:
+        """
+        Generate SQL query using both business logic and dynamic schema from MCP.
+        
+        Args:
+            query_intent: Structured query intent
+            target_database: Optional target database (uses first available if None)
+            
+        Returns:
+            Generated query with validation against actual schema
+        """
+        cache_key = self._create_cache_key(query_intent)
+        
+        # Check cache first
+        if cache_key in self.query_cache:
+            self.cache_hits += 1
+            return self.query_cache[cache_key]
+        
+        self.cache_misses += 1
+        
+        try:
+            # Get database context
+            if not target_database:
+                databases = await self.mcp_adapter.get_available_databases()
+                if not databases:
+                    raise RuntimeError("No databases available from MCP server")
+                target_database = databases[0]
+            
+            # Resolve business terms to actual schema
+            primary_metric = query_intent.metric_type
+            term_mapping = self.term_mapper.get_term_mapping(primary_metric)
+            
+            if not term_mapping or not term_mapping.database_mapping:
+                raise ValueError(f"No database mapping found for metric: {primary_metric}")
+            
+            # Validate mapping against actual schema
+            schema_info = await self.mcp_adapter.resolve_business_term_to_schema(
+                primary_metric, term_mapping.database_mapping
+            )
+            
+            if not schema_info:
+                raise ValueError(f"Database mapping not found in actual schema: {term_mapping.database_mapping}")
+            
+            # Generate query using existing query engine with validated schema
+            generated_query = self.query_engine.generate_query(query_intent)
+            
+            # Enhance query with actual schema information
+            enhanced_query = self._enhance_query_with_schema(generated_query, schema_info)
+            
+            # Cache the result
+            if enhanced_query.supports_caching:
+                self.query_cache[cache_key] = enhanced_query
+            
+            return enhanced_query
+            
+        except Exception as e:
+            # Return error query
+            return GeneratedQuery(
+                sql_query="",
+                query_type="error",
+                estimated_execution_time=0,
+                supports_caching=False,
+                optimization_notes=[f"Error generating query: {str(e)}"],
+                parameters={}
+            )
+    
+    def _enhance_query_with_schema(self, generated_query: GeneratedQuery, 
+                                 schema_info: Any) -> GeneratedQuery:
+        """
+        Enhance generated query with actual schema information from MCP.
+        
+        Args:
+            generated_query: Query generated by template engine
+            schema_info: Schema information from MCP
+            
+        Returns:
+            Enhanced query with better optimization
+        """
+        # Add schema-aware optimizations
+        optimization_notes = list(generated_query.optimization_notes)
+        
+        # Add index information if available
+        if schema_info.indexes:
+            index_names = [idx.get("name", "") for idx in schema_info.indexes]
+            optimization_notes.append(f"Available indexes: {', '.join(index_names)}")
+        
+        # Add row count information for cost estimation
+        if schema_info.row_count:
+            optimization_notes.append(f"Estimated table size: {schema_info.row_count:,} rows")
+            
+            # Adjust execution time estimate based on table size
+            if schema_info.row_count > 1000000:
+                estimated_time = generated_query.estimated_execution_time * 2
+                optimization_notes.append("Large table detected - consider adding LIMIT clause")
+            else:
+                estimated_time = generated_query.estimated_execution_time
+        else:
+            estimated_time = generated_query.estimated_execution_time
+        
+        return GeneratedQuery(
+            sql_query=generated_query.sql_query,
+            query_type=generated_query.query_type,
+            estimated_execution_time=estimated_time,
+            supports_caching=generated_query.supports_caching,
+            optimization_notes=optimization_notes,
+            parameters=generated_query.parameters
+        )
+    
+    async def refresh_schema_knowledge(self, database: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Refresh schema knowledge by updating MCP cache and validating mappings.
+        
+        Args:
+            database: Optional database to refresh (refreshes all if None)
+            
+        Returns:
+            Refresh results summary
+        """
+        try:
+            # Refresh MCP schema cache
+            await self.mcp_adapter.refresh_schema_cache(database=database)
+            
+            # Validate business term mappings after refresh
+            validation_results = await self.validate_business_term_mappings()
+            
+            # Get updated metrics availability
+            available_metrics = await self.get_available_metrics()
+            available_count = sum(1 for m in available_metrics if m["is_available"])
+            
+            return {
+                "refresh_timestamp": date.today().isoformat(),
+                "database_refreshed": database or "all",
+                "validation_results": validation_results,
+                "available_metrics_count": available_count,
+                "total_metrics_count": len(available_metrics),
+                "mcp_cache_stats": self.mcp_adapter.get_cache_stats(),
+                "success": True
+            }
+            
+        except Exception as e:
+            return {
+                "refresh_timestamp": date.today().isoformat(),
+                "database_refreshed": database or "all",
+                "error": str(e),
+                "success": False
+            }
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Perform comprehensive health check including MCP connectivity.
+        
+        Returns:
+            Health check results
+        """
+        health_status = {
+            "timestamp": date.today().isoformat(),
+            "components": {},
+            "overall_healthy": True,
+            "warnings": [],
+            "errors": []
+        }
+        
+        try:
+            # Check MCP adapter health
+            mcp_health = await self.mcp_adapter.health_check()
+            health_status["components"]["mcp_adapter"] = mcp_health
+            
+            if not mcp_health.get("databases_accessible", False):
+                health_status["warnings"].append("MCP databases not accessible")
+                health_status["overall_healthy"] = False
+            
+            # Check business logic components
+            health_status["components"]["term_mapper"] = {
+                "total_terms": len(self.term_mapper.term_mappings),
+                "categories": len(set(m.category for m in self.term_mapper.term_mappings.values())),
+                "healthy": True
+            }
+            
+            health_status["components"]["query_engine"] = {
+                "templates_loaded": len(getattr(self.query_engine, 'templates', {})),
+                "healthy": True
+            }
+            
+            health_status["components"]["cache"] = {
+                "query_cache_size": len(self.query_cache),
+                "cache_hit_rate": (self.cache_hits / (self.cache_hits + self.cache_misses) * 100) if (self.cache_hits + self.cache_misses) > 0 else 0,
+                "healthy": True
+            }
+            
+        except Exception as e:
+            health_status["errors"].append(f"Health check error: {str(e)}")
+            health_status["overall_healthy"] = False
+        
+        return health_status
         """Get knowledge base statistics"""
         term_stats = self.term_mapper.get_term_statistics()
         
@@ -509,3 +782,24 @@ class SchemaKnowledgeBase:
             "statistics": optimizer.get_optimization_statistics(),
             "validation": optimizer.validate_optimization_config()
         }
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get knowledge base statistics including MCP integration"""
+        term_stats = self.term_mapper.get_term_statistics()
+        
+        stats = {
+            "term_mappings": term_stats,
+            "available_templates": len(getattr(self.query_engine, 'templates', {})),
+            "cache_performance": {
+                "hits": self.cache_hits,
+                "misses": self.cache_misses,
+                "hit_rate": self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0
+            },
+            "similarity_threshold": self.similarity_matcher.similarity_threshold,
+            "mcp_integration": {
+                "adapter_available": self.mcp_adapter is not None,
+                "cache_stats": self.mcp_adapter.get_cache_stats() if self.mcp_adapter else {}
+            }
+        }
+        
+        return stats
