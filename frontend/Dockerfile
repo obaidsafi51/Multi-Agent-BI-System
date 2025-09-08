@@ -17,6 +17,7 @@ COPY package*.json ./
 RUN npm install --prefer-offline --no-audit --progress=false && \
     npm cache clean --force
 
+
 # Copy source code (excluding node_modules, .next via .dockerignore)
 COPY . .
 

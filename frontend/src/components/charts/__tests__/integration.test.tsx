@@ -38,7 +38,7 @@ vi.mock("html2canvas", () => ({
 }));
 
 vi.mock("jspdf", () => ({
-  default: vi.fn(() => ({
+  jsPDF: vi.fn(() => ({
     addImage: vi.fn(),
     save: vi.fn(),
     setFontSize: vi.fn(),

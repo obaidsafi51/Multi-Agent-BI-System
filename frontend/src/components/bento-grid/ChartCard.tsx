@@ -22,13 +22,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
   const handleExport = async (options: ExportOptions) => {
     try {
       // Find the chart element within this card
-      const cardElement = document.querySelector(`[data-card-id="${card.id}"]`);
+      const cardElement = typeof window !== 'undefined' ? document.querySelector(`[data-card-id="${card.id}"]`) : null;
+
       const chartElement = cardElement?.querySelector('[data-chart-container]') as HTMLElement;
       
       if (chartElement) {
         await exportChart(chartElement, {
           ...options,
-          filename: `${card.content.title?.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`,
+          filename: `${card.content.title?.replace(/\s+/g, '-').toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+
         });
       }
       
@@ -48,14 +50,16 @@ const ChartCard: React.FC<ChartCardProps> = ({
     <div 
       data-card-id={card.id}
       data-chart-container
-      className="h-full w-full"
+      className="h-full w-full flex flex-col"
+
     >
       <ChartRenderer
         config={card.content.chartConfig}
         cardSize={card.size}
         onExport={handleExport}
         onConfigChange={onConfigChange}
-        className="h-full"
+        className="h-full flex-1 border-none shadow-none"
+
       />
     </div>
   );

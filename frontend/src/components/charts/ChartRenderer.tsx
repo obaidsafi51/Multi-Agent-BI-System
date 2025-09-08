@@ -23,14 +23,12 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Download, Settings, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, ZoomIn, ZoomOut } from "lucide-react";
 import {
     ChartType,
     ChartRendererProps,
-    ChartConfig,
     ExportOptions,
     CFO_COLOR_SCHEMES,
-    CHART_TYPE_SUGGESTIONS,
 } from "@/types/chart";
 import { CardSize } from "@/types/dashboard";
 
@@ -54,7 +52,6 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
     className = "",
     cardSize = CardSize.LARGE,
     onExport,
-    onConfigChange,
 }) => {
     const chartRef = useRef<HTMLDivElement>(null);
     const [zoomLevel, setZoomLevel] = useState(1);
@@ -73,7 +70,8 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
     // Get color scheme
     const colorScheme = useMemo(() => {
         const theme = config.styling?.theme || "corporate";
-        return config.styling?.colorScheme || CFO_COLOR_SCHEMES[theme] || CFO_COLOR_SCHEMES.corporate;
+        return config.styling?.colorScheme || CFO_COLOR_SCHEMES[theme as keyof typeof CFO_COLOR_SCHEMES] || CFO_COLOR_SCHEMES.corporate;
+
     }, [config.styling]);
 
     // Format financial values
@@ -87,23 +85,32 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
     }, []);
 
     // Custom tooltip for financial data
-    const CustomTooltip = ({ active, payload, label }: any) => {
+    interface TooltipProps {
+        active?: boolean;
+        payload?: Array<{
+            name: string;
+            value: number;
+            color: string;
+        }>;
+        label?: string;
+    }
+
+    const CustomTooltip = ({ active, payload, label }: TooltipProps) => {
         if (active && payload && payload.length) {
             return (
                 <div className="bg-white p-3 border border-gray-200 rounded-lg shadow-lg">
-                    <p className="font-semibold text-gray-900">{label}</p>
-                    {payload.map((entry: any, index: number) => (
-                        <p key={index} style={{ color: entry.color }} className="text-sm">
-                            {entry.name}: {typeof entry.value === "number" ? formatFinancialValue(entry.value) : entry.value}
+                    <p className="font-medium">{label}</p>
+                    {payload.map((entry, index: number) => (
+                        <p key={index} style={{ color: entry.color }}>
+                            {entry.name}: {formatFinancialValue(entry.value)}
                         </p>
                     ))}
                 </div>
             );
         }
         return null;
-    };
+    };    // Export functionality
 
-    // Export functionality
     const handleExport = useCallback(async (format: ExportOptions["format"]) => {
         if (!chartRef.current || !onExport) return;
 
@@ -111,7 +118,8 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
         try {
             const exportOptions: ExportOptions = {
                 format,
-                filename: `chart-${Date.now()}`,
+                filename: `chart-${crypto.randomUUID().slice(0, 8)}`,
+
                 quality: 1,
                 width: dimensions.width,
                 height: dimensions.height,
@@ -125,35 +133,6 @@ const ChartRenderer: React.FC<ChartRendererInternalProps> = ({
             setIsExporting(false);
         }
     }, [onExport, dimensions]);
-
-    // Chart type selection logic
-    const suggestChartType = useCallback((data: any[]) => {
-        if (!data || data.length === 0) return ChartType.BAR;
-
-        const firstItem = data[0];
-        const keys = Object.keys(firstItem);
-
-        // Check for time series data
-        const hasTimeField = keys.some(key =>
-            key.toLowerCase().includes("date") ||
-            key.toLowerCase().includes("time") ||
-            key.toLowerCase().includes("period")
-        );
-
-        if (hasTimeField) return ChartType.LINE;
-
-        // Check for proportional data (percentages, ratios)
-        const hasProportionalData = keys.some(key =>
-            key.toLowerCase().includes("percentage") ||
-            key.toLowerCase().includes("ratio") ||
-            key.toLowerCase().includes("share")
-        );
-
-        if (hasProportionalData && data.length <= 10) return ChartType.PIE;
-
-        // Default to bar chart for categorical data
-        return ChartType.BAR;
-    }, []);
 
     // Zoom handlers
     const handleZoomIn = () => setZoomLevel(prev => Math.min(prev * 1.2, 3));
