@@ -401,85 +401,33 @@ async def process_query(
         )
 
 
-@app.get("/api/database/sample-data")
-@limiter.limit("30/minute")
-async def get_sample_database_data(request: Request):
-    """Get sample data from different tables to verify database functionality via MCP"""
-    try:
-        from mcp_client import get_backend_mcp_client, get_mcp_sample_data
-        
-        mcp_client = get_backend_mcp_client()
-        
-        sample_data = {
-            "connection_status": "healthy" if await mcp_client.health_check() else "unhealthy",
-            "database_info": {
-                "name": "Agentic_BI",
-                "type": "TiDB Cloud via MCP"
-            },
-            "tables": {}
-        }
-        
-        # Get sample data from each table via MCP
-        tables_to_sample = [
-            "financial_overview",
-            "departments", 
-            "investments",
-            "cash_flow",
-            "budget_tracking"
-        ]
-        
-        for table_name in tables_to_sample:
-            try:
-                # Get sample data via MCP
-                result = await get_mcp_sample_data(table_name, 2)
-                
-                if result.get("success"):
-                    sample_data["tables"][table_name] = {
-                        "total_records": result.get("total_count", 0),
-                        "sample_data": result.get("data", []),
-                        "sample_count": result.get("sample_count", 0)
-                    }
-                else:
-                    sample_data["tables"][table_name] = {
-                        "error": result.get("error", "Unknown error"),
-                        "total_records": 0,
-                        "sample_data": [],
-                        "sample_count": 0
-                    }
-                
-            except Exception as e:
-                sample_data["tables"][table_name] = {
-                    "error": str(e),
-                    "total_records": 0,
-                    "sample_data": [],
-                    "sample_count": 0
-                }
-        
-        return sample_data
-        
-    except Exception as e:
-        logger.error(f"MCP sample data query failed: {e}")
-        return {
-            "connection_status": "error",
-            "error": str(e),
-            "database_info": {},
-            "tables": {}
-        }
+
 
 
 @app.get("/api/database/list")
 @limiter.limit("30/minute")
 async def get_database_list(request: Request):
-    """Get list of available databases from TiDB Cloud"""
+    """Get list of available databases from TiDB Cloud (cached)"""
     try:
+        # Check cache first
+        cache_key = "database_list_cache"
+        if redis_client:
+            try:
+                cached_data = await redis_client.get(cache_key)
+                if cached_data:
+                    logger.info("Serving database list from cache")
+                    return json.loads(cached_data)
+            except Exception as cache_error:
+                logger.warning(f"Cache read error: {cache_error}")
+        
         import httpx
         
-        # Make direct HTTP request to MCP server
-        async with httpx.AsyncClient() as client:
+        # Make direct HTTP request to MCP server with timeout
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 "http://tidb-mcp-server:8000/tools/discover_databases_tool",
                 json={},
-                timeout=30.0
+                timeout=15.0
             )
             
             if response.status_code == 200:
@@ -497,17 +445,37 @@ async def get_database_list(request: Request):
                             "accessible": db.get("accessible", True)
                         })
                 
-                return {
+                result = {
                     "success": True,
                     "databases": filtered_databases,
                     "total_count": len(filtered_databases)
                 }
+                
+                # Cache the successful result for 10 minutes
+                if redis_client:
+                    try:
+                        await redis_client.setex(
+                            cache_key,
+                            600,  # 10 minute cache
+                            json.dumps(result, default=str)
+                        )
+                        logger.info("Database list cached for 10 minutes")
+                    except Exception as cache_error:
+                        logger.warning(f"Cache write error: {cache_error}")
+                
+                return result
             else:
                 raise HTTPException(
                     status_code=500,
                     detail=f"MCP server returned status {response.status_code}"
                 )
                 
+    except asyncio.TimeoutError:
+        logger.error("Database list API timed out")
+        raise HTTPException(
+            status_code=504,
+            detail="Database list request timed out"
+        )
     except Exception as e:
         logger.error(f"Database list API error: {e}")
         raise HTTPException(

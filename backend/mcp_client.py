@@ -86,34 +86,7 @@ class BackendMCPClient:
             logger.error(f"MCP query execution error: {e}")
             return {"error": str(e)}
     
-    async def get_sample_data(self, table: str, limit: int = 10) -> Optional[Dict[str, Any]]:
-        """Get sample data from a table through MCP server."""
-        try:
-            if not self.session:
-                await self.connect()
-            
-            payload = {
-                "database": "Agentic_BI",
-                "table": table,
-                "limit": limit
-            }
-            
-            async with self.session.post(
-                f"{self.server_url}/tools/get_sample_data_tool",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result
-                else:
-                    error_text = await response.text()
-                    logger.error(f"MCP sample data failed ({response.status}): {error_text}")
-                    return {"error": f"HTTP {response.status}: {error_text}"}
-                    
-        except Exception as e:
-            logger.error(f"MCP sample data error: {e}")
-            return {"error": str(e)}
+
     
     async def discover_schema(self, database: str = "Agentic_BI") -> Optional[Dict[str, Any]]:
         """Discover database schema through MCP server."""
@@ -210,26 +183,4 @@ async def execute_mcp_query(query: str, params: Optional[List] = None) -> Dict[s
             }
 
 
-async def get_mcp_sample_data(table: str, limit: int = 10) -> Dict[str, Any]:
-    """Get sample data through MCP client."""
-    async with mcp_connection() as client:
-        result = await client.get_sample_data(table, limit)
-        if result and not result.get('error'):
-            return {
-                'success': True,
-                'table': table,
-                'data': result.get('rows', []),
-                'columns': result.get('columns', []),
-                'total_count': result.get('total_count', 0),
-                'sample_count': result.get('row_count', 0)
-            }
-        else:
-            return {
-                'success': False,
-                'error': result.get('error', 'Unknown error'),
-                'table': table,
-                'data': [],
-                'columns': [],
-                'total_count': 0,
-                'sample_count': 0
-            }
+
