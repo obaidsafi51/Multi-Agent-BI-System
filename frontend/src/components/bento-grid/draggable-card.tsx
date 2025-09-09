@@ -159,7 +159,7 @@ export function DraggableCard({ card }: DraggableCardProps) {
         style={{
           boxShadow: isDragging ? 'var(--shadow-xl)' : 'var(--shadow-sm)',
           transition: 'all var(--duration-normal) var(--ease-in-out)',
-          minHeight: '200px'
+          minHeight: '140px'
         }}
       >
         {/* Card Header */}

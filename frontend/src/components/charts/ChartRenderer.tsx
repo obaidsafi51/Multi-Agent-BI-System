@@ -34,11 +34,11 @@ import { CardSize } from "@/types/dashboard";
 
 // Chart size mappings for Bento grid
 const CHART_SIZE_DIMENSIONS = {
-    [CardSize.SMALL]: { width: 300, height: 200 },
-    [CardSize.MEDIUM_H]: { width: 600, height: 300 },
-    [CardSize.MEDIUM_V]: { width: 300, height: 400 },
-    [CardSize.LARGE]: { width: 600, height: 400 },
-    [CardSize.EXTRA_LARGE]: { width: 900, height: 500 },
+    [CardSize.SMALL]: { width: 300, height: 150 },
+    [CardSize.MEDIUM_H]: { width: 600, height: 200 },
+    [CardSize.MEDIUM_V]: { width: 300, height: 250 },
+    [CardSize.LARGE]: { width: 600, height: 250 },
+    [CardSize.EXTRA_LARGE]: { width: 900, height: 350 },
 } as const;
 
 interface ChartRendererInternalProps extends ChartRendererProps {
