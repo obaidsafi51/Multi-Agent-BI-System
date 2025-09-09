@@ -31,6 +31,16 @@ from models.core import QueryIntent, QueryResult, ErrorResponse
 from models.ui import BentoGridLayout, BentoGridCard
 from models.user import UserProfile, PersonalizationRecommendation, QueryHistoryEntry
 
+# Import dynamic schema management
+try:
+    from schema_management.dynamic_schema_manager import get_dynamic_schema_manager
+    from schema_management.intelligent_query_builder import get_intelligent_query_builder
+    from schema_management.configuration_manager import ConfigurationManager
+    DYNAMIC_SCHEMA_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Dynamic schema management not available: {e}")
+    DYNAMIC_SCHEMA_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -47,6 +57,11 @@ limiter = Limiter(key_func=get_remote_address)
 # Global connections
 redis_client: Optional[redis.Redis] = None
 websocket_connections: Dict[str, WebSocket] = {}
+
+# Dynamic schema management globals
+dynamic_schema_manager = None
+intelligent_query_builder = None
+configuration_manager = None
 
 
 @asynccontextmanager
@@ -86,8 +101,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 async def startup_event():
-    """Initialize connections and validate environment on startup"""
-    global redis_client
+    """Initialize connections, dynamic schema management, and validate environment on startup"""
+    global redis_client, dynamic_schema_manager, intelligent_query_builder, configuration_manager
     
     # Initialize Redis connection
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -99,6 +114,32 @@ async def startup_event():
         logger.error(f"Redis connection failed: {e}")
         redis_client = None
     
+    # Initialize Dynamic Schema Management
+    if DYNAMIC_SCHEMA_AVAILABLE:
+        try:
+            logger.info("Initializing dynamic schema management...")
+            
+            # Initialize configuration manager
+            configuration_manager = ConfigurationManager()
+            await configuration_manager.load_configuration()
+            
+            # Initialize dynamic schema manager
+            dynamic_schema_manager = await get_dynamic_schema_manager()
+            
+            # Initialize intelligent query builder
+            intelligent_query_builder = await get_intelligent_query_builder(dynamic_schema_manager)
+            
+            logger.info("Dynamic schema management initialized successfully")
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize dynamic schema management: {e}")
+            logger.info("Backend will operate in static configuration mode")
+            dynamic_schema_manager = None
+            intelligent_query_builder = None
+            configuration_manager = None
+    else:
+        logger.info("Dynamic schema management not available, using static configuration")
+    
     # Validate environment variables
     required_vars = ['TIDB_HOST', 'TIDB_USER', 'TIDB_PASSWORD', 'TIDB_DATABASE']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -108,7 +149,10 @@ async def startup_event():
     else:
         logger.info("All required environment variables are present")
     
-    logger.info("Backend started successfully")
+    logger.info(
+        f"Backend started successfully "
+        f"(Dynamic Schema: {'enabled' if dynamic_schema_manager else 'disabled'})"
+    )
 
 
 async def shutdown_event():
@@ -243,8 +287,18 @@ async def process_query(
         query_id = f"q_{datetime.utcnow().timestamp()}"
         logger.info(f"Starting multi-agent workflow for query: {query_request.query}")
         
-        # Step 1: Send query to NLP Agent
-        nlp_result = await send_to_nlp_agent(query_request.query, query_id)
+        # Step 1: Send query to NLP Agent with dynamic schema context
+        if dynamic_schema_manager:
+            # Use enhanced version with dynamic schema context
+            nlp_result = await send_to_nlp_agent_with_dynamic_context(
+                query_request.query, 
+                query_request.user_id, 
+                query_request.session_id
+            )
+        else:
+            # Fallback to original version
+            nlp_result = await send_to_nlp_agent(query_request.query, query_id)
+            
         if not nlp_result.get("success", False):
             raise HTTPException(status_code=400, detail=f"NLP processing failed: {nlp_result.get('error', 'Unknown error')}")
         
@@ -671,6 +725,272 @@ async def get_user_profile(request: Request):
         raise HTTPException(status_code=500, detail="Failed to get profile")
 
 
+# Dynamic Schema Management API Endpoints
+
+@app.get("/api/schema/discovery")
+async def get_schema_discovery():
+    """
+    API endpoint for schema discovery using dynamic schema management.
+    Returns discovered tables, columns, and semantic mappings.
+    """
+    if not dynamic_schema_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Dynamic schema management not available"
+        )
+    
+    try:
+        # Perform fresh schema discovery
+        schema_info = await dynamic_schema_manager.discover_schema(force_refresh=True)
+        
+        # Get schema manager metrics
+        metrics = dynamic_schema_manager.get_metrics()
+        
+        return {
+            "success": True,
+            "schema": {
+                "version": schema_info.version,
+                "tables_count": len(schema_info.tables),
+                "tables": [
+                    {
+                        "name": table.name,
+                        "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
+                    }
+                    for table in schema_info.tables[:10]  # Limit for response size
+                ],
+                "discovery_timestamp": datetime.now().isoformat()
+            },
+            "metrics": metrics
+        }
+        
+    except Exception as e:
+        logger.error(f"Schema discovery failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Schema discovery failed: {str(e)}")
+
+
+@app.get("/api/schema/mappings/{metric_type}")
+async def get_metric_mappings(metric_type: str):
+    """
+    Get table and column mappings for a specific business metric.
+    """
+    if not dynamic_schema_manager:
+        raise HTTPException(
+            status_code=503,
+            detail="Dynamic schema management not available"
+        )
+    
+    try:
+        # Find table mappings for the metric
+        table_mappings = await dynamic_schema_manager.find_tables_for_metric(metric_type)
+        
+        # Get column mappings
+        column_mappings = await dynamic_schema_manager.get_column_mappings(metric_type)
+        
+        return {
+            "success": True,
+            "metric_type": metric_type,
+            "table_mappings": [
+                {
+                    "table_name": mapping.table_name,
+                    "column_name": mapping.column_name,
+                    "confidence_score": mapping.confidence_score,
+                    "mapping_type": mapping.mapping_type
+                }
+                for mapping in table_mappings
+            ],
+            "column_mappings": [
+                {
+                    "table_name": mapping.table_name,
+                    "column_name": mapping.column_name,
+                    "confidence_score": mapping.confidence_score,
+                    "mapping_type": mapping.mapping_type
+                }
+                for mapping in column_mappings
+            ],
+            "alternatives": await dynamic_schema_manager.suggest_alternatives(metric_type)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get metric mappings for {metric_type}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get mappings: {str(e)}")
+
+
+@app.get("/api/configuration/status")
+async def get_configuration_status():
+    """
+    Get current configuration management status and settings.
+    """
+    try:
+        status_info = {
+            "dynamic_schema_available": DYNAMIC_SCHEMA_AVAILABLE,
+            "components": {
+                "dynamic_schema_manager": "available" if dynamic_schema_manager else "unavailable",
+                "intelligent_query_builder": "available" if intelligent_query_builder else "unavailable",
+                "configuration_manager": "available" if configuration_manager else "unavailable"
+            },
+            "mode": "dynamic" if dynamic_schema_manager else "static"
+        }
+        
+        # Add component metrics if available
+        if dynamic_schema_manager:
+            status_info["schema_metrics"] = dynamic_schema_manager.get_metrics()
+        
+        if intelligent_query_builder:
+            status_info["query_builder_metrics"] = intelligent_query_builder.get_metrics()
+        
+        return {
+            "success": True,
+            "configuration": status_info,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get configuration status: {e}")
+        raise HTTPException(status_code=500, detail=f"Configuration status error: {str(e)}")
+
+
+@app.post("/api/schema/invalidate")
+async def invalidate_schema_cache(scope: str = "all"):
+    """
+    Invalidate schema cache to force fresh discovery.
+    """
+    if not dynamic_schema_manager:
+        raise HTTPException(
+            status_code=503,
+            detail="Dynamic schema management not available"
+        )
+    
+    try:
+        await dynamic_schema_manager.invalidate_schema_cache(scope)
+        
+        return {
+            "success": True,
+            "message": f"Schema cache invalidated with scope: {scope}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Schema cache invalidation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cache invalidation failed: {str(e)}")
+
+
+@app.get("/api/health/dynamic-schema")
+async def get_dynamic_schema_health():
+    """
+    Health check specifically for dynamic schema management components.
+    """
+    health_status = {
+        "dynamic_schema_available": DYNAMIC_SCHEMA_AVAILABLE,
+        "timestamp": datetime.now().isoformat(),
+        "components": {}
+    }
+    
+    # Check dynamic schema manager
+    if dynamic_schema_manager:
+        try:
+            metrics = dynamic_schema_manager.get_metrics()
+            health_status["components"]["schema_manager"] = {
+                "status": "healthy",
+                "metrics": metrics
+            }
+        except Exception as e:
+            health_status["components"]["schema_manager"] = {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    else:
+        health_status["components"]["schema_manager"] = {
+            "status": "unavailable"
+        }
+    
+    # Check intelligent query builder
+    if intelligent_query_builder:
+        try:
+            metrics = intelligent_query_builder.get_metrics()
+            health_status["components"]["query_builder"] = {
+                "status": "healthy",
+                "metrics": metrics
+            }
+        except Exception as e:
+            health_status["components"]["query_builder"] = {
+                "status": "unhealthy",
+                "error": str(e)
+            }
+    else:
+        health_status["components"]["query_builder"] = {
+            "status": "unavailable"
+        }
+    
+    # Overall health assessment
+    component_statuses = [comp.get("status") for comp in health_status["components"].values()]
+    if "unhealthy" in component_statuses:
+        overall_status = "unhealthy"
+    elif "unavailable" in component_statuses and DYNAMIC_SCHEMA_AVAILABLE:
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
+    
+    health_status["overall_status"] = overall_status
+    
+    return health_status
+
+
+# Update the existing send_to_nlp_agent function to include dynamic schema context
+async def send_to_nlp_agent_with_dynamic_context(query: str, user_id: str, session_id: str) -> Dict[str, Any]:
+    """
+    Enhanced version of send_to_nlp_agent that includes dynamic schema context.
+    """
+    nlp_agent_url = os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
+    
+    try:
+        # Prepare request with dynamic schema context
+        request_data = {
+            "query": query,
+            "query_id": f"backend_{int(datetime.now().timestamp() * 1000)}",
+            "user_id": user_id,
+            "session_id": session_id,
+            "context": {
+                "source": "backend_gateway",
+                "dynamic_schema_available": dynamic_schema_manager is not None,
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+        
+        # Add schema context if available
+        if dynamic_schema_manager:
+            try:
+                # Get relevant schema context based on query terms
+                schema_context = {
+                    "schema_version": getattr(dynamic_schema_manager, 'metrics', {}).get('last_schema_update'),
+                    "available_metrics": list(dynamic_schema_manager.business_mappings.keys()) if hasattr(dynamic_schema_manager, 'business_mappings') else []
+                }
+                request_data["context"]["schema_context"] = schema_context
+            except Exception as e:
+                logger.warning(f"Failed to add schema context: {e}")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{nlp_agent_url}/process",
+                json=request_data
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"NLP agent returned status {response.status_code}: {response.text}")
+                return {
+                    "success": False,
+                    "error": f"NLP service error: {response.status_code}"
+                }
+                
+    except Exception as e:
+        logger.error(f"Failed to communicate with NLP agent: {e}")
+        return {
+            "success": False,
+            "error": f"NLP communication failed: {str(e)}"
+        }
+
+
 # WebSocket endpoint for real-time chat
 @app.websocket("/ws/chat/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -1060,9 +1380,48 @@ def create_default_visualization(data: list) -> dict:
     )
 
 
-def generate_sql_from_intent(intent: QueryIntent) -> tuple[str, tuple]:
-    """Generate SQL query from query intent"""
+async def generate_sql_from_intent_dynamic(intent: QueryIntent) -> tuple[str, tuple]:
+    """
+    Generate SQL query from query intent using dynamic schema management.
+    Falls back to static generation if dynamic schema is not available.
+    """
+    global dynamic_schema_manager, intelligent_query_builder
     
+    # Try dynamic schema management first
+    if intelligent_query_builder and dynamic_schema_manager:
+        try:
+            logger.info(f"Using dynamic schema management for SQL generation: {intent.metric_type}")
+            
+            # Convert QueryIntent to dict for intelligent query builder
+            intent_dict = {
+                'metric_type': intent.metric_type,
+                'time_period': intent.time_period,
+                'aggregation_level': intent.aggregation_level,
+                'filters': getattr(intent, 'filters', {}),
+                'comparison_periods': getattr(intent, 'comparison_periods', []),
+                'limit': 1000
+            }
+            
+            # Build query using intelligent query builder
+            query_result = await intelligent_query_builder.build_query(intent_dict)
+            
+            logger.info(
+                f"Dynamic SQL generated with confidence: {query_result.confidence_score:.2f}"
+            )
+            
+            # Return SQL and empty parameters (as dynamic builder handles parameters differently)
+            return query_result.sql, ()
+            
+        except Exception as e:
+            logger.warning(f"Dynamic SQL generation failed: {e}, falling back to static")
+    
+    # Fallback to static SQL generation
+    logger.info(f"Using static SQL generation for metric: {intent.metric_type}")
+    return generate_sql_from_intent_static(intent)
+
+
+def generate_sql_from_intent_static(intent: QueryIntent) -> tuple[str, tuple]:
+    """Static SQL generation for fallback compatibility."""
     # Map metric types to tables and columns
     if intent.metric_type == "revenue":
         base_query = """
@@ -1139,6 +1498,12 @@ def generate_sql_from_intent(intent: QueryIntent) -> tuple[str, tuple]:
         ORDER BY period
         """
         return base_query, ()
+
+
+# Legacy wrapper for backward compatibility
+def generate_sql_from_intent(intent: QueryIntent) -> tuple[str, tuple]:
+    """Legacy wrapper - redirects to static version for synchronous calls."""
+    return generate_sql_from_intent_static(intent)
 
 
 @app.exception_handler(HTTPException)

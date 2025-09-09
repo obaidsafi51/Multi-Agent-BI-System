@@ -1,5 +1,5 @@
 """
-NLP Agent with KIMI Integration
+NLP Agent with KIMI Integration and Dynamic Schema Management
 Main entry point for the NLP Agent service with HTTP API
 """
 
@@ -19,6 +19,11 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from src.nlp_agent import NLPAgent
+
+# Import dynamic schema management components
+sys.path.append('/home/obaidsafi31/Desktop/Agentic BI /backend')
+from schema_management.dynamic_schema_manager import get_dynamic_schema_manager
+from schema_management.intelligent_query_builder import get_intelligent_query_builder
 
 # Load environment variables
 load_dotenv()
@@ -49,6 +54,8 @@ class QueryResponse(BaseModel):
 
 # Global references
 nlp_agent: Optional[NLPAgent] = None
+dynamic_schema_manager = None
+intelligent_query_builder = None
 app = FastAPI(title="NLP Agent API", version="1.0.0")
 
 # Add CORS middleware
@@ -62,10 +69,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize NLP Agent on startup"""
-    global nlp_agent
+    """Initialize NLP Agent and Dynamic Schema Management on startup"""
+    global nlp_agent, dynamic_schema_manager, intelligent_query_builder
     
-    logger.info("Starting NLP Agent...")
+    logger.info("Starting NLP Agent with Dynamic Schema Management...")
     
     # Validate environment variables
     required_env_vars = ['KIMI_API_KEY']
@@ -76,6 +83,15 @@ async def startup_event():
         raise RuntimeError(f"Missing environment variables: {missing_vars}")
     
     try:
+        # Initialize Dynamic Schema Management
+        try:
+            dynamic_schema_manager = await get_dynamic_schema_manager()
+            intelligent_query_builder = await get_intelligent_query_builder(dynamic_schema_manager)
+            logger.info("Dynamic Schema Management initialized successfully")
+        except Exception as schema_error:
+            logger.warning(f"Failed to initialize dynamic schema management: {schema_error}")
+            logger.info("Will use fallback mode for SQL generation")
+        
         # Initialize NLP Agent
         nlp_agent = NLPAgent(
             kimi_api_key=os.getenv('KIMI_API_KEY'),
@@ -137,8 +153,8 @@ async def process_query(request: QueryRequest) -> QueryResponse:
                 error="Failed to extract intent from query"
             )
         
-        # Generate SQL query from intent using the schema knowledge
-        sql_query = await generate_sql_from_intent(query_context.intent)
+        # Generate SQL query from intent using dynamic schema management
+        sql_query = await generate_sql_from_intent_dynamic(query_context.intent)
         
         # Build response
         response = QueryResponse(
@@ -184,11 +200,76 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             error=str(e)
         )
 
-async def generate_sql_from_intent(intent) -> str:
-    """Generate SQL query from query intent with schema knowledge"""
+async def generate_sql_from_intent_dynamic(intent) -> str:
+    """
+    Generate SQL query from query intent using dynamic schema management.
     
-    # Map metric types to appropriate queries
-    if intent.metric_type == "revenue":
+    This function replaces hardcoded SQL templates with dynamic query generation
+    based on real-time schema discovery and semantic mappings.
+    """
+    global dynamic_schema_manager, intelligent_query_builder
+    
+    try:
+        # Convert intent to dict format if needed
+        intent_dict = {
+            'metric_type': getattr(intent, 'metric_type', 'revenue'),
+            'time_period': getattr(intent, 'time_period', 'this_year'),
+            'aggregation_level': getattr(intent, 'aggregation_level', 'monthly'),
+            'filters': getattr(intent, 'filters', {}),
+            'comparison_periods': getattr(intent, 'comparison_periods', []),
+            'limit': getattr(intent, 'limit', 1000)
+        }
+        
+        # Use dynamic schema management if available
+        if intelligent_query_builder and dynamic_schema_manager:
+            logger.info(f"Using dynamic schema management for metric: {intent_dict['metric_type']}")
+            
+            # Check if we have schema mappings for this metric
+            table_mappings = await dynamic_schema_manager.find_tables_for_metric(intent_dict['metric_type'])
+            
+            if table_mappings:
+                # Generate query using intelligent query builder
+                query_result = await intelligent_query_builder.build_query(intent_dict)
+                
+                logger.info(
+                    f"Dynamic query generated successfully for {intent_dict['metric_type']} "
+                    f"with confidence: {query_result.confidence_score:.2f}"
+                )
+                
+                return query_result.sql
+            else:
+                # No mappings found, suggest alternatives
+                alternatives = await dynamic_schema_manager.suggest_alternatives(intent_dict['metric_type'])
+                logger.warning(
+                    f"No schema mappings found for '{intent_dict['metric_type']}'. "
+                    f"Suggested alternatives: {alternatives}"
+                )
+                
+                # Fall back to static generation with the first alternative
+                if alternatives:
+                    intent_dict['metric_type'] = alternatives[0]
+                    return await generate_sql_from_intent_fallback(intent_dict)
+        
+        # Fallback to static SQL generation
+        logger.info(f"Using fallback SQL generation for metric: {intent_dict['metric_type']}")
+        return await generate_sql_from_intent_fallback(intent_dict)
+        
+    except Exception as e:
+        logger.error(f"Error in dynamic SQL generation: {e}")
+        # Final fallback to basic static query
+        return await generate_sql_from_intent_fallback(intent_dict)
+
+
+async def generate_sql_from_intent_fallback(intent_dict: Dict[str, Any]) -> str:
+    """
+    Fallback SQL generation using static templates.
+    
+    This provides backward compatibility when dynamic schema management fails.
+    """
+    metric_type = intent_dict.get('metric_type', 'revenue')
+    
+    # Static SQL templates for fallback
+    if metric_type == "revenue":
         base_query = """
         SELECT 
             DATE_FORMAT(period_date, '%Y-%m') as period,
@@ -198,7 +279,7 @@ async def generate_sql_from_intent(intent) -> str:
         GROUP BY DATE_FORMAT(period_date, '%Y-%m')
         ORDER BY period
         """
-    elif intent.metric_type == "profit":
+    elif metric_type == "profit":
         base_query = """
         SELECT 
             DATE_FORMAT(period_date, '%Y-%m') as period,
@@ -208,7 +289,7 @@ async def generate_sql_from_intent(intent) -> str:
         GROUP BY DATE_FORMAT(period_date, '%Y-%m')
         ORDER BY period
         """
-    elif intent.metric_type == "expenses":
+    elif metric_type == "expenses":
         base_query = """
         SELECT 
             DATE_FORMAT(period_date, '%Y-%m') as period,
@@ -218,7 +299,7 @@ async def generate_sql_from_intent(intent) -> str:
         GROUP BY DATE_FORMAT(period_date, '%Y-%m')
         ORDER BY period
         """
-    elif intent.metric_type == "cash_flow":
+    elif metric_type == "cash_flow":
         base_query = """
         SELECT 
             DATE_FORMAT(period_date, '%Y-%m') as period,
@@ -245,15 +326,50 @@ async def generate_sql_from_intent(intent) -> str:
     
     return base_query
 
+
+async def generate_sql_from_intent(intent) -> str:
+    """Legacy function for backward compatibility - redirects to dynamic version."""
+    return await generate_sql_from_intent_dynamic(intent)
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with dynamic schema management status"""
+    global nlp_agent, dynamic_schema_manager, intelligent_query_builder
+    
     if not nlp_agent:
         raise HTTPException(status_code=503, detail="NLP Agent not initialized")
     
     try:
+        # Check NLP agent health
         health_status = await nlp_agent.health_check()
+        
+        # Add dynamic schema management status
+        schema_status = {
+            "dynamic_schema_manager": "available" if dynamic_schema_manager else "unavailable",
+            "intelligent_query_builder": "available" if intelligent_query_builder else "unavailable",
+            "fallback_mode": not (dynamic_schema_manager and intelligent_query_builder)
+        }
+        
+        # Get schema manager metrics if available
+        if dynamic_schema_manager:
+            try:
+                schema_metrics = dynamic_schema_manager.get_metrics()
+                schema_status["schema_metrics"] = schema_metrics
+            except Exception as e:
+                schema_status["schema_metrics_error"] = str(e)
+        
+        # Get query builder metrics if available
+        if intelligent_query_builder:
+            try:
+                builder_metrics = intelligent_query_builder.get_metrics()
+                schema_status["query_builder_metrics"] = builder_metrics
+            except Exception as e:
+                schema_status["query_builder_metrics_error"] = str(e)
+        
+        health_status["dynamic_schema_management"] = schema_status
+        
         return health_status
+        
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail=str(e))
