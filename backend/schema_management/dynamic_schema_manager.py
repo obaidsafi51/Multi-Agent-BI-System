@@ -107,26 +107,11 @@ class DynamicSchemaManager:
         }
     
     def _init_business_mappings(self) -> None:
-        """Initialize basic business term to table/column mappings."""
-        # Basic financial metrics mappings
-        self.business_mappings = {
-            'revenue': ('financial_overview', 'revenue'),
-            'sales': ('financial_overview', 'revenue'),
-            'income': ('financial_overview', 'revenue'),
-            'profit': ('financial_overview', 'net_income'),
-            'net_profit': ('financial_overview', 'net_income'),
-            'expenses': ('financial_overview', 'total_expenses'),
-            'costs': ('financial_overview', 'total_expenses'),
-            'cash_flow': ('cash_flow', 'net_cash_flow'),
-            'operating_cash_flow': ('cash_flow', 'operating_cash_flow'),
-            'investing_cash_flow': ('cash_flow', 'investing_cash_flow'),
-            'financing_cash_flow': ('cash_flow', 'financing_cash_flow'),
-            'budget': ('budget_tracking', 'budgeted_amount'),
-            'budget_variance': ('budget_tracking', 'variance_amount'),
-            'investment': ('investments', 'current_value'),
-            'roi': ('investments', 'roi_percentage'),
-            'return_on_investment': ('investments', 'roi_percentage')
-        }
+        """Initialize dynamic business term discovery."""
+        # Remove static mappings - use dynamic discovery instead
+        self.business_mappings = {}
+        self._dynamic_mappings_cache = {}
+        self._mapping_cache_ttl = 300  # 5 minute TTL for mapping cache
     
     async def discover_schema(self, force_refresh: bool = False) -> SchemaInfo:
         """
@@ -236,20 +221,23 @@ class DynamicSchemaManager:
         metric_lower = metric_type.lower()
         mappings = []
         
-        # Check direct mappings first
-        if metric_lower in self.business_mappings:
-            table_name, column_name = self.business_mappings[metric_lower]
-            mapping = SchemaMapping(
-                business_term=metric_type,
-                schema_path=f"default.{table_name}.{column_name}",
-                table_name=table_name,
-                column_name=column_name,
-                confidence_score=0.95,
-                mapping_type="direct"
-            )
-            mappings.append(mapping)
+        # Use dynamic discovery instead of static mappings
+        # Check if we have cached dynamic mappings
+        if metric_lower in self._dynamic_mappings_cache:
+            cached_mapping = self._dynamic_mappings_cache[metric_lower]
+            if time.time() - cached_mapping['timestamp'] < self._mapping_cache_ttl:
+                table_name, column_name = cached_mapping['mapping']
+                mapping = SchemaMapping(
+                    business_term=metric_type,
+                    schema_path=f"default.{table_name}.{column_name}",
+                    table_name=table_name,
+                    column_name=column_name,
+                    confidence_score=0.85,  # Slightly lower for dynamic discovery
+                    mapping_type="dynamic_cached"
+                )
+                mappings.append(mapping)
         
-        # Look for semantic matches
+        # Look for semantic matches (this should now be the primary method)
         semantic_matches = await self._find_semantic_matches(metric_lower)
         mappings.extend(semantic_matches)
         
@@ -259,33 +247,84 @@ class DynamicSchemaManager:
         return mappings[:self.config['max_alternatives']]
     
     async def _find_semantic_matches(self, metric_term: str) -> List[SchemaMapping]:
-        """Find semantic matches for a business term."""
+        """Find semantic matches for a business term using dynamic discovery."""
         matches = []
         
-        # Simple keyword-based semantic matching
-        semantic_keywords = {
-            'cash': [('cash_flow', 'net_cash_flow', 0.8)],
-            'money': [('cash_flow', 'net_cash_flow', 0.7), ('financial_overview', 'revenue', 0.6)],
-            'earnings': [('financial_overview', 'net_income', 0.8)],
-            'turnover': [('financial_overview', 'revenue', 0.8)],
-            'expenditure': [('financial_overview', 'total_expenses', 0.8)],
-            'spending': [('financial_overview', 'total_expenses', 0.7)]
-        }
-        
-        for keyword, table_mappings in semantic_keywords.items():
-            if keyword in metric_term:
-                for table_name, column_name, confidence in table_mappings:
-                    mapping = SchemaMapping(
-                        business_term=metric_term,
-                        schema_path=f"default.{table_name}.{column_name}",
-                        table_name=table_name,
-                        column_name=column_name,
-                        confidence_score=confidence,
-                        mapping_type="semantic"
-                    )
-                    matches.append(mapping)
+        try:
+            # Get all available tables dynamically
+            available_tables = await self.get_table_names()
+            
+            # Create dynamic semantic matching based on table and column names
+            for table_name in available_tables:
+                try:
+                    # Get table schema to check column names
+                    table_schema = await self.get_table_schema(table_name)
+                    if not table_schema:
+                        continue
+                    
+                    columns = table_schema.get('columns', {})
+                    
+                    # Find columns that semantically match the metric term
+                    for column_name in columns.keys():
+                        confidence = self._calculate_semantic_confidence(metric_term, table_name, column_name)
+                        
+                        if confidence > 0.5:  # Only include matches with reasonable confidence
+                            mapping = SchemaMapping(
+                                business_term=metric_term,
+                                schema_path=f"default.{table_name}.{column_name}",
+                                table_name=table_name,
+                                column_name=column_name,
+                                confidence_score=confidence,
+                                mapping_type="semantic_dynamic"
+                            )
+                            matches.append(mapping)
+                            
+                            # Cache successful mappings
+                            self._dynamic_mappings_cache[metric_term] = {
+                                'mapping': (table_name, column_name),
+                                'timestamp': time.time()
+                            }
+                            
+                except Exception as e:
+                    logger.warning(f"Error processing table {table_name} for semantic matching: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error in semantic matching for {metric_term}: {e}")
         
         return matches
+    
+    def _calculate_semantic_confidence(self, metric_term: str, table_name: str, column_name: str) -> float:
+        """Calculate confidence score for semantic matching."""
+        confidence = 0.0
+        metric_lower = metric_term.lower()
+        table_lower = table_name.lower()
+        column_lower = column_name.lower()
+        
+        # Direct matches get highest confidence
+        if metric_lower in column_lower or column_lower in metric_lower:
+            confidence = 0.9
+        elif metric_lower in table_lower or table_lower in metric_lower:
+            confidence = 0.7
+        else:
+            # Keyword-based matching
+            keyword_matches = {
+                'cash': ['cash', 'flow'],
+                'money': ['cash', 'revenue', 'income'],
+                'earnings': ['income', 'profit', 'earnings'],
+                'turnover': ['revenue', 'sales'],
+                'expenditure': ['expense', 'cost', 'spending'],
+                'spending': ['expense', 'cost']
+            }
+            
+            for keyword, related_terms in keyword_matches.items():
+                if keyword in metric_lower:
+                    for term in related_terms:
+                        if term in column_lower or term in table_lower:
+                            confidence = max(confidence, 0.6)
+                            break
+        
+        return confidence
     
     async def get_column_mappings(self, business_term: str) -> List[SchemaMapping]:
         """

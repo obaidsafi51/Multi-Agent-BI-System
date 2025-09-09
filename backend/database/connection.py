@@ -905,7 +905,7 @@ def tidb_connection(autocommit: bool = True):
     Example:
         with tidb_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT * FROM financial_overview")
+                cursor.execute("SELECT * FROM your_table")
                 results = cursor.fetchall()
     """
     db_manager = get_database()
