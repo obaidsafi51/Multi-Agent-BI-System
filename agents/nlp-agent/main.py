@@ -21,9 +21,22 @@ from dotenv import load_dotenv
 from src.nlp_agent import NLPAgent
 
 # Import dynamic schema management components
-sys.path.append('/home/obaidsafi31/Desktop/Agentic BI /backend')
-from schema_management.dynamic_schema_manager import get_dynamic_schema_manager
-from schema_management.intelligent_query_builder import get_intelligent_query_builder
+# Backend modules are now copied into container
+try:
+    from schema_management.dynamic_schema_manager import get_dynamic_schema_manager
+    from schema_management.intelligent_query_builder import get_intelligent_query_builder
+    SCHEMA_MANAGEMENT_AVAILABLE = True
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Schema management modules not available: {e}")
+    SCHEMA_MANAGEMENT_AVAILABLE = False
+    
+    # Create dummy functions for fallback
+    async def get_dynamic_schema_manager():
+        return None
+    
+    async def get_intelligent_query_builder(manager):
+        return None
 
 # Load environment variables
 load_dotenv()
@@ -96,7 +109,7 @@ async def startup_event():
         nlp_agent = NLPAgent(
             kimi_api_key=os.getenv('KIMI_API_KEY'),
             redis_url=os.getenv('REDIS_URL', 'redis://redis:6379'),
-            rabbitmq_url=os.getenv('RABBITMQ_URL', 'amqp://rabbitmq:5672')
+            # rabbitmq_url=os.getenv("RABBITMQ_URL", "amqp://rabbitmq:5672")')
         )
         
         await nlp_agent.start()
