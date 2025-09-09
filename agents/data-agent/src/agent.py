@@ -376,19 +376,11 @@ class DataAgent:
     
     async def health_check(self) -> Dict[str, Any]:
         """
-        Perform comprehensive health check of all components.
+        Simplified health check of core components.
         
         Returns:
-            Dictionary containing health status and metrics
+            Dictionary containing basic health status
         """
-        health_status = {
-            'status': 'healthy',
-            'timestamp': time.time(),
-            'components': {},
-            'metrics': self.metrics.copy(),
-            'errors': []
-        }
-        
         try:
             # Check database connection
             if self.connection_manager:
@@ -445,13 +437,14 @@ class DataAgent:
             # Overall status assessment
             if any(comp.get('status') == 'unhealthy' for comp in health_status['components'].values()):
                 health_status['status'] = 'unhealthy'
-            
+
         except Exception as e:
-            health_status['status'] = 'unhealthy'
-            health_status['errors'].append(str(e))
             logger.error("Health check failed", error=str(e))
-        
-        return health_status
+            return {
+                'status': 'unhealthy', 
+                'timestamp': time.time(),
+                'error': str(e)
+            }
     
     async def get_metrics(self) -> Dict[str, Any]:
         """Get Data Agent performance metrics."""

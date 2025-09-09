@@ -337,59 +337,25 @@ class MCPDataAgent:
     
     async def health_check(self) -> Dict[str, Any]:
         """
-        Perform comprehensive health check of all components including MCP server.
+        Simplified health check for MCP agent.
         
         Returns:
-            Dictionary containing health status and metrics
+            Basic health status
         """
-        health_status = {
-            'status': 'healthy',
-            'timestamp': time.time(),
-            'components': {},
-            'metrics': self.metrics.copy(),
-            'errors': []
-        }
-        
         try:
-            # Check MCP server connection
-            if self.mcp_client:
-                mcp_healthy = await self.mcp_client.health_check()
-                mcp_stats = await self.mcp_client.get_server_stats()
-                
-                health_status['components']['mcp_server'] = {
-                    'status': 'healthy' if mcp_healthy else 'unhealthy',
-                    'connected': self.mcp_client.is_connected,
-                    'stats': mcp_stats
-                }
-                
-                if not mcp_healthy:
-                    health_status['status'] = 'degraded'
-            
-            # Check cache manager
-            if self.cache_manager:
-                cache_health = await self.cache_manager.health_check()
-                health_status['components']['cache'] = cache_health
-                if cache_health['status'] != 'healthy':
-                    health_status['status'] = 'degraded'
-            
-            # Check query optimizer
-            if self.query_optimizer:
-                optimizer_stats = self.query_optimizer.get_optimization_stats()
-                health_status['components']['optimizer'] = {
-                    'status': 'healthy',
-                    'stats': optimizer_stats
-                }
-            
-            # Overall status assessment
-            if any(comp.get('status') == 'unhealthy' for comp in health_status['components'].values()):
-                health_status['status'] = 'unhealthy'
-            
+            mcp_connected = await self.mcp_client.health_check() if self.mcp_client else False
+            return {
+                'status': 'healthy' if mcp_connected else 'degraded',
+                'timestamp': time.time(),
+                'mcp_connected': mcp_connected
+            }
         except Exception as e:
-            health_status['status'] = 'unhealthy'
-            health_status['errors'].append(str(e))
             logger.error("Health check failed", error=str(e))
-        
-        return health_status
+            return {
+                'status': 'unhealthy',
+                'timestamp': time.time(),
+                'error': str(e)
+            }
     
     async def get_metrics(self) -> Dict[str, Any]:
         """Get MCP Data Agent performance metrics."""

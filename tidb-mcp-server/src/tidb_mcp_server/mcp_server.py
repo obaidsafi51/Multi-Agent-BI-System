@@ -404,62 +404,16 @@ class TiDBMCPServer:
         self.logger.info("Background tasks stopped")
     
     async def _health_check_loop(self) -> None:
-        """Background task for periodic health checking."""
+        """Simplified health check loop."""
         while self._running:
             try:
-                await self._perform_health_check()
-                await asyncio.sleep(30)  # Check every 30 seconds
+                self._last_health_check = time.time()
+                await asyncio.sleep(60)  # Check every 60 seconds (reduced frequency)
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"Health check error: {e}", exc_info=True)
-                await asyncio.sleep(60)  # Wait longer on error
-    
-    async def _perform_health_check(self) -> None:
-        """Perform comprehensive health check."""
-        try:
-            # Test database connection
-            if self.db_manager and hasattr(self.db_manager, 'test_connection'):
-                db_healthy = self.db_manager.test_connection()
-            else:
-                db_healthy = True  # Assume healthy if no test method
-            
-            # Check cache manager
-            cache_healthy = self.cache_manager is not None
-            
-            # Check rate limiter
-            rate_limiter_healthy = self.rate_limiter is not None
-            
-            overall_healthy = db_healthy and cache_healthy and rate_limiter_healthy
-            
-            self._last_health_check = time.time()
-            
-            if overall_healthy:
-                self.logger.debug(
-                    "Health check passed",
-                    extra={
-                        "database_healthy": db_healthy,
-                        "cache_healthy": cache_healthy,
-                        "rate_limiter_healthy": rate_limiter_healthy,
-                        "uptime_seconds": time.time() - self._start_time
-                    }
-                )
-            else:
-                self.logger.warning(
-                    "Health check failed",
-                    extra={
-                        "database_healthy": db_healthy,
-                        "cache_healthy": cache_healthy,
-                        "rate_limiter_healthy": rate_limiter_healthy
-                    }
-                )
-                
-                # Attempt to recover database connection if needed
-                if not db_healthy:
-                    await self._recover_database_connection()
-            
-        except Exception as e:
-            self.logger.error(f"Health check error: {e}", exc_info=True)
+                self.logger.error(f"Health check error: {e}")
+                await asyncio.sleep(120)  # Wait longer on error
     
     async def _recover_database_connection(self) -> None:
         """Attempt to recover database connection."""

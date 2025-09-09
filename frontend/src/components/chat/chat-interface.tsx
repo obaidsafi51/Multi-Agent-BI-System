@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Send, ThumbsUp, ThumbsDown, Sparkles, BarChart3, TrendingUp, PieChart, Activity } from "lucide-react";
 import { ChatMessage, QuerySuggestion, UserFeedback } from "@/types/dashboard";
 import { motion, AnimatePresence } from "framer-motion";
+import { DatabaseSetupButton } from "../database-setup-button";
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -16,9 +17,11 @@ interface ChatInterfaceProps {
   onSendMessage: (content: string) => void;
   isFullWidth?: boolean; // New prop to handle full-width styling
   isLoading?: boolean; // Add loading state prop
+  onDatabaseSetup?: () => void; // Add database setup callback
+  selectedDatabase?: string | null; // Add selected database prop
 }
 
-export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidth = false, isLoading = false }: ChatInterfaceProps) {
+export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidth = false, isLoading = false, onDatabaseSetup, selectedDatabase }: ChatInterfaceProps) {
   const [inputValue, setInputValue] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [feedbackDialog, setFeedbackDialog] = useState<{ open: boolean; messageId?: string }>({ open: false });
@@ -96,7 +99,7 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
           boxShadow: 'var(--shadow-sm)'
         }}
       >
-        <div className={`flex items-center ${isFullWidth ? 'justify-center' : 'justify-start'}`}>
+        <div className={`flex items-center ${isFullWidth ? 'justify-between' : 'justify-start'}`}>
           <div className="flex items-center gap-4">
             <div className="relative">
               <div 
@@ -130,6 +133,21 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
               )}
             </div>
           </div>
+          
+          {/* Database Setup Button - Only show in full width mode */}
+          {isFullWidth && (
+            <div className="flex items-center">
+              <DatabaseSetupButton 
+                variant="secondary"
+                size="sm"
+                selectedDatabase={selectedDatabase}
+                onClick={() => onDatabaseSetup?.()}
+                onDatabaseSelected={(dbName) => {
+                  console.log("Database selected from header:", dbName);
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -210,8 +228,8 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
                     Getting Started
                   </h3>
                   <p className="text-slate-600 dark:text-slate-300 text-sm">
-                    Try asking: <span className="font-medium text-blue-600 dark:text-blue-400">"Show me quarterly revenue trends"</span> or 
-                    <span className="font-medium text-blue-600 dark:text-blue-400">"What's our profit margin analysis?"</span>
+                    Try asking: <span className="font-medium text-blue-600 dark:text-blue-400">&ldquo;Show me quarterly revenue trends&rdquo;</span> or{' '}
+                    <span className="font-medium text-blue-600 dark:text-blue-400">&ldquo;What&apos;s our profit margin analysis?&rdquo;</span>
                   </p>
                 </motion.div>
               </motion.div>

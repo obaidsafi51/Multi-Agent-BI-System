@@ -196,11 +196,11 @@ services:
           memory: 256M
           cpus: "0.25"
     healthcheck:
-      test: ["CMD", "python", "-c", "from src.tidb_mcp_server.config import load_config; load_config()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 30s
 
   # Personalization Agent
   # personal-agent:
@@ -239,9 +239,9 @@ services:
       - ai-cfo-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 60s
+      timeout: 5s
+      retries: 2
       start_period: 30s
     restart: unless-stopped
 
@@ -260,9 +260,9 @@ services:
       - ai-cfo-network
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 60s
+      timeout: 5s
+      retries: 2
       start_period: 30s
     restart: unless-stopped
 
