@@ -31,8 +31,13 @@ except ImportError:
     import warnings
     warnings.warn("Advanced NLP dependencies not available. Using fallback fuzzy matching.")
 
-from .models import TableSchema, ColumnInfo, TableInfo
-from .config import MCPSchemaConfig
+try:
+    from .models import TableSchema, ColumnInfo, TableInfo
+    from .config import MCPSchemaConfig
+except ImportError:
+    # Fallback for direct execution
+    from models import TableSchema, ColumnInfo, TableInfo
+    from config import MCPSchemaConfig
 
 logger = logging.getLogger(__name__)
 
