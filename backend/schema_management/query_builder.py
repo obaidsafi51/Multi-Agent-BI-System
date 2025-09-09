@@ -9,17 +9,19 @@ import re
 import asyncio
 import logging
 import time
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, Set, TYPE_CHECKING
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from enum import Enum
 
 from .models import (
     TableSchema, ColumnInfo, QueryIntent, QueryContext, QueryResult,
-    SemanticMapping, SchemaElement, ValidationResult, ValidationError, ValidationSeverity
+    SemanticMapping, SchemaElement, ValidationResult, ValidationError, ValidationSeverity, ValidationWarning
 )
 from .semantic_mapper import SemanticSchemaMapper
-from .manager import MCPSchemaManager
+
+if TYPE_CHECKING:
+    from .manager import MCPSchemaManager
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +110,7 @@ class IntelligentQueryBuilder:
     
     def __init__(
         self,
-        schema_manager: MCPSchemaManager,
+        schema_manager: "MCPSchemaManager",
         semantic_mapper: SemanticSchemaMapper,
         config: Optional[Dict[str, Any]] = None
     ):

@@ -185,7 +185,11 @@ async def demo_financial_validation():
         "operating_expenses": Decimal("12000.00")
     }
     
-    result = await enhanced_validator.validate_financial_data(financial_data, "financial_overview")
+    # Use dynamic table discovery for validation
+    available_tables = await mock_manager.get_table_names() if hasattr(mock_manager, 'get_table_names') else ["financial_overview"]
+    financial_table = next((table for table in available_tables if "financial" in table.lower()), "financial_overview")
+    
+    result = await enhanced_validator.validate_financial_data(financial_data, financial_table)
     print(format_validation_result_for_display(result))
     
     # Test budget tracking with large variance
@@ -197,7 +201,10 @@ async def demo_financial_validation():
         "actual_amount": Decimal("18000.00")  # 80% over budget
     }
     
-    result = await enhanced_validator.validate_financial_data(budget_data, "budget_tracking")
+    # Find budget-related table dynamically
+    budget_table = next((table for table in available_tables if "budget" in table.lower()), "budget_tracking")
+    
+    result = await enhanced_validator.validate_financial_data(budget_data, budget_table)
     print(format_validation_result_for_display(result))
 
 
@@ -325,7 +332,11 @@ async def demo_fallback_mechanisms():
         "revenue": Decimal("25000.00")
     }
     
-    result = await validator.validate_against_schema(financial_data, "demo_db", "financial_overview")
+    # Use dynamic table discovery
+    tables = await validator.schema_manager.get_table_names() if validator.schema_manager else ["financial_overview"]
+    target_table = next((table for table in tables if "financial" in table.lower()), "financial_overview")
+    
+    result = await validator.validate_against_schema(financial_data, "demo_db", target_table)
     print(format_validation_result_for_display(result))
     
     # Test with fallback disabled
@@ -333,7 +344,7 @@ async def demo_fallback_mechanisms():
     config_no_fallback = DynamicValidationConfig(fallback_to_static=False)
     validator_no_fallback = DynamicDataValidator(mock_manager, config_no_fallback)
     
-    result = await validator_no_fallback.validate_against_schema(financial_data, "demo_db", "financial_overview")
+    result = await validator_no_fallback.validate_against_schema(financial_data, "demo_db", target_table)
     print(format_validation_result_for_display(result))
 
 

@@ -127,7 +127,7 @@ class IntelligentQueryBuilder:
             primary_mapping = self._select_primary_table(context.table_mappings, intent)
             
             # Build query components
-            select_clause = self._build_select_clause(intent, primary_mapping)
+            select_clause = await self._build_select_clause(intent, primary_mapping)
             from_clause = self._build_from_clause(primary_mapping)
             where_clause = self._build_where_clause(intent, primary_mapping)
             group_by_clause = self._build_group_by_clause(intent)
@@ -181,7 +181,7 @@ class IntelligentQueryBuilder:
         sorted_mappings = sorted(table_mappings, key=lambda x: x.confidence_score, reverse=True)
         return sorted_mappings[0]
     
-    def _build_select_clause(
+    async def _build_select_clause(
         self, 
         intent: Dict[str, Any], 
         primary_mapping: SchemaMapping
@@ -196,16 +196,15 @@ class IntelligentQueryBuilder:
         # Build metric selection
         metric_column = primary_mapping.column_name
         
-        # Handle aggregation
-        if 'cash_flow' in metric_type:
-            # Special handling for cash flow metrics
-            select_parts = [
-                f"{time_expr} as period",
-                f"SUM(operating_cash_flow) as operating_cash_flow",
-                f"SUM(investing_cash_flow) as investing_cash_flow", 
-                f"SUM(financing_cash_flow) as financing_cash_flow",
-                f"SUM(net_cash_flow) as net_cash_flow"
-            ]
+        # Handle aggregation based on patterns rather than hardcoded types
+        if 'flow' in metric_type.lower():
+            # Special handling for flow metrics - discover flow columns dynamically
+            table_schema = await self.schema_manager.get_table_schema(primary_mapping.table_name)
+            flow_columns = [col for col in table_schema.get('columns', {}).keys() if 'flow' in col.lower()]
+            
+            select_parts = [f"{time_expr} as period"]
+            for col in flow_columns:
+                select_parts.append(f"SUM({col}) as {col}")
         else:
             # Standard metric aggregation
             select_parts = [
@@ -272,50 +271,62 @@ class IntelligentQueryBuilder:
         
         metric_type = intent.get('metric_type', 'revenue')
         
-        # Static fallback queries
-        fallback_queries = {
-            'revenue': """
-                SELECT 
-                    DATE_FORMAT(period_date, '%Y-%m') as period,
-                    SUM(revenue) as revenue
-                FROM financial_overview 
-                WHERE period_date >= DATE_FORMAT(CURDATE(), '%Y-01-01')
-                GROUP BY DATE_FORMAT(period_date, '%Y-%m')
-                ORDER BY period
-                LIMIT 1000
-            """,
-            'cash_flow': """
-                SELECT 
-                    DATE_FORMAT(period_date, '%Y-%m') as period,
-                    SUM(operating_cash_flow) as operating_cash_flow,
-                    SUM(investing_cash_flow) as investing_cash_flow,
-                    SUM(financing_cash_flow) as financing_cash_flow,
-                    SUM(net_cash_flow) as net_cash_flow
-                FROM cash_flow 
-                WHERE period_date >= DATE_FORMAT(CURDATE(), '%Y-01-01')
-                GROUP BY DATE_FORMAT(period_date, '%Y-%m')
-                ORDER BY period
-                LIMIT 1000
-            """,
-            'profit': """
-                SELECT 
-                    DATE_FORMAT(period_date, '%Y-%m') as period,
-                    SUM(net_income) as profit
-                FROM financial_overview 
-                WHERE period_date >= DATE_FORMAT(CURDATE(), '%Y-01-01')
-                GROUP BY DATE_FORMAT(period_date, '%Y-%m')
-                ORDER BY period
-                LIMIT 1000
-            """
-        }
+        # Try to get available tables dynamically as fallback
+        try:
+            if self.schema_manager:
+                available_tables = await self.schema_manager.get_table_names()
+                
+                # Find most relevant table based on metric type
+                relevant_table = None
+                for table in available_tables:
+                    if any(keyword in table.lower() for keyword in metric_type.lower().split('_')):
+                        relevant_table = table
+                        break
+                
+                if relevant_table:
+                    # Get table schema to find relevant columns
+                    table_schema = await self.schema_manager.get_table_schema(relevant_table)
+                    columns = list(table_schema.get('columns', {}).keys())
+                    
+                    # Build dynamic fallback query
+                    select_columns = [col for col in columns if any(keyword in col.lower() for keyword in metric_type.lower().split('_'))]
+                    if not select_columns:
+                        select_columns = ['*']
+                    
+                    fallback_sql = f"""
+                        SELECT 
+                            period_date,
+                            {', '.join(select_columns)}
+                        FROM {relevant_table}
+                        WHERE period_date >= DATE_FORMAT(CURDATE(), '%Y-01-01')
+                        ORDER BY period_date
+                        LIMIT 1000
+                    """
+                    
+                    return QueryResult(
+                        sql=fallback_sql.strip(),
+                        parameters={},
+                        metadata={
+                            'query_type': 'fallback_dynamic',
+                            'table_used': relevant_table,
+                            'columns_used': select_columns
+                        },
+                        confidence=0.3
+                    )
+        except Exception as e:
+            logger.warning(f"Dynamic fallback failed: {e}")
         
-        # Get fallback query or use default
-        sql = fallback_queries.get(metric_type, fallback_queries['revenue'])
+        # Ultimate fallback - basic query
+        fallback_sql = """
+            SELECT 
+                'No data available' as message,
+                NOW() as timestamp
+        """
         
         # Clean up the SQL
-        sql = re.sub(r'\s+', ' ', sql.strip())
+        sql = re.sub(r'\s+', ' ', fallback_sql.strip())
         
-        logger.warning(f"Using fallback query for metric: {metric_type}")
+        logger.warning(f"Using ultimate fallback query for metric: {metric_type}")
         
         return QueryResult(
             sql=sql,

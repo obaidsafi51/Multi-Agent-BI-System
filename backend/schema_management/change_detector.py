@@ -10,15 +10,17 @@ import logging
 import time
 import hashlib
 import json
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from enum import Enum
 from collections import defaultdict
 
 from .models import TableSchema, ColumnInfo, DatabaseInfo, TableInfo
-from .manager import MCPSchemaManager
 from .enhanced_cache import EnhancedSchemaCache
+
+if TYPE_CHECKING:
+    from .manager import MCPSchemaManager
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,7 @@ class SchemaChangeDetector:
     
     def __init__(
         self,
-        schema_manager: MCPSchemaManager,
+        schema_manager: "MCPSchemaManager",
         cache_manager: EnhancedSchemaCache,
         config: Optional[Dict[str, Any]] = None
     ):
