@@ -11,11 +11,12 @@ import logging
 import os
 import uuid
 from typing import Any, Dict, List, Optional
+import structlog
 
 import aiohttp
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class MCPRequest(BaseModel):
@@ -71,7 +72,7 @@ class TiDBMCPClient:
                 self.session = aiohttp.ClientSession(timeout=timeout)
             
             # Test connection with server stats
-            result = await self._send_request("get_server_stats", {})
+            result = await self._send_request("get_server_stats_tool", {})
             if result and not result.get('error'):
                 self.is_connected = True
                 logger.info("Successfully connected to TiDB MCP Server")

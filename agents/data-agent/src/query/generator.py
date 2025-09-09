@@ -33,30 +33,23 @@ class QueryGenerator:
     Handles financial data queries with proper time period processing and optimization.
     """
     
-    # Financial metric to table/column mappings
+    # Financial metric to table/column mappings for Retail_Business_Agentic_AI database
     METRIC_MAPPINGS = {
-        'revenue': ('financial_overview', 'revenue'),
-        'sales': ('financial_overview', 'revenue'),
-        'income': ('financial_overview', 'revenue'),
-        'turnover': ('financial_overview', 'revenue'),
+        'revenue': ('revenue', 'total_revenue'),
+        'sales': ('revenue', 'total_revenue'),
+        'income': ('revenue', 'total_revenue'),
+        'turnover': ('revenue', 'total_revenue'),
         
-        'gross_profit': ('financial_overview', 'gross_profit'),
-        'gross_margin': ('financial_overview', 'gross_profit'),
+        'expenses': ('expenses', 'amount'),
+        'costs': ('expenses', 'amount'),
+        'operating_expenses': ('expenses', 'amount'),
         
-        'net_profit': ('financial_overview', 'net_profit'),
-        'net_income': ('financial_overview', 'net_profit'),
-        'profit': ('financial_overview', 'net_profit'),
-        
-        'operating_expenses': ('financial_overview', 'operating_expenses'),
-        'expenses': ('financial_overview', 'operating_expenses'),
-        'costs': ('financial_overview', 'operating_expenses'),
-        
-        'operating_cash_flow': ('cash_flow', 'operating_cash_flow'),
-        'investing_cash_flow': ('cash_flow', 'investing_cash_flow'),
-        'financing_cash_flow': ('cash_flow', 'financing_cash_flow'),
-        'net_cash_flow': ('cash_flow', 'net_cash_flow'),
-        'cash_balance': ('cash_flow', 'cash_balance'),
-        'cash_flow': ('cash_flow', 'net_cash_flow'),
+        'cash_flow': ('cashflow', 'net_cashflow'),
+        'net_cash_flow': ('cashflow', 'net_cashflow'),
+        'cash_in': ('cashflow', 'cash_in'),
+        'cash_out': ('cashflow', 'cash_out'),
+        'cash_inflow': ('cashflow', 'cash_in'),
+        'cash_outflow': ('cashflow', 'cash_out'),
         
         'budget': ('budget_tracking', 'budgeted_amount'),
         'actual': ('budget_tracking', 'actual_amount'),
@@ -92,12 +85,13 @@ class QueryGenerator:
         r'last month': ('previous_month', None),
     }
     
-    def __init__(self):
+    def __init__(self, default_database: str = "Agentic_BI"):
         """Initialize query generator with configuration."""
         self.current_date = datetime.now()
         self.current_year = self.current_date.year
         self.current_month = self.current_date.month
         self.current_quarter = (self.current_month - 1) // 3 + 1
+        self.default_database = default_database
     
     def generate_query(self, query_intent: Dict[str, Any]) -> SQLQuery:
         """
@@ -151,6 +145,9 @@ class QueryGenerator:
                 table_name, date_filter, len(comparison_periods)
             )
             
+            # Substitute parameters into the query for execution
+            final_query = self._substitute_parameters(optimized_query, params)
+            
             logger.info(
                 "Generated SQL query",
                 metric_type=metric_type,
@@ -159,7 +156,7 @@ class QueryGenerator:
             )
             
             return SQLQuery(
-                sql=optimized_query,
+                sql=final_query,
                 params=params,
                 complexity_score=complexity_score,
                 optimization_hints=optimization_hints
@@ -209,12 +206,12 @@ class QueryGenerator:
                     end_month = quarter * 3
                     params['start_date'] = f"{year}-{start_month:02d}-01"
                     params['end_date'] = f"{year}-{end_month:02d}-{self._get_month_end_day(year, end_month)}"
-                    return "period_date BETWEEN :start_date AND :end_date", params
+                    return "date BETWEEN %s AND %s", params
                 
                 # Full year
                 params['start_date'] = f"{year}-01-01"
                 params['end_date'] = f"{year}-12-31"
-                return "period_date BETWEEN :start_date AND :end_date", params
+                return "date BETWEEN %s AND %s", params
         
         # Handle relative time periods
         for pattern, (period_type, period_num) in self.TIME_PATTERNS.items():
@@ -224,7 +221,7 @@ class QueryGenerator:
         # Default to current year if no specific period found
         params['start_date'] = f"{self.current_year}-01-01"
         params['end_date'] = f"{self.current_year}-12-31"
-        return "period_date BETWEEN :start_date AND :end_date", params
+        return "date BETWEEN %s AND %s", params
     
     def _build_relative_date_filter(
         self, period_type: str, period_num: Optional[int], params: Dict[str, Any]
@@ -271,7 +268,7 @@ class QueryGenerator:
             params['start_date'] = f"{self.current_year}-01-01"
             params['end_date'] = f"{self.current_year}-12-31"
         
-        return "period_date BETWEEN :start_date AND :end_date", params
+        return "date BETWEEN %s AND %s", params
     
     def _get_month_end_day(self, year: int, month: int) -> int:
         """Get the last day of a given month."""
@@ -294,19 +291,19 @@ class QueryGenerator:
         
         # Determine date grouping based on aggregation level
         if aggregation_level == 'daily':
-            date_group = "DATE(period_date)"
-            date_alias = "period_date"
+            date_group = "DATE(date)"
+            date_alias = "date"
         elif aggregation_level == 'monthly':
-            date_group = "DATE_FORMAT(period_date, '%Y-%m')"
+            date_group = "DATE_FORMAT(date, '%Y-%m')"
             date_alias = "period"
         elif aggregation_level == 'quarterly':
-            date_group = "CONCAT(YEAR(period_date), '-Q', QUARTER(period_date))"
+            date_group = "CONCAT(YEAR(date), '-Q', QUARTER(date))"
             date_alias = "period"
         elif aggregation_level == 'yearly':
-            date_group = "YEAR(period_date)"
+            date_group = "YEAR(date)"
             date_alias = "period"
         else:
-            date_group = "DATE_FORMAT(period_date, '%Y-%m')"
+            date_group = "DATE_FORMAT(date, '%Y-%m')"
             date_alias = "period"
         
         # Build SELECT clause
@@ -315,12 +312,12 @@ class QueryGenerator:
             {date_group} as {date_alias},
             SUM({column_name}) as {column_name},
             COUNT(*) as record_count,
-            MIN(period_date) as period_start,
-            MAX(period_date) as period_end
+            MIN(date) as period_start,
+            MAX(date) as period_end
         """
         
-        # Build FROM clause
-        from_clause = f"FROM {table_name}"
+        # Build FROM clause with database prefix
+        from_clause = f"FROM {self.default_database}.{table_name}"
         
         # Build WHERE clause
         where_conditions = [date_filter]
@@ -390,7 +387,7 @@ class QueryGenerator:
             
             # Build comparison query
             comp_query = base_query.replace(
-                "period_date BETWEEN :start_date AND :end_date",
+                "date BETWEEN :start_date AND :end_date",
                 comp_date_filter
             )
             
@@ -409,28 +406,28 @@ class QueryGenerator:
         
         # Add index hints for large tables based on actual available indexes
         if table_name in ['financial_overview', 'cash_flow', 'financial_ratios']:
-            # These tables have idx_period_date index
-            if 'period_date BETWEEN' in query:
+            # These tables have idx_date index
+            if 'date BETWEEN' in query:
                 query = query.replace(
                     f"FROM {table_name}",
-                    f"FROM {table_name} USE INDEX (idx_period_date)"
+                    f"FROM {table_name} USE INDEX (idx_date)"
                 )
                 optimizations.append("Added date index hint")
         elif table_name == 'budget_tracking':
-            # budget_tracking has both idx_period_date and idx_department_period
+            # budget_tracking has both idx_date and idx_department_period
             # Choose based on whether department_id filter is present
-            if 'department_id =' in query and 'period_date BETWEEN' in query:
+            if 'department_id =' in query and 'date BETWEEN' in query:
                 # Use composite index when both department_id and date are filtered
                 query = query.replace(
                     f"FROM {table_name}",
                     f"FROM {table_name} USE INDEX (idx_department_period)"
                 )
                 optimizations.append("Added department-date composite index hint")
-            elif 'period_date BETWEEN' in query:
+            elif 'date BETWEEN' in query:
                 # Use date index when only date is filtered
                 query = query.replace(
                     f"FROM {table_name}",
-                    f"FROM {table_name} USE INDEX (idx_period_date)"
+                    f"FROM {table_name} USE INDEX (idx_date)"
                 )
                 optimizations.append("Added date index hint")
         elif table_name == 'investments':
@@ -496,20 +493,46 @@ class QueryGenerator:
             hints.append("Query uses indexed date columns for optimal performance")
         
         if 'BETWEEN' in date_filter:
-            hints.append("Date range query will use period_date index")
+            hints.append("Date range query will use date index")
         
         return hints
+    
+    def _substitute_parameters(self, query: str, params: Dict[str, Any]) -> str:
+        """
+        Substitute parameters into SQL query.
+        
+        Args:
+            query: SQL query with %s placeholders
+            params: Parameters to substitute
+            
+        Returns:
+            SQL query with parameters substituted
+        """
+        try:
+            if not params:
+                return query
+            
+            # For queries with BETWEEN clauses, we typically have start_date and end_date
+            if 'start_date' in params and 'end_date' in params:
+                # Replace the two %s placeholders with the date values
+                return query.replace('%s', f"'{params['start_date']}'", 1).replace('%s', f"'{params['end_date']}'", 1)
+            
+            return query
+            
+        except Exception as e:
+            logger.error("Failed to substitute parameters", error=str(e), query=query, params=params)
+            return query
 
 
 # Global query generator instance
 _query_generator: Optional[QueryGenerator] = None
 
 
-def get_query_generator() -> QueryGenerator:
+def get_query_generator(default_database: str = "Agentic_BI") -> QueryGenerator:
     """Get or create global query generator instance."""
     global _query_generator
     
     if _query_generator is None:
-        _query_generator = QueryGenerator()
+        _query_generator = QueryGenerator(default_database=default_database)
     
     return _query_generator
