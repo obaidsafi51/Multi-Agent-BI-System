@@ -8,6 +8,8 @@ the TiDB MCP server, replacing static schema files and migrations.
 from .config import MCPSchemaConfig, SchemaValidationConfig
 from .client import BackendMCPClient, EnhancedMCPClient
 from .manager import MCPSchemaManager
+from .enhanced_cache import EnhancedSchemaCache, CacheEntry, CacheEntryType, CacheMetrics
+from .configuration_manager import ConfigurationManager, ConfigurationValidator, ConfigurationSnapshot
 from .models import (
     DatabaseInfo,
     TableInfo,
@@ -37,6 +39,15 @@ __all__ = [
     
     # Manager
     "MCPSchemaManager",
+    
+    # Enhanced Components
+    "EnhancedSchemaCache",
+    "CacheEntry",
+    "CacheEntryType", 
+    "CacheMetrics",
+    "ConfigurationManager",
+    "ConfigurationValidator",
+    "ConfigurationSnapshot",
     
     # Models
     "DatabaseInfo",
