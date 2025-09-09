@@ -13,7 +13,7 @@ RUN useradd --create-home --shell /bin/bash appuser && \
     chown -R appuser:appuser /app
 
 # Copy dependency files first for better layer caching
-COPY --chown=appuser:appuser agents/nlp-agent/pyproject.toml agents/nlp-agent/uv.lock* ./
+COPY --chown=appuser:appuser pyproject.toml uv.lock* ./
 
 # Install Python dependencies directly to system Python (no venv needed in containers)
 RUN uv pip install --system \
@@ -26,23 +26,10 @@ RUN uv pip install --system \
     httpx==0.28.1 \
     spacy==3.7.6 \
     orjson==3.10.12 \
-    structlog==23.2.0 \
-    aiohttp>=3.8.0 \
-    pandas>=2.3.2 \
-    pymysql>=1.1.0 \
-    cryptography>=41.0.7 \
-    aio-pika>=9.3.1 \
-    pyyaml>=6.0 \
-    psutil>=5.9.0
-
-# Copy backend schema management modules (required for dynamic schema functionality)
-COPY --chown=appuser:appuser backend/schema_management ./schema_management
-COPY --chown=appuser:appuser backend/models ./backend_models
-COPY --chown=appuser:appuser backend/database ./backend_database
-COPY --chown=appuser:appuser backend/__init__.py ./
+    structlog==23.2.0
 
 # Copy source code
-COPY --chown=appuser:appuser agents/nlp-agent/ .
+COPY --chown=appuser:appuser . .
 
 # Switch to non-root user
 USER appuser

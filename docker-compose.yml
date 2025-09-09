@@ -63,8 +63,10 @@ services:
   # NLP Agent with KIMI Integration
   nlp-agent:
     build:
-      context: ./agents/nlp-agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: agents/nlp-agent/Dockerfile
+    ports:
+      - "8002:8001"
     env_file:
       - .env
     environment:
