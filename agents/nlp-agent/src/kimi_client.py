@@ -47,15 +47,11 @@ class KimiClient:
     ):
         self.api_key = api_key or os.getenv("KIMI_API_KEY")
         
-        # Check for development mode
-        self.is_development = os.getenv("NODE_ENV") == "development"
+        # Always use real API - no development mode mock
+        self.is_development = False
         
         if not self.api_key or self.api_key in ["your_actual_kimi_api_key_here", "your_moonshot_api_key_here"]:
-            if self.is_development:
-                logger.warning("MOONSHOT API key not configured - running in mock mode for development")
-                self.api_key = "mock-key-for-development"
-            else:
-                raise ValueError("MOONSHOT API key is required. Get one from https://platform.moonshot.ai/console")
+            raise ValueError("MOONSHOT API key is required. Get one from https://platform.moonshot.ai/console")
         
         self.base_url = base_url
         self.timeout = timeout
@@ -71,8 +67,7 @@ class KimiClient:
         )
         
         logger.info(f"MOONSHOT client initialized with base URL: {base_url}")
-        if self.is_development and self.api_key == "mock-key-for-development":
-            logger.info("Running in development mode with mock MOONSHOT API responses")
+        logger.info("Using real MOONSHOT API with KIMI model")
     
     async def __aenter__(self):
         return self
@@ -92,10 +87,6 @@ class KimiClient:
         params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make HTTP request with retry logic"""
-        
-        # Return mock response in development mode with invalid key
-        if self.is_development and self.api_key == "mock-key-for-development":
-            return self._get_mock_response(endpoint, data)
         
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         
@@ -145,35 +136,10 @@ class KimiClient:
         
         raise KimiAPIError("Max retries exceeded")
 
-    def _get_mock_response(self, endpoint: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Generate mock responses for development mode"""
-        if endpoint == "/chat/completions":
-            return {
-                "id": "chatcmpl-mock-development",
-                "object": "chat.completion",
-                "created": 1694102400,
-                "model": "moonshot-v1-8k",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Mock response for development mode. This is a simulated MOONSHOT/KIMI API response. In production, replace KIMI_API_KEY in .env with your actual API key from https://platform.moonshot.ai/console"
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": 20,
-                    "completion_tokens": 35,
-                    "total_tokens": 55
-                }
-            }
-        else:
-            return {"status": "mock", "message": "Mock response for development mode"}
-    
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
-        model: str = "moonshot-v1-8k",
+        model: str = "kimi-k2-0905-preview",
         temperature: float = 0.1,
         max_tokens: int = 2000,
         stream: bool = False
