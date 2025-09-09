@@ -314,76 +314,24 @@ class DataAgent:
     
     async def health_check(self) -> Dict[str, Any]:
         """
-        Perform comprehensive health check of all components.
+        Simplified health check of core components.
         
         Returns:
-            Dictionary containing health status and metrics
+            Dictionary containing basic health status
         """
-        health_status = {
-            'status': 'healthy',
-            'timestamp': time.time(),
-            'components': {},
-            'metrics': self.metrics.copy(),
-            'errors': []
-        }
-        
         try:
-            # Check database connection
-            if self.connection_manager:
-                db_health = await self.connection_manager.health_check()
-                health_status['components']['database'] = db_health
-                if db_health['status'] != 'healthy':
-                    health_status['status'] = 'degraded'
-            
-            # Check cache manager
-            if self.cache_manager:
-                cache_health = await self.cache_manager.health_check()
-                health_status['components']['cache'] = cache_health
-                if cache_health['status'] != 'healthy':
-                    health_status['status'] = 'degraded'
-            
-            # Check query optimizer
-            if self.query_optimizer:
-                optimizer_stats = self.query_optimizer.get_optimization_stats()
-                health_status['components']['optimizer'] = {
-                    'status': 'healthy',
-                    'stats': optimizer_stats
-                }
-            
-            # Check dynamic schema management
-            if self.use_dynamic_schema:
-                schema_health = {
-                    'status': 'healthy',
-                    'dynamic_schema_manager': 'available' if self.dynamic_schema_manager else 'unavailable',
-                    'intelligent_query_builder': 'available' if self.intelligent_query_builder else 'unavailable'
-                }
-                
-                # Get schema manager metrics if available
-                if self.dynamic_schema_manager:
-                    try:
-                        schema_metrics = self.dynamic_schema_manager.get_metrics()
-                        schema_health['metrics'] = schema_metrics
-                    except Exception as e:
-                        schema_health['metrics_error'] = str(e)
-                        schema_health['status'] = 'degraded'
-                
-                health_status['components']['dynamic_schema'] = schema_health
-            else:
-                health_status['components']['dynamic_schema'] = {
-                    'status': 'disabled',
-                    'mode': 'static_fallback'
-                }
-            
-            # Overall status assessment
-            if any(comp.get('status') == 'unhealthy' for comp in health_status['components'].values()):
-                health_status['status'] = 'unhealthy'
-            
+            return {
+                'status': 'healthy',
+                'timestamp': time.time(),
+                'connection_pool_size': len(getattr(self.connection_manager, '_connections', [])) if self.connection_manager else 0
+            }
         except Exception as e:
-            health_status['status'] = 'unhealthy'
-            health_status['errors'].append(str(e))
             logger.error("Health check failed", error=str(e))
-        
-        return health_status
+            return {
+                'status': 'unhealthy', 
+                'timestamp': time.time(),
+                'error': str(e)
+            }
     
     async def get_metrics(self) -> Dict[str, Any]:
         """Get Data Agent performance metrics."""

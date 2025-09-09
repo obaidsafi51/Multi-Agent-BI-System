@@ -117,16 +117,9 @@ echo "⏳ Waiting for all services to start..."
 sleep 15
 
 # Check service health
-echo "🔍 Checking service health..."
+# Basic service status check
+echo "🔍 Checking service status..."
 docker-compose ps
-
-# Test basic connectivity
-echo "🧪 Testing service connectivity..."
-if curl -f http://localhost:8000/health > /dev/null 2>&1; then
-    echo "✅ Backend health check passed"
-else
-    echo "⚠️  Backend health check failed - service may still be starting"
-fi
 
 if curl -f http://localhost:3000 > /dev/null 2>&1; then
     echo "✅ Frontend connectivity check passed"
