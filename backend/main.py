@@ -186,6 +186,8 @@ from pydantic import BaseModel
 class QueryRequest(BaseModel):
     query: str
     context: Optional[Dict[str, Any]] = None
+    user_id: Optional[str] = "anonymous"
+    session_id: Optional[str] = None
 
 class QueryResponse(BaseModel):
     query_id: str
@@ -240,51 +242,33 @@ async def favicon():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint"""
+    """Health check endpoint - Simplified version"""
     try:
-        health_status = {
+        # Use dynamic schema health check if available
+        if dynamic_schema_manager:
+            try:
+                from schema_management.health_check import check_mcp_server_health
+                mcp_health = await check_mcp_server_health()
+                
+                return {
+                    "status": "healthy" if mcp_health["status"] == "healthy" else "unhealthy",
+                    "service": "backend",
+                    "version": "1.0.0",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "mcp_status": mcp_health["status"],
+                    "dynamic_schema": "enabled"
+                }
+            except Exception as e:
+                logger.warning(f"Dynamic health check failed: {e}, using basic check")
+        
+        # Basic health check
+        return {
             "status": "healthy",
-            "service": "backend",
+            "service": "backend", 
             "version": "1.0.0",
             "timestamp": datetime.utcnow().isoformat(),
-            "services": {
-                "redis": "unknown",
-                "database": "unknown"
-            }
+            "dynamic_schema": "disabled" if not dynamic_schema_manager else "enabled"
         }
-        
-        # Check Redis
-        if redis_client:
-            try:
-                await redis_client.ping()
-                health_status["services"]["redis"] = "healthy"
-            except Exception:
-                health_status["services"]["redis"] = "unhealthy"
-        
-        # Check MCP Server (TiDB)
-        try:
-            import aiohttp
-            mcp_server_url = os.getenv("TIDB_MCP_SERVER_URL", "http://tidb-mcp-server:8000")
-            timeout = aiohttp.ClientTimeout(total=15)  # Increased timeout for busy server
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(f"{mcp_server_url}/health") as response:
-                    if response.status == 200:
-                        health_status["services"]["database"] = "healthy"
-                    else:
-                        logger.warning(f"MCP Server returned status {response.status}")
-                        health_status["services"]["database"] = "unhealthy"
-        except asyncio.TimeoutError:
-            logger.error("MCP Server health check timed out (15s timeout)")
-            health_status["services"]["database"] = "unhealthy"
-        except aiohttp.ClientError as e:
-            logger.error(f"MCP Server connection error: {e}")
-            health_status["services"]["database"] = "unhealthy"
-        except Exception as e:
-            logger.error(f"MCP Server health check failed: {e}")
-            health_status["services"]["database"] = "unhealthy"
-        
-        return health_status
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail="Service unhealthy")
@@ -304,10 +288,12 @@ async def process_query(
         # Step 1: Send query to NLP Agent with dynamic schema context
         if dynamic_schema_manager:
             # Use enhanced version with dynamic schema context
+            user_id = query_request.user_id or "anonymous"
+            session_id = query_request.session_id or f"session_{query_id}"
             nlp_result = await send_to_nlp_agent_with_dynamic_context(
                 query_request.query, 
-                query_request.user_id, 
-                query_request.session_id
+                user_id, 
+                session_id
             )
         else:
             # Fallback to original version
@@ -479,6 +465,113 @@ async def get_sample_database_data(request: Request):
             "database_info": {},
             "tables": {}
         }
+
+
+@app.get("/api/database/list")
+@limiter.limit("30/minute")
+async def get_database_list(request: Request):
+    """Get list of available databases from TiDB Cloud"""
+    try:
+        import httpx
+        
+        # Make direct HTTP request to MCP server
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://tidb-mcp-server:8000/tools/discover_databases_tool",
+                json={},
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                databases = response.json()
+                
+                # Filter out system databases and only include accessible ones
+                filtered_databases = []
+                for db in databases:
+                    if (db.get("accessible", True) and 
+                        db.get("name", "").lower() not in ['information_schema', 'performance_schema', 'mysql', 'sys']):
+                        filtered_databases.append({
+                            "name": db["name"],
+                            "charset": db.get("charset", "utf8mb4"),
+                            "collation": db.get("collation", "utf8mb4_general_ci"),
+                            "accessible": db.get("accessible", True)
+                        })
+                
+                return {
+                    "success": True,
+                    "databases": filtered_databases,
+                    "total_count": len(filtered_databases)
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"MCP server returned status {response.status_code}"
+                )
+                
+    except Exception as e:
+        logger.error(f"Database list API error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch database list: {str(e)}"
+        )
+
+
+@app.post("/api/database/select")
+@limiter.limit("10/minute")
+async def select_database_and_fetch_schema(request: Request, body: dict):
+    """Select a database and fetch its schema information"""
+    try:
+        database_name = body.get("database_name")
+        if not database_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Database name is required"
+            )
+        
+        import httpx
+        
+        # Make direct HTTP request to MCP server to get tables for the selected database
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://tidb-mcp-server:8000/tools/discover_tables_tool",
+                json={"database": database_name},
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                tables = response.json()
+                
+                # If we have dynamic schema manager available, trigger schema refresh
+                if DYNAMIC_SCHEMA_AVAILABLE:
+                    try:
+                        dynamic_schema_manager = get_dynamic_schema_manager()
+                        if dynamic_schema_manager:
+                            # Refresh schema cache for the selected database
+                            await dynamic_schema_manager.refresh_schema_for_database(database_name)
+                    except Exception as e:
+                        logger.warning(f"Failed to refresh dynamic schema for {database_name}: {e}")
+                
+                return {
+                    "success": True,
+                    "database_name": database_name,
+                    "tables": tables,
+                    "total_tables": len(tables),
+                    "schema_initialized": True
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"MCP server returned status {response.status_code}"
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database selection API error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to select database: {str(e)}"
+        )
 
 
 @app.get("/api/database/test")
@@ -797,8 +890,9 @@ async def get_schema_discovery():
 @app.get("/api/schema/discovery/fast")
 async def get_fast_schema_discovery():
     """
-    API endpoint for fast schema discovery using dynamic schema management.
+    API endpoint for fast schema discovery using dynamic schema management with Redis caching.
     Returns discovered tables from primary database only for quick results.
+    Cache TTL: 1 hour (3600 seconds)
     """
     if not dynamic_schema_manager:
         raise HTTPException(
@@ -806,7 +900,29 @@ async def get_fast_schema_discovery():
             detail="Dynamic schema management not available"
         )
     
+    # Define cache key and TTL
+    cache_key = "schema:discovery:fast"
+    cache_ttl = 3600  # 1 hour in seconds
+    
     try:
+        # Try to get from cache first
+        cached_result = None
+        if redis_client:
+            try:
+                cached_data = await redis_client.get(cache_key)
+                if cached_data:
+                    cached_result = json.loads(cached_data)
+                    logger.info("Schema discovery served from cache")
+                    # Add cache metadata
+                    cached_result["cache_hit"] = True
+                    cached_result["cached_at"] = cached_result.get("discovery_timestamp")
+                    return cached_result
+            except Exception as cache_error:
+                logger.warning(f"Cache read error: {cache_error}")
+        
+        # Cache miss - fetch from database
+        logger.info("Cache miss - fetching schema from database")
+        
         # Add timeout to prevent hanging
         import asyncio
         
@@ -822,7 +938,8 @@ async def get_fast_schema_discovery():
             timeout=5.0  # 5 second timeout for metrics
         )
         
-        return {
+        # Build response
+        response_data = {
             "success": True,
             "mode": "fast",
             "schema": {
@@ -831,14 +948,35 @@ async def get_fast_schema_discovery():
                 "tables": [
                     {
                         "name": table.name,
-                        "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
+                        "columns": [
+                            {
+                                "name": col.name,
+                                "type": getattr(col, 'type', 'unknown'),
+                                "nullable": getattr(col, 'nullable', True)
+                            } for col in (table.columns if hasattr(table, 'columns') and table.columns else [])
+                        ]
                     }
                     for table in schema_info.tables  # Show all tables for fast mode
                 ]
             },
             "metrics": metrics,
-            "discovery_timestamp": schema_info.discovery_timestamp.isoformat() if schema_info.discovery_timestamp else None
+            "discovery_timestamp": schema_info.discovery_timestamp.isoformat() if schema_info.discovery_timestamp else None,
+            "cache_hit": False  # Fresh from database
         }
+        
+        # Cache the result for future requests
+        if redis_client:
+            try:
+                await redis_client.setex(
+                    cache_key, 
+                    cache_ttl, 
+                    json.dumps(response_data, default=str)
+                )
+                logger.info(f"Schema discovery result cached for {cache_ttl} seconds")
+            except Exception as cache_error:
+                logger.warning(f"Cache write error: {cache_error}")
+        
+        return response_data
         
     except asyncio.TimeoutError:
         logger.error("Fast schema discovery timed out")
@@ -846,6 +984,61 @@ async def get_fast_schema_discovery():
     except Exception as e:
         logger.error(f"Fast schema discovery failed: {e}")
         raise HTTPException(status_code=500, detail=f"Fast schema discovery failed: {str(e)}")
+
+
+@app.get("/api/schema/cached")
+async def get_cached_schema():
+    """
+    API endpoint to get schema from cache only (for fast access by agents).
+    Returns cached schema if available, otherwise returns minimal fallback.
+    """
+    cache_key = "schema:discovery:fast"
+    
+    if not redis_client:
+        # No Redis - return minimal fallback
+        return {
+            "success": True,
+            "source": "fallback",
+            "schema": {
+                "tables_count": 0,
+                "tables": []
+            },
+            "cache_available": False
+        }
+    
+    try:
+        cached_data = await redis_client.get(cache_key)
+        if cached_data:
+            cached_result = json.loads(cached_data)
+            logger.info("Cached schema served to agent")
+            return {
+                "success": True,
+                "source": "cache",
+                "schema": cached_result.get("schema", {}),
+                "cache_available": True,
+                "cached_at": cached_result.get("discovery_timestamp")
+            }
+        else:
+            # Cache miss - return minimal fallback and suggest refresh
+            logger.info("No cached schema available")
+            return {
+                "success": True,
+                "source": "fallback",
+                "schema": {
+                    "tables_count": 0,
+                    "tables": []
+                },
+                "cache_available": False,
+                "suggestion": "Call /api/schema/discovery/fast to populate cache"
+            }
+    except Exception as e:
+        logger.error(f"Error reading cached schema: {e}")
+        return {
+            "success": False,
+            "source": "error",
+            "error": str(e),
+            "cache_available": False
+        }
 
 
 @app.get("/api/schema/discovery/{database_name}")
@@ -1123,9 +1316,20 @@ async def send_to_nlp_agent_with_dynamic_context(query: str, user_id: str, sessi
             try:
                 # Get relevant schema context based on query terms
                 schema_context = {
-                    "schema_version": getattr(dynamic_schema_manager, 'metrics', {}).get('last_schema_update'),
+                    "schema_version": None,
                     "available_metrics": list(dynamic_schema_manager.business_mappings.keys()) if hasattr(dynamic_schema_manager, 'business_mappings') else []
                 }
+                
+                # Handle schema version carefully to avoid datetime serialization issues
+                if hasattr(dynamic_schema_manager, 'metrics'):
+                    schema_version = dynamic_schema_manager.metrics.get('last_schema_update')
+                    if schema_version:
+                        # Convert datetime to ISO string if needed
+                        if hasattr(schema_version, 'isoformat'):
+                            schema_context["schema_version"] = schema_version.isoformat()
+                        else:
+                            schema_context["schema_version"] = str(schema_version)
+                
                 request_data["context"]["schema_context"] = schema_context
             except Exception as e:
                 logger.warning(f"Failed to add schema context: {e}")
