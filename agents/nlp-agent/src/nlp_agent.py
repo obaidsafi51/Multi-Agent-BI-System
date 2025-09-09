@@ -34,11 +34,38 @@ class NLPAgent:
         # MCP Context Client for context sharing
         self.mcp_context_client = get_mcp_context_client()
         
+        # Backend URL for cached schema access
+        self.backend_url = os.getenv("BACKEND_URL", "http://backend:8001")
+        
         # Agent configuration
         self.agent_id = f"nlp-agent-{uuid.uuid4().hex[:8]}"
         self.is_running = False
         
         logger.info(f"NLP Agent initialized with ID: {self.agent_id}")
+
+    async def get_cached_schema(self) -> Dict[str, Any]:
+        """Get schema from backend cache for fast access"""
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.backend_url}/api/schema/cached",
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        schema_data = await response.json()
+                        if schema_data.get("success"):
+                            logger.info(f"Schema loaded from {schema_data.get('source', 'unknown')}")
+                            return schema_data.get("schema", {})
+                        else:
+                            logger.warning(f"Schema fetch failed: {schema_data.get('error', 'Unknown error')}")
+                            return {}
+                    else:
+                        logger.error(f"Schema endpoint returned {response.status}")
+                        return {}
+        except Exception as e:
+            logger.error(f"Failed to fetch cached schema: {e}")
+            return {}
     
     async def start(self):
         """Start the NLP Agent"""
@@ -100,6 +127,9 @@ class NLPAgent:
         try:
             logger.info(f"Processing query {query_id}: {query}")
             
+            # Get cached schema context first
+            schema_context = await self.get_cached_schema()
+            
             # Retrieve session context for continuity
             session_context = await self.mcp_context_client.get_session_context(session_id)
             
@@ -113,21 +143,22 @@ class NLPAgent:
                 session_context=session_context
             )
             
-            # Parse query using KIMI
+            # Parse query using KIMI with schema context
             try:
-                intent = await self.query_parser.parse_intent(query, query_context)
-                logger.info(f"Query intent parsed for {query_id}: {intent.metric_type}")
+                intent = await self.query_parser.parse_intent(query, query_context, schema_context)
+                logger.info(f"Query intent parsed for {query_id}: {intent.metric_type} (with schema context)")
             except KimiAPIError as e:
                 logger.error(f"KIMI API error for query {query_id}: {e}")
                 # Fallback to basic parsing
                 intent = self._fallback_intent_parsing(query)
             
-            # Build comprehensive context
+            # Build comprehensive context including schema
             comprehensive_context = self.context_builder.build_query_context(
                 query=query,
                 intent=intent,
                 user_context=context,
-                session_context=session_context
+                session_context=session_context,
+                schema_context=schema_context
             )
             
             # Generate SQL query

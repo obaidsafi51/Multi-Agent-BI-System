@@ -8,6 +8,7 @@ import json
 import time
 import sys
 import os
+import aiohttp
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -19,17 +20,78 @@ from .query.validator import get_data_validator
 from .cache.manager import get_cache_manager, close_cache_manager
 from .optimization.optimizer import get_query_optimizer
 
-# Add backend to path for dynamic schema management imports
-backend_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend')
-sys.path.append(backend_path)
+# Schema Management via MCP HTTP calls to backend
+BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8001")
 
-try:
-    from schema_management.dynamic_schema_manager import get_dynamic_schema_manager
-    from schema_management.intelligent_query_builder import get_intelligent_query_builder
-    DYNAMIC_SCHEMA_AVAILABLE = True
-except ImportError as e:
-    print(f"Dynamic schema management not available: {e}")
-    DYNAMIC_SCHEMA_AVAILABLE = False
+class SchemaManagerMCPClient:
+    """MCP client for schema management via HTTP calls to backend"""
+    
+    def __init__(self, backend_url: str = BACKEND_URL):
+        self.backend_url = backend_url.rstrip('/')
+        
+    async def get_schema_discovery(self, fast: bool = True) -> Dict[str, Any]:
+        """Get schema discovery from backend"""
+        endpoint = f"{self.backend_url}/api/schema/discovery/fast" if fast else f"{self.backend_url}/api/schema/discovery"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"Schema discovery failed: {response.status}")
+                        return {}
+        except Exception as e:
+            logger.error(f"Schema discovery error: {e}")
+            return {}
+    
+    async def get_table_mappings(self, metric_type: str = "revenue") -> Dict[str, Any]:
+        """Get schema mappings for a specific metric type"""
+        endpoint = f"{self.backend_url}/api/schema/mappings/{metric_type}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"Schema mappings failed: {response.status}")
+                        return {}
+        except Exception as e:
+            logger.error(f"Schema mappings error: {e}")
+            return {}
+    
+    async def process_query_with_context(self, query: str, user_id: str = None, session_id: str = None) -> Dict[str, Any]:
+        """Process query with dynamic schema context via backend"""
+        endpoint = f"{self.backend_url}/api/query"
+        payload = {
+            "query": query,
+            "user_id": user_id or "default",
+            "session_id": session_id or "default"
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(f"Query processing failed: {response.status}")
+                        return {"error": f"Backend query failed: {response.status}"}
+        except Exception as e:
+            logger.error(f"Query processing error: {e}")
+            return {"error": f"Query processing error: {e}"}
+
+# Initialize schema manager MCP client
+schema_mcp_client = SchemaManagerMCPClient()
+
+# Legacy compatibility functions for existing code
+def get_dynamic_schema_manager():
+    """Legacy compatibility - returns MCP client"""
+    return schema_mcp_client
+
+def get_intelligent_query_builder(schema_manager=None):
+    """Legacy compatibility - returns MCP client"""
+    return schema_mcp_client
+
+DYNAMIC_SCHEMA_AVAILABLE = True
 
 logger = structlog.get_logger(__name__)
 
@@ -87,8 +149,8 @@ class DataAgent:
             # Initialize dynamic schema management if available
             if DYNAMIC_SCHEMA_AVAILABLE:
                 try:
-                    self.dynamic_schema_manager = await get_dynamic_schema_manager()
-                    self.intelligent_query_builder = await get_intelligent_query_builder(
+                    self.dynamic_schema_manager = get_dynamic_schema_manager()
+                    self.intelligent_query_builder = get_intelligent_query_builder(
                         self.dynamic_schema_manager
                     )
                     logger.info("Dynamic schema management initialized successfully")
@@ -320,11 +382,62 @@ class DataAgent:
             Dictionary containing basic health status
         """
         try:
-            return {
-                'status': 'healthy',
-                'timestamp': time.time(),
-                'connection_pool_size': len(getattr(self.connection_manager, '_connections', [])) if self.connection_manager else 0
-            }
+            # Check database connection
+            if self.connection_manager:
+                db_health = await self.connection_manager.health_check()
+                health_status['components']['database'] = db_health
+                if db_health['status'] != 'healthy':
+                    health_status['status'] = 'degraded'
+            
+            # Check cache manager
+            if self.cache_manager:
+                cache_health = await self.cache_manager.health_check()
+                health_status['components']['cache'] = cache_health
+                if cache_health['status'] != 'healthy':
+                    health_status['status'] = 'degraded'
+            
+            # Check query optimizer
+            if self.query_optimizer:
+                optimizer_stats = self.query_optimizer.get_optimization_stats()
+                health_status['components']['optimizer'] = {
+                    'status': 'healthy',
+                    'stats': optimizer_stats
+                }
+            
+            # Check dynamic schema management
+            if self.use_dynamic_schema:
+                schema_health = {
+                    'status': 'healthy',
+                    'dynamic_schema_manager': 'available' if self.dynamic_schema_manager else 'unavailable',
+                    'intelligent_query_builder': 'available' if self.intelligent_query_builder else 'unavailable'
+                }
+                
+                # Test schema manager connectivity if available
+                if self.dynamic_schema_manager:
+                    try:
+                        # Test basic connectivity by trying to get fast schema discovery
+                        test_result = await self.dynamic_schema_manager.get_schema_discovery(fast=True)
+                        if test_result:
+                            schema_health['connectivity'] = 'ok'
+                            schema_health['tables_discovered'] = len(test_result.get('tables', []))
+                        else:
+                            schema_health['connectivity'] = 'failed'
+                            schema_health['status'] = 'degraded'
+                    except Exception as e:
+                        schema_health['connectivity_error'] = str(e)
+                        schema_health['status'] = 'degraded'
+                
+                health_status['components']['dynamic_schema'] = schema_health
+            else:
+                health_status['components']['dynamic_schema'] = {
+                    'status': 'disabled',
+                    'mode': 'static_fallback'
+                }
+            
+            # Overall status assessment
+            if any(comp.get('status') == 'unhealthy' for comp in health_status['components'].values()):
+                health_status['status'] = 'unhealthy'
+
         except Exception as e:
             logger.error("Health check failed", error=str(e))
             return {
@@ -363,11 +476,12 @@ class DataAgent:
                 )
             }
             
-            # Add schema manager metrics if available
+            # Add schema manager connectivity status if available
             if self.dynamic_schema_manager:
                 try:
-                    schema_manager_metrics = self.dynamic_schema_manager.get_metrics()
-                    dynamic_metrics['schema_manager'] = schema_manager_metrics
+                    # Test basic connectivity
+                    dynamic_metrics['schema_manager_status'] = 'available'
+                    dynamic_metrics['backend_url'] = self.dynamic_schema_manager.backend_url
                 except Exception as e:
                     dynamic_metrics['schema_manager_error'] = str(e)
             
@@ -508,27 +622,26 @@ class DataAgent:
         Returns:
             SQL query object (from intelligent builder or traditional generator)
         """
-        # Try dynamic schema management first
-        if self.use_dynamic_schema and self.intelligent_query_builder:
+        # Try dynamic schema management first via MCP calls to backend
+        if self.use_dynamic_schema and self.dynamic_schema_manager:
             try:
-                logger.info("Using dynamic schema management for query generation")
+                logger.info("Using dynamic schema management via MCP for query generation")
                 
-                # Generate query context with schema discovery
-                query_context = await self.dynamic_schema_manager.generate_query_context(query_intent)
-                
-                # Build query using intelligent query builder
-                query_result = await self.intelligent_query_builder.build_query(
-                    query_intent, 
-                    query_context
+                # Use backend's query processing with dynamic schema context
+                mcp_result = await self.dynamic_schema_manager.process_query_with_context(
+                    query_intent.query, 
+                    query_intent.user_id,
+                    query_intent.session_id
                 )
                 
-                self.metrics['dynamic_queries'] += 1
-                logger.info(
-                    f"Dynamic query generated with confidence: {query_result.confidence_score:.2f}"
-                )
-                
-                return query_result
-                
+                if mcp_result and "error" not in mcp_result:
+                    self.metrics['dynamic_queries'] += 1
+                    logger.info(f"Dynamic query processed via MCP successfully")
+                    return mcp_result
+                else:
+                    logger.warning(f"MCP query processing failed: {mcp_result.get('error', 'Unknown error')}")
+                    # Fall back to direct processing
+                    
             except Exception as e:
                 logger.warning(f"Dynamic query generation failed: {e}, falling back to static")
                 self.use_dynamic_schema = False  # Temporarily disable for this session
@@ -545,10 +658,10 @@ class DataAgent:
         This version includes schema version information to ensure cache invalidation
         when schema changes occur.
         """
-        # Include schema version if available
+        # Include backend URL as schema version identifier
         schema_version = "unknown"
-        if self.dynamic_schema_manager and hasattr(self.dynamic_schema_manager, 'metrics'):
-            schema_version = str(self.dynamic_schema_manager.metrics.get('last_schema_update', 'unknown'))
+        if self.dynamic_schema_manager:
+            schema_version = f"mcp-{hash(self.dynamic_schema_manager.backend_url) % 10000}"
         
         key_components = [
             query_intent.get('metric_type', ''),
