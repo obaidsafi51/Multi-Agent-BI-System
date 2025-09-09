@@ -7,6 +7,8 @@ import logging
 import os
 import pymysql
 import ssl
+import datetime
+import decimal
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -112,9 +114,11 @@ class TiDBConnection:
                         'SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'
                     ]):
                         if fetch_one:
-                            return cursor.fetchone()
+                            result = cursor.fetchone()
+                            return self._sanitize_result(result) if result else None
                         elif fetch_all:
-                            return cursor.fetchall()
+                            results = cursor.fetchall()
+                            return [self._sanitize_result(row) for row in results] if results else []
                         else:
                             return cursor
                     else:
@@ -125,6 +129,34 @@ class TiDBConnection:
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
             raise
+    
+    def _sanitize_result(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize database results to handle binary data and encoding issues."""
+        if not isinstance(row, dict):
+            return row
+            
+        sanitized = {}
+        for key, value in row.items():
+            if isinstance(value, bytes):
+                # Handle binary data by encoding as base64 or converting to string safely
+                try:
+                    # Try to decode as UTF-8
+                    sanitized[key] = value.decode('utf-8')
+                except UnicodeDecodeError:
+                    # If UTF-8 fails, encode as base64
+                    import base64
+                    sanitized[key] = base64.b64encode(value).decode('ascii')
+                    logger.debug(f"Converted binary data to base64 for column: {key}")
+            elif isinstance(value, (datetime.datetime, datetime.date)):
+                # Convert datetime objects to ISO strings
+                sanitized[key] = value.isoformat()
+            elif isinstance(value, decimal.Decimal):
+                # Convert decimal to float
+                sanitized[key] = float(value)
+            else:
+                sanitized[key] = value
+        
+        return sanitized
     
     def execute_many(self, query: str, params_list: List[Tuple]) -> int:
         """Execute multiple queries with parameters."""
