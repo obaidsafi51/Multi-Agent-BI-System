@@ -46,9 +46,14 @@ class QueryValidator:
         'INSERT', 'UPDATE', 'DELETE', 'DROP', 'CREATE', 'ALTER', 'TRUNCATE',
         'REPLACE', 'MERGE', 'CALL', 'EXECUTE', 'EXEC', 'GRANT', 'REVOKE',
         'COMMIT', 'ROLLBACK', 'START', 'BEGIN', 'TRANSACTION', 'SAVEPOINT',
-        'LOCK', 'UNLOCK', 'SET', 'SHOW', 'DESCRIBE', 'EXPLAIN',
+        'LOCK', 'UNLOCK', 'SET',
         'ANALYZE', 'OPTIMIZE', 'REPAIR', 'CHECK', 'FLUSH', 'RESET',
         'LOAD', 'OUTFILE', 'INFILE', 'BACKUP', 'RESTORE'
+    }
+    
+    # Allow these keywords for schema discovery
+    ALLOWED_SCHEMA_KEYWORDS = {
+        'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN'
     }
 
     # Dangerous patterns that should be blocked
@@ -136,9 +141,12 @@ class QueryValidator:
         # Extract words from query
         words = set(re.findall(r'\b\w+\b', query))
 
-        # Check for forbidden keywords
+        # Check for forbidden keywords, but allow schema discovery keywords
         forbidden_found = words.intersection(self.FORBIDDEN_KEYWORDS)
-        if forbidden_found:
+        allowed_found = words.intersection(self.ALLOWED_SCHEMA_KEYWORDS)
+        
+        # If we found forbidden keywords but they are schema-related, allow them
+        if forbidden_found and not (forbidden_found.issubset(self.ALLOWED_SCHEMA_KEYWORDS) or allowed_found):
             raise QueryValidationError(f"Query contains forbidden keywords: {', '.join(forbidden_found)}")
 
     def _validate_query_structure(self, query: str) -> None:
