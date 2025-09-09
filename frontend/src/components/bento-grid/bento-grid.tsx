@@ -135,7 +135,7 @@ export function BentoGrid({ cards, onCardsUpdate }: BentoGridProps) {
                 className="grid gap-4 p-1" 
                 style={{
                   gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-                  gridAutoRows: 'minmax(200px, auto)',
+                  gridAutoRows: 'minmax(160px, auto)',
                   minHeight: '100%'
                 }}
               >
@@ -149,7 +149,7 @@ export function BentoGrid({ cards, onCardsUpdate }: BentoGridProps) {
                       isDragging ? "opacity-70" : "opacity-100"
                     }`}
                     style={{
-                      minHeight: card.size.includes('2x') ? '420px' : '200px',
+                      minHeight: card.size.includes('2x') ? '280px' : '160px',
                       transition: 'all var(--duration-normal) var(--ease-in-out)'
                     }}
                   >

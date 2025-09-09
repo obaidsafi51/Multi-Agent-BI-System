@@ -5,6 +5,8 @@ import { ChatInterface } from "./chat/chat-interface";
 import { BentoGrid } from "./bento-grid/bento-grid";
 import { BentoGridCard } from "@/types/dashboard";
 import { useRealData } from "@/hooks/useRealData";
+import { DatabaseSetupButton } from "./database-setup-button";
+import { DatabaseSelectorModal } from "./database-selector-modal";
 import { motion } from "framer-motion";
 
 function DashboardContent() {
@@ -23,6 +25,8 @@ function DashboardContent() {
 
   // Persistent layout state that doesn't reset on errors
   const [layoutMode, setLayoutMode] = useState<'fullwidth' | 'split'>('fullwidth');
+  const [showDatabaseModal, setShowDatabaseModal] = useState(false);
+  const [selectedDatabase, setSelectedDatabase] = useState<string | null>(null);
   
   // Check if user has started chatting (has sent at least one message)
   const hasUserStartedChatting = chatMessages.some(message => message.sender === "user");
@@ -36,6 +40,18 @@ function DashboardContent() {
 
   const handleSendMessage = async (content: string) => {
     await sendMessage(content);
+  };
+
+  const handleDatabaseSetup = () => {
+    setShowDatabaseModal(true);
+  };
+
+  const handleDatabaseSelected = (databaseName: string) => {
+    console.log("Database selected:", databaseName);
+    setSelectedDatabase(databaseName);
+    // Optionally refresh dashboard data after database selection
+    refreshDashboard();
+    setShowDatabaseModal(false);
   };
 
   const handleCardUpdate = (updatedCards: BentoGridCard[]) => {
@@ -98,28 +114,24 @@ function DashboardContent() {
       initial={{ opacity: 0, y: -50 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -50 }}
-      className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 max-w-md w-full mx-4"
+      className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50"
     >
-      <div className="corporate-card bg-green-50 border-green-200 border">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-              <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            </div>
-            <div>
-              <h4 className="text-sm font-medium text-green-800">Dashboard Refreshed</h4>
-              <p className="text-xs text-green-600">Your data has been updated successfully</p>
-            </div>
-          </div>
-          <button
-            onClick={clearRefreshSuccess}
-            className="text-xs px-3 py-1 border border-green-300 text-green-700 rounded-md hover:bg-green-50 transition-colors"
-          >
-            Dismiss
-          </button>
+      <div className="bg-green-50 border border-green-200 rounded-lg shadow-md px-4 py-3 flex items-center gap-3 min-w-max">
+        <div className="w-5 h-5 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <svg className="w-3 h-3 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
         </div>
+        <div className="flex-1">
+          <h4 className="text-sm font-medium text-green-800">Dashboard Refreshed</h4>
+          <p className="text-xs text-green-600">Your data has been updated successfully</p>
+        </div>
+        <button
+          onClick={clearRefreshSuccess}
+          className="text-xs px-2 py-1 border border-green-300 text-green-700 rounded hover:bg-green-100 transition-colors flex-shrink-0"
+        >
+          Dismiss
+        </button>
       </div>
     </motion.div>
   );
@@ -148,6 +160,8 @@ function DashboardContent() {
             onSendMessage={handleSendMessage}
             isFullWidth={true}
             isLoading={isLoading}
+            onDatabaseSetup={handleDatabaseSetup}
+            selectedDatabase={selectedDatabase}
           />
         </motion.div>
       ) : (
@@ -180,6 +194,8 @@ function DashboardContent() {
               onSendMessage={handleSendMessage}
               isFullWidth={false}
               isLoading={isLoading}
+              onDatabaseSetup={handleDatabaseSetup}
+              selectedDatabase={selectedDatabase}
             />
           </motion.div>
 
@@ -214,21 +230,17 @@ function DashboardContent() {
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
-                  {/* Connection status indicator */}
-                  <div className="flex items-center gap-2">
-                    <div 
-                      className={`w-2 h-2 rounded-full ${error ? 'animate-pulse' : ''}`}
-                      style={{ 
-                        backgroundColor: error ? 'var(--corporate-error)' : 'var(--corporate-success)'
-                      }}
-                    ></div>
-                    <span className="corporate-body-sm" style={{ 
-                      color: 'var(--corporate-gray-600)',
-                      fontWeight: '500'
-                    }}>
-                      {error ? 'Connection Error' : 'Connected'}
-                    </span>
-                  </div>
+                  {/* Database Setup Button */}
+                  <DatabaseSetupButton 
+                    variant="secondary"
+                    size="sm"
+                    selectedDatabase={selectedDatabase}
+                    onClick={() => setShowDatabaseModal(true)}
+                    onDatabaseSelected={(dbName) => {
+                      setSelectedDatabase(dbName);
+                      handleDatabaseSelected(dbName);
+                    }}
+                  />
                   
                   {/* Refresh button */}
                   <button
@@ -238,12 +250,12 @@ function DashboardContent() {
                   >
                     {isLoading ? (
                       <>
-                        <div className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                        <div className="w-4 h-4 border border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                         Refreshing...
                       </>
                     ) : (
                       <>
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
                         Refresh
@@ -276,6 +288,13 @@ function DashboardContent() {
           </motion.div>
         </motion.div>
       )}
+      
+      {/* Database Selector Modal */}
+      <DatabaseSelectorModal
+        isOpen={showDatabaseModal}
+        onClose={() => setShowDatabaseModal(false)}
+        onDatabaseSelect={handleDatabaseSelected}
+      />
     </div>
   );
 }
