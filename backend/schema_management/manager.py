@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from .client import EnhancedMCPClient, MCPRequestError
 from .config import MCPSchemaConfig, SchemaValidationConfig
+from .enhanced_cache import EnhancedSchemaCache
 from .models import (
     DatabaseInfo, TableInfo, ColumnInfo, TableSchema, ValidationResult,
     ValidationError, ValidationWarning, ValidationSeverity, CacheStats
@@ -96,7 +97,8 @@ class MCPSchemaManager:
         self,
         mcp_config: Optional[MCPSchemaConfig] = None,
         validation_config: Optional[SchemaValidationConfig] = None,
-        enable_monitoring: bool = True
+        enable_monitoring: bool = True,
+        enhanced_cache: Optional[EnhancedSchemaCache] = None
     ):
         """
         Initialize MCP Schema Manager.
@@ -105,12 +107,22 @@ class MCPSchemaManager:
             mcp_config: MCP client configuration
             validation_config: Schema validation configuration
             enable_monitoring: Whether to enable monitoring and observability
+            enhanced_cache: Enhanced cache instance (optional)
         """
         self.mcp_config = mcp_config or MCPSchemaConfig.from_env()
         self.validation_config = validation_config or SchemaValidationConfig.from_env()
         self.client = EnhancedMCPClient(self.mcp_config)
         
-        # Simple in-memory cache for schema information
+        # Use enhanced cache if provided, otherwise create one
+        if enhanced_cache:
+            self.enhanced_cache = enhanced_cache
+        else:
+            self.enhanced_cache = EnhancedSchemaCache(
+                config=self.mcp_config,
+                default_ttl=self.mcp_config.cache_ttl
+            )
+        
+        # Legacy cache for backward compatibility
         self._schema_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
         self._cache_stats = {
@@ -190,6 +202,34 @@ class MCPSchemaManager:
         if not self.mcp_config.enable_caching:
             return
         
+        # Set in enhanced cache
+        try:
+            # Extract operation and parameters from cache key
+            parts = cache_key.split(':')
+            operation = parts[0]
+            params = {}
+            
+            for part in parts[1:]:
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    params[k] = v
+            
+            # Use asyncio.run for sync compatibility
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # We're already in an async context, create a task
+                    asyncio.create_task(self.enhanced_cache.set(operation, data, **params))
+                else:
+                    loop.run_until_complete(self.enhanced_cache.set(operation, data, **params))
+            except RuntimeError:
+                # No event loop, create one
+                asyncio.run(self.enhanced_cache.set(operation, data, **params))
+        except Exception as e:
+            logger.debug(f"Enhanced cache set failed for {cache_key}: {e}")
+        
+        # Also set in legacy cache for backward compatibility
         self._schema_cache[cache_key] = data
         self._cache_timestamps[cache_key] = datetime.now()
         
@@ -207,6 +247,40 @@ class MCPSchemaManager:
         if not self.mcp_config.enable_caching:
             return None
         
+        # Try enhanced cache first
+        try:
+            # Extract operation and parameters from cache key
+            parts = cache_key.split(':')
+            operation = parts[0]
+            params = {}
+            
+            for part in parts[1:]:
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    params[k] = v
+            
+            # Use asyncio.run for sync compatibility
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # We're already in an async context, create a task
+                    task = asyncio.create_task(self.enhanced_cache.get(operation, **params))
+                    result = None
+                    # For now, return None if we can't wait
+                else:
+                    result = loop.run_until_complete(self.enhanced_cache.get(operation, **params))
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(self.enhanced_cache.get(operation, **params))
+            
+            if result is not None:
+                self._cache_stats["hits"] += 1
+                return result
+        except Exception as e:
+            logger.debug(f"Enhanced cache lookup failed for {cache_key}: {e}")
+        
+        # Fall back to legacy cache
         if self._is_cache_valid(cache_key):
             self._cache_stats["hits"] += 1
             return self._schema_cache.get(cache_key)
