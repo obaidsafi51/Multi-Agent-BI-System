@@ -113,45 +113,49 @@ class DynamicSchemaManager:
         self._dynamic_mappings_cache = {}
         self._mapping_cache_ttl = 300  # 5 minute TTL for mapping cache
     
-    async def discover_schema(self, force_refresh: bool = False) -> SchemaInfo:
+    async def discover_schema(self, force_refresh: bool = False, fast_mode: bool = False) -> SchemaInfo:
         """
         Discover complete database schema with semantic analysis.
         
         Args:
             force_refresh: If True, bypass cache and force fresh discovery
+            fast_mode: If True, only discover primary database for quick results
             
         Returns:
             SchemaInfo containing discovered tables, columns, and metadata
         """
         try:
-            cache_key = "complete_schema"
+            cache_key = "complete_schema" if not fast_mode else "fast_schema"
             
             # Check cache first unless forced refresh
             if not force_refresh and self.cache:
                 cached_schema = await self.cache.get_schema(cache_key)
                 if cached_schema:
                     self.metrics['cache_hits'] += 1
-                    logger.info("Schema discovery cache hit")
+                    logger.info(f"Schema discovery cache hit (fast_mode={fast_mode})")
                     return cached_schema
             
             self.metrics['cache_misses'] += 1
-            logger.info("Performing fresh schema discovery")
+            logger.info(f"Performing fresh schema discovery (fast_mode={fast_mode})")
             
             # Discover schema using MCP
-            schema_info = await self._perform_schema_discovery()
+            if fast_mode:
+                schema_info = await self._perform_fast_schema_discovery()
+            else:
+                schema_info = await self._perform_schema_discovery()
             
             # Cache the result
             if self.cache:
                 await self.cache.set_schema(
                     cache_key, 
                     schema_info, 
-                    ttl=self.config['cache_ttl']
+                    ttl=3600 if fast_mode else self.config['cache_ttl']  # Fast mode cache expires sooner
                 )
             
             self.metrics['schema_discoveries'] += 1
             self.metrics['last_schema_update'] = datetime.now()
             
-            logger.info(f"Schema discovery completed: {len(schema_info.tables)} tables found")
+            logger.info(f"Schema discovery completed: {len(schema_info.tables)} tables found (fast_mode={fast_mode})")
             return schema_info
             
         except Exception as e:
@@ -160,20 +164,124 @@ class DynamicSchemaManager:
             return self._get_fallback_schema()
     
     async def _perform_schema_discovery(self) -> SchemaInfo:
-        """Perform actual schema discovery via MCP."""
+        """Perform actual schema discovery via MCP with parallel processing."""
         try:
             # Use the schema manager for discovery
             databases = await self.schema_manager.discover_databases()
             
+            # Filter out system databases that cause performance issues
+            system_databases = {'INFORMATION_SCHEMA', 'PERFORMANCE_SCHEMA', 'mysql', 'sys'}
+            filtered_databases = [db for db in databases if db.name not in system_databases]
+            
+            logger.info(f"Discovered {len(databases)} total databases, filtering to {len(filtered_databases)} user databases")
+            
             schema_info = SchemaInfo(databases=[], tables=[], version="dynamic")
             
-            for db in databases:
-                tables = await self.schema_manager.get_tables(db.name)
-                for table in tables:
-                    # Get detailed table schema
-                    table_schema = await self.schema_manager.get_table_schema(db.name, table.name)
-                    schema_info.tables.append(table_schema)
+            # Process databases in parallel with limited concurrency
+            import asyncio
+            semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent database discoveries
             
+            async def discover_database_tables(db):
+                async with semaphore:
+                    try:
+                        logger.info(f"Starting discovery for database: {db.name}")
+                        tables = await self.schema_manager.get_tables(db.name)
+                        
+                        # Process tables in parallel within each database
+                        table_semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent table schemas
+                        
+                        async def get_table_schema_safe(table):
+                            async with table_semaphore:
+                                try:
+                                    return await self.schema_manager.get_table_schema(db.name, table.name)
+                                except Exception as e:
+                                    logger.warning(f"Failed to get schema for {db.name}.{table.name}: {e}")
+                                    return None
+                        
+                        # Get all table schemas in parallel
+                        table_schemas = await asyncio.gather(
+                            *[get_table_schema_safe(table) for table in tables],
+                            return_exceptions=True
+                        )
+                        
+                        # Filter out None results and exceptions
+                        valid_schemas = [schema for schema in table_schemas 
+                                       if schema is not None and not isinstance(schema, Exception)]
+                        
+                        logger.info(f"Successfully discovered {len(valid_schemas)}/{len(tables)} tables for database {db.name}")
+                        return valid_schemas
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to discover database {db.name}: {e}")
+                        return []
+            
+            # Execute database discoveries in parallel
+            database_results = await asyncio.gather(
+                *[discover_database_tables(db) for db in filtered_databases],
+                return_exceptions=True
+            )
+            
+            # Flatten results and add to schema_info
+            for result in database_results:
+                if isinstance(result, list):
+                    schema_info.tables.extend(result)
+            
+            logger.info(f"Schema discovery completed: {len(schema_info.tables)} tables discovered")
+            return schema_info
+            
+        except Exception as e:
+            logger.warning(f"MCP schema discovery failed, using fallback: {e}")
+            return self._get_fallback_schema()
+
+    async def _perform_fast_schema_discovery(self) -> SchemaInfo:
+        """Perform fast schema discovery focusing on primary database only."""
+        try:
+            # Use the schema manager for discovery
+            databases = await self.schema_manager.discover_databases()
+            
+            # Filter out system databases and prioritize primary databases
+            system_databases = {'INFORMATION_SCHEMA', 'PERFORMANCE_SCHEMA', 'mysql', 'sys'}
+            priority_databases = ['Agentic_BI', 'agentic_bi']  # Primary business databases
+            
+            # Find priority database first
+            primary_db = None
+            for db in databases:
+                if db.name in priority_databases and db.name not in system_databases:
+                    primary_db = db
+                    break
+            
+            # If no priority database found, use first non-system database
+            if not primary_db:
+                for db in databases:
+                    if db.name not in system_databases:
+                        primary_db = db
+                        break
+            
+            if not primary_db:
+                logger.warning("No suitable database found for fast discovery")
+                return self._get_fallback_schema()
+            
+            logger.info(f"Fast discovery focusing on database: {primary_db.name}")
+            
+            schema_info = SchemaInfo(databases=[], tables=[], version="fast")
+            
+            # Fast approach: Get table list only, skip detailed schema for speed
+            tables = await self.schema_manager.get_tables(primary_db.name)
+            
+            # Convert TableInfo to basic schema representation for fast response
+            for table in tables:
+                # Create a basic table representation without full schema details
+                basic_table = type('BasicTable', (), {
+                    'name': table.name,
+                    'database': primary_db.name,
+                    'type': table.type,
+                    'rows': table.rows,
+                    'size_mb': table.size_mb,
+                    'columns': []  # Empty for fast mode - avoid slow schema calls
+                })()
+                schema_info.tables.append(basic_table)
+            
+            logger.info(f"Fast schema discovery completed: {len(tables)} tables from {primary_db.name} (basic info only)")
             return schema_info
             
         except Exception as e:

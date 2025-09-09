@@ -38,17 +38,24 @@ try:
     from schema_management.configuration_manager import ConfigurationManager
     DYNAMIC_SCHEMA_AVAILABLE = True
 except ImportError as e:
+    # Configure logging first so we can use logger in exception handler
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    logger = logging.getLogger(__name__)
     logger.warning(f"Dynamic schema management not available: {e}")
     DYNAMIC_SCHEMA_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure logging (if not already configured)
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
 logger = logging.getLogger(__name__)
 
 # Rate limiting
@@ -258,14 +265,21 @@ async def health():
         try:
             import aiohttp
             mcp_server_url = os.getenv("TIDB_MCP_SERVER_URL", "http://tidb-mcp-server:8000")
-            timeout = aiohttp.ClientTimeout(total=5)
+            timeout = aiohttp.ClientTimeout(total=15)  # Increased timeout for busy server
             
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(f"{mcp_server_url}/health") as response:
                     if response.status == 200:
                         health_status["services"]["database"] = "healthy"
                     else:
+                        logger.warning(f"MCP Server returned status {response.status}")
                         health_status["services"]["database"] = "unhealthy"
+        except asyncio.TimeoutError:
+            logger.error("MCP Server health check timed out (15s timeout)")
+            health_status["services"]["database"] = "unhealthy"
+        except aiohttp.ClientError as e:
+            logger.error(f"MCP Server connection error: {e}")
+            health_status["services"]["database"] = "unhealthy"
         except Exception as e:
             logger.error(f"MCP Server health check failed: {e}")
             health_status["services"]["database"] = "unhealthy"
@@ -730,8 +744,8 @@ async def get_user_profile(request: Request):
 @app.get("/api/schema/discovery")
 async def get_schema_discovery():
     """
-    API endpoint for schema discovery using dynamic schema management.
-    Returns discovered tables, columns, and semantic mappings.
+    API endpoint for complete schema discovery using dynamic schema management.
+    Returns discovered tables, columns, and semantic mappings from all databases.
     """
     if not dynamic_schema_manager:
         raise HTTPException(
@@ -740,11 +754,20 @@ async def get_schema_discovery():
         )
     
     try:
-        # Perform fresh schema discovery
-        schema_info = await dynamic_schema_manager.discover_schema(force_refresh=True)
+        # Add timeout to prevent hanging
+        import asyncio
         
-        # Get schema manager metrics
-        metrics = dynamic_schema_manager.get_metrics()
+        # Perform fresh schema discovery with timeout (increased for large schemas)
+        schema_info = await asyncio.wait_for(
+            dynamic_schema_manager.discover_schema(force_refresh=True),
+            timeout=300.0  # 5 minute timeout for complete schema discovery across multiple databases
+        )
+        
+        # Get schema manager metrics with timeout
+        metrics = await asyncio.wait_for(
+            asyncio.create_task(asyncio.to_thread(dynamic_schema_manager.get_metrics)),
+            timeout=10.0  # 10 second timeout for metrics
+        )
         
         return {
             "success": True,
@@ -757,15 +780,154 @@ async def get_schema_discovery():
                         "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
                     }
                     for table in schema_info.tables[:10]  # Limit for response size
-                ],
-                "discovery_timestamp": datetime.now().isoformat()
+                ]
             },
-            "metrics": metrics
+            "metrics": metrics,
+            "discovery_timestamp": schema_info.discovery_timestamp.isoformat() if schema_info.discovery_timestamp else None
         }
         
+    except asyncio.TimeoutError:
+        logger.error("Schema discovery timed out")
+        raise HTTPException(status_code=504, detail="Schema discovery timed out")
     except Exception as e:
         logger.error(f"Schema discovery failed: {e}")
         raise HTTPException(status_code=500, detail=f"Schema discovery failed: {str(e)}")
+
+
+@app.get("/api/schema/discovery/fast")
+async def get_fast_schema_discovery():
+    """
+    API endpoint for fast schema discovery using dynamic schema management.
+    Returns discovered tables from primary database only for quick results.
+    """
+    if not dynamic_schema_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Dynamic schema management not available"
+        )
+    
+    try:
+        # Add timeout to prevent hanging
+        import asyncio
+        
+        # Perform fast schema discovery with shorter timeout
+        schema_info = await asyncio.wait_for(
+            dynamic_schema_manager.discover_schema(force_refresh=True, fast_mode=True),
+            timeout=60.0  # 1 minute timeout for fast discovery
+        )
+        
+        # Get schema manager metrics with timeout
+        metrics = await asyncio.wait_for(
+            asyncio.create_task(asyncio.to_thread(dynamic_schema_manager.get_metrics)),
+            timeout=5.0  # 5 second timeout for metrics
+        )
+        
+        return {
+            "success": True,
+            "mode": "fast",
+            "schema": {
+                "version": schema_info.version,
+                "tables_count": len(schema_info.tables),
+                "tables": [
+                    {
+                        "name": table.name,
+                        "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
+                    }
+                    for table in schema_info.tables  # Show all tables for fast mode
+                ]
+            },
+            "metrics": metrics,
+            "discovery_timestamp": schema_info.discovery_timestamp.isoformat() if schema_info.discovery_timestamp else None
+        }
+        
+    except asyncio.TimeoutError:
+        logger.error("Fast schema discovery timed out")
+        raise HTTPException(status_code=504, detail="Fast schema discovery timed out")
+    except Exception as e:
+        logger.error(f"Fast schema discovery failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Fast schema discovery failed: {str(e)}")
+
+
+@app.get("/api/schema/discovery/{database_name}")
+async def get_database_schema_discovery(database_name: str):
+    """
+    API endpoint for database-specific schema discovery.
+    Returns discovered tables from a specific database only.
+    """
+    if not dynamic_schema_manager:
+        raise HTTPException(
+            status_code=503, 
+            detail="Dynamic schema management not available"
+        )
+    
+    try:
+        # Add timeout to prevent hanging
+        import asyncio
+        
+        # Get specific database schema
+        schema_manager = dynamic_schema_manager.schema_manager
+        
+        # Check if database exists
+        databases = await schema_manager.discover_databases()
+        target_db = None
+        for db in databases:
+            if db.name == database_name:
+                target_db = db
+                break
+        
+        if not target_db:
+            raise HTTPException(status_code=404, detail=f"Database '{database_name}' not found")
+        
+        # Get tables for the specific database
+        tables = await asyncio.wait_for(
+            schema_manager.get_tables(database_name),
+            timeout=30.0
+        )
+        
+        # Get table schemas in parallel
+        semaphore = asyncio.Semaphore(8)
+        
+        async def get_table_schema_safe(table):
+            async with semaphore:
+                try:
+                    return await schema_manager.get_table_schema(database_name, table.name)
+                except Exception as e:
+                    logger.warning(f"Failed to get schema for {database_name}.{table.name}: {e}")
+                    return None
+        
+        table_schemas = await asyncio.wait_for(
+            asyncio.gather(*[get_table_schema_safe(table) for table in tables], return_exceptions=True),
+            timeout=120.0  # 2 minute timeout for database-specific discovery
+        )
+        
+        # Filter out None results and exceptions
+        valid_schemas = [schema for schema in table_schemas 
+                       if schema is not None and not isinstance(schema, Exception)]
+        
+        return {
+            "success": True,
+            "database": database_name,
+            "schema": {
+                "tables_count": len(valid_schemas),
+                "tables": [
+                    {
+                        "name": table.table if hasattr(table, 'table') else table.name,
+                        "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
+                    }
+                    for table in valid_schemas
+                ]
+            },
+            "discovery_timestamp": datetime.now().isoformat()
+        }
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Database schema discovery for '{database_name}' timed out")
+        raise HTTPException(status_code=504, detail=f"Database schema discovery for '{database_name}' timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database schema discovery for '{database_name}' failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Database schema discovery failed: {str(e)}")
 
 
 @app.get("/api/schema/mappings/{metric_type}")

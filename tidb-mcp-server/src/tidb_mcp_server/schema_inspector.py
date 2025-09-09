@@ -134,7 +134,7 @@ class SchemaInspector:
                     TABLE_NAME as name,
                     TABLE_TYPE as type,
                     ENGINE as engine,
-                    TABLE_ROWS as rows,
+                    TABLE_ROWS as row_count,
                     ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) as size_mb,
                     TABLE_COMMENT as comment
                 FROM INFORMATION_SCHEMA.TABLES 
@@ -150,7 +150,7 @@ class SchemaInspector:
                     name=row['name'],
                     type=row['type'],
                     engine=row['engine'] or 'Unknown',
-                    rows=row['rows'],
+                    rows=row['row_count'],
                     size_mb=row['size_mb'],
                     comment=row['comment'] or ''
                 )

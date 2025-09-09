@@ -7,6 +7,59 @@ import asyncio
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
+from src.visualization_agent import VisualizationAgent
+from src.models import VisualizationRequest, ChartType
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Global visualization agent instance
+viz_agent: Optional[VisualizationAgent] = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup and shutdown"""
+    global viz_agent
+    
+    # Startup
+    logger.info("Starting Visualization Agent...")
+    
+    try:
+        # Initialize Visualization Agent
+        viz_agent = VisualizationAgent()
+        logger.info("Visualization Agent started successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to start Visualization Agent: {e}")
+        raise
+    
+    yield
+    
+    # Shutdown
+    if viz_agent:
+        logger.info("Visualization Agent stopped")
+
+import asyncio
+import logging
+import os
+import sys
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
@@ -47,7 +100,7 @@ class VisualizeResponse(BaseModel):
 
 # Global references
 viz_agent: Optional[VisualizationAgent] = None
-app = FastAPI(title="Visualization Agent API", version="1.0.0")
+app = FastAPI(title="Visualization Agent API", version="1.0.0", lifespan=lifespan)
 
 # Add CORS middleware
 app.add_middleware(
@@ -57,30 +110,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize Visualization Agent on startup"""
-    global viz_agent
-    
-    logger.info("Starting Visualization Agent...")
-    
-    try:
-        # Initialize Visualization Agent
-        viz_agent = VisualizationAgent()
-        logger.info("Visualization Agent started successfully")
-        
-    except Exception as e:
-        logger.error(f"Failed to start Visualization Agent: {e}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup Visualization Agent on shutdown"""
-    global viz_agent
-    
-    if viz_agent:
-        logger.info("Visualization Agent stopped")
 
 @app.post("/visualize", response_model=VisualizeResponse)
 async def create_visualization(request: VisualizeRequest) -> VisualizeResponse:
