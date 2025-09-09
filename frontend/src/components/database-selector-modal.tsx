@@ -30,7 +30,12 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
   // Fetch databases when modal opens
   useEffect(() => {
     if (isOpen && databases.length === 0) {
-      fetchDatabases();
+      // Add debounce to prevent rapid calls
+      const timeoutId = setTimeout(() => {
+        fetchDatabases();
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
     }
   }, [isOpen, databases.length]);
 

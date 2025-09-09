@@ -2,12 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { BentoGridCard, ChatMessage, QuerySuggestion } from "@/types/dashboard";
 import { apiService, QueryRequest, QueryResponse } from "@/lib/api";
 
-interface FinancialData {
-  revenue?: number;
-  net_profit?: number;
-  operating_expenses?: number;
-}
-
 interface UseRealDataReturn {
   // State
   chatMessages: ChatMessage[];
@@ -59,124 +53,142 @@ export function useRealData(): UseRealDataReturn {
 
   const loadInitialDashboard = useCallback(async () => {
     try {
-      // Get sample data to create initial cards
-      const sampleData = await apiService.getDatabaseSampleData();
+      // Check if we already have cached data to avoid redundant calls
+      const cacheKey = 'dashboard_initial_data';
+      const cachedData = sessionStorage.getItem(cacheKey);
       
+      if (cachedData) {
+        try {
+          const parsed = JSON.parse(cachedData);
+          if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
+            console.log("Using cached dashboard data");
+            setBentoCards(parsed.cards);
+            return;
+          }
+        } catch (e) {
+          console.warn("Failed to parse cached data:", e);
+        }
+      }
+
       const initialCards: BentoGridCard[] = [];
       
-      // Create KPI cards from financial overview or use fallback data
-      if (sampleData.tables.financial_overview && 
-          sampleData.tables.financial_overview.sample_data.length > 0 &&
-          !sampleData.tables.financial_overview.error) {
-        const finData = sampleData.tables.financial_overview.sample_data[0] as FinancialData;
+      try {
+        // Query real revenue data
+        const revenueResponse = await apiService.processQuery({
+          query: "Show me total revenue for the last 6 months",
+          context: { user_id: "dashboard_init" }
+        });
         
-        if (finData?.revenue) {
+        if (revenueResponse.result?.data && revenueResponse.result.data.length > 0) {
+          const latestRevenue = revenueResponse.result.data[revenueResponse.result.data.length - 1] as Record<string, unknown>;
+          const revenueValue = latestRevenue.revenue || latestRevenue.total_revenue || 0;
+          
           initialCards.push(apiService.transformToKpiCard(
-            { value: finData.revenue, change_percent: 12.5 },
+            { value: Number(revenueValue), change_percent: 12.5 },
             "Revenue",
             { row: 0, col: 0 }
           ));
         }
+      } catch (error) {
+        console.warn("Failed to fetch revenue data:", error);
+      }
+
+      try {
+        // Query real profit data
+        const profitResponse = await apiService.processQuery({
+          query: "Show me net profit for the current period",
+          context: { user_id: "dashboard_init" }
+        });
         
-        if (finData?.net_profit) {
+        if (profitResponse.result?.data && profitResponse.result.data.length > 0) {
+          const latestProfit = profitResponse.result.data[profitResponse.result.data.length - 1] as Record<string, unknown>;
+          const profitValue = latestProfit.net_profit || latestProfit.profit || 0;
+          
           initialCards.push(apiService.transformToKpiCard(
-            { value: finData.net_profit, change_percent: -3.2 },
+            { value: Number(profitValue), change_percent: -3.2 },
             "Net Profit",
             { row: 0, col: 1 }
           ));
         }
+      } catch (error) {
+        console.warn("Failed to fetch profit data:", error);
+      }
+
+      try {
+        // Query real expenses data
+        const expensesResponse = await apiService.processQuery({
+          query: "Show me operating expenses for the current period",
+          context: { user_id: "dashboard_init" }
+        });
         
-        if (finData?.operating_expenses) {
+        if (expensesResponse.result?.data && expensesResponse.result.data.length > 0) {
+          const latestExpenses = expensesResponse.result.data[expensesResponse.result.data.length - 1] as Record<string, unknown>;
+          const expensesValue = latestExpenses.operating_expenses || latestExpenses.expenses || 0;
+          
           initialCards.push(apiService.transformToKpiCard(
-            { value: finData.operating_expenses, change_percent: 5.8 },
+            { value: Number(expensesValue), change_percent: 5.8 },
             "Operating Expenses",
             { row: 1, col: 0 }
           ));
         }
-      } else {
-        // Use fallback/mock data when database connection fails
-        console.warn("Using fallback financial data due to database connectivity issues");
-        
-        initialCards.push(apiService.transformToKpiCard(
-          { value: 1250000, change_percent: 12.5 },
-          "Revenue",
-          { row: 0, col: 0 }
-        ));
-        
-        initialCards.push(apiService.transformToKpiCard(
-          { value: 245000, change_percent: -3.2 },
-          "Net Profit",
-          { row: 0, col: 1 }
-        ));
-        
-        initialCards.push(apiService.transformToKpiCard(
-          { value: 1005000, change_percent: 5.8 },
-          "Operating Expenses",
-          { row: 1, col: 0 }
-        ));
+      } catch (error) {
+        console.warn("Failed to fetch expenses data:", error);
       }
-      
-      // Create table card from investments data or use fallback
-      if (sampleData.tables.investments && 
-          sampleData.tables.investments.sample_data.length > 0 &&
-          !sampleData.tables.investments.error) {
-        initialCards.push(apiService.transformToTableCard(
-          sampleData.tables.investments.sample_data,
-          ["investment_name", "roi_percentage", "status"],
-          "Top Investments",
-          { row: 1, col: 1 }
-        ));
-      } else {
-        // Use fallback investments data
-        console.warn("Using fallback investment data due to database connectivity issues");
+
+      try {
+        // Query real investments data
+        const investmentsResponse = await apiService.processQuery({
+          query: "Show me top 5 investments by ROI",
+          context: { user_id: "dashboard_init" }
+        });
         
-        const fallbackInvestments = [
-          { investment_name: "Investment Hughes-Young", roi_percentage: 19.29, status: "terminated" },
-          { investment_name: "Investment Peters-Gill", roi_percentage: 15.16, status: "terminated" }
-        ];
-        
-        initialCards.push(apiService.transformToTableCard(
-          fallbackInvestments,
-          ["investment_name", "roi_percentage", "status"],
-          "Top Investments",
-          { row: 1, col: 1 }
-        ));
-      }
-      
-      // Add a Financial Chart card to demonstrate chart functionality
-      const demoQueryResponse: QueryResponse = {
-        query_id: "demo_chart",
-        intent: { metric_type: "revenue", time_period: "monthly", aggregation_level: "monthly", visualization_hint: "line_chart" },
-        result: {
-          data: [
-            { period: "2025-01", revenue: 1200000 },
-            { period: "2025-02", revenue: 1350000 },
-            { period: "2025-03", revenue: 1180000 },
-            { period: "2025-04", revenue: 1420000 },
-            { period: "2025-05", revenue: 1380000 }
-          ],
-          columns: ["period", "revenue"],
-          row_count: 5,
-          processing_time_ms: 50
-        },
-        visualization: {
-          chart_type: "line",
-          title: "Financial Chart",
-          config: { responsive: true }
+        if (investmentsResponse.result?.data && investmentsResponse.result.data.length > 0) {
+          initialCards.push(apiService.transformToTableCard(
+            investmentsResponse.result.data,
+            investmentsResponse.result.columns,
+            "Top Investments",
+            { row: 1, col: 1 }
+          ));
         }
-      };
+      } catch (error) {
+        console.warn("Failed to fetch investments data:", error);
+      }
+
+      // Add revenue trend chart with real data
+      try {
+        const chartResponse = await apiService.processQuery({
+          query: "Show me monthly revenue trend for the last 6 months",
+          context: { user_id: "dashboard_init" }
+        });
+        
+        if (chartResponse.result?.data && chartResponse.result.data.length > 0) {
+          initialCards.push(apiService.transformToChartCard(
+            chartResponse,
+            { row: 0, col: 2 }
+          ));
+        }
+      } catch (error) {
+        console.warn("Failed to fetch chart data:", error);
+      }
       
-      initialCards.push(apiService.transformToChartCard(
-        demoQueryResponse,
-        { row: 0, col: 2 }
-      ));
+      // If no real data was loaded, show empty dashboard
+      if (initialCards.length === 0) {
+        console.warn("No real data available, showing empty dashboard");
+      }
       
       setBentoCards(initialCards);
       
+      // Cache the successful result
+      if (initialCards.length > 0) {
+        sessionStorage.setItem(cacheKey, JSON.stringify({
+          cards: initialCards,
+          timestamp: Date.now()
+        }));
+      }
+      
     } catch (err) {
       console.error("Failed to load initial dashboard:", err);
-      // Don't set error for initial dashboard load - just use empty dashboard
-      // This prevents the error dialog from showing on page load
+      // Show empty dashboard instead of fallback data
       setBentoCards([]);
     }
   }, []);
@@ -219,7 +231,20 @@ export function useRealData(): UseRealDataReturn {
 
   // Initialize with welcome message and load initial data
   useEffect(() => {
-    initializeData();
+    // Prevent double initialization in React Strict Mode (development)
+    let mounted = true;
+    
+    const initialize = async () => {
+      if (mounted) {
+        await initializeData();
+      }
+    };
+    
+    initialize();
+    
+    return () => {
+      mounted = false;
+    };
   }, [initializeData]);
 
   const getNextAvailablePosition = useCallback((): { row: number; col: number } => {

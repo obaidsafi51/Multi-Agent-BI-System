@@ -34,22 +34,11 @@ export interface QueryResponse {
   };
 }
 
-export interface DatabaseSampleData {
-  connection_status: string;
-  database_info: {
-    name: string;
-    type: string;
-  };
-  tables: Record<string, {
-    total_records: number;
-    sample_data: unknown[];
-    sample_count: number;
-    error?: string;
-  }>;
-}
+
 
 class ApiService {
   private baseUrl: string;
+  private requestCache: Map<string, Promise<unknown>> = new Map();
 
   constructor() {
     this.baseUrl = API_BASE_URL;
@@ -76,6 +65,35 @@ class ApiService {
     } catch (error) {
       console.error(`API request failed for ${url}:`, error);
       throw error;
+    }
+  }
+
+  private async fetchWithDeduplication<T>(
+    url: string,
+    options: RequestInit = {},
+    cacheKey?: string
+  ): Promise<T> {
+    // Create cache key from URL and method
+    const key = cacheKey || `${options.method || 'GET'}:${url}`;
+    
+    // Check if request is already in flight
+    if (this.requestCache.has(key)) {
+      console.log(`Deduplicating request: ${key}`);
+      return this.requestCache.get(key) as Promise<T>;
+    }
+    
+    // Create and cache the request promise
+    const requestPromise = this.fetchWithErrorHandling<T>(url, options);
+    this.requestCache.set(key, requestPromise);
+    
+    try {
+      const result = await requestPromise;
+      return result;
+    } finally {
+      // Clean up cache after request completes
+      setTimeout(() => {
+        this.requestCache.delete(key);
+      }, 1000); // Keep cache for 1 second to catch rapid duplicate calls
     }
   }
 
@@ -127,11 +145,7 @@ class ApiService {
     );
   }
 
-  async getDatabaseSampleData(): Promise<DatabaseSampleData> {
-    return this.fetchWithErrorHandling<DatabaseSampleData>(
-      `${this.baseUrl}/api/database/sample-data`
-    );
-  }
+
 
   async testDatabase(): Promise<Record<string, unknown>> {
     return this.fetchWithErrorHandling(
