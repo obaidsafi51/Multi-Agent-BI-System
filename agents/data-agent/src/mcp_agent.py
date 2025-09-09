@@ -6,9 +6,11 @@ Integrates with TiDB MCP Server through Model Context Protocol for database oper
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+import structlog
 
 from .mcp_client import get_mcp_client, close_mcp_client
 from .query.generator import get_query_generator
@@ -16,7 +18,7 @@ from .query.validator import get_data_validator
 from .cache.manager import get_cache_manager, close_cache_manager
 from .optimization.optimizer import get_query_optimizer
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class MCPDataAgent:
@@ -33,6 +35,9 @@ class MCPDataAgent:
         self.cache_manager = None
         self.query_optimizer = None
         self.is_initialized = False
+        
+        # Get database name from environment variable
+        self.default_database = os.getenv('TIDB_DATABASE', 'Agentic_BI')
         
         # Performance metrics
         self.metrics = {
@@ -59,7 +64,7 @@ class MCPDataAgent:
                 logger.warning("Failed to connect to TiDB MCP Server, will retry on first request")
             
             # Initialize other components
-            self.query_generator = get_query_generator()
+            self.query_generator = get_query_generator(default_database=self.default_database)
             self.data_validator = get_data_validator()
             self.cache_manager = await get_cache_manager()
             self.query_optimizer = get_query_optimizer()
@@ -228,16 +233,19 @@ class MCPDataAgent:
                 }
             }
     
-    async def discover_schema(self, database: str = "Agentic_BI") -> Dict[str, Any]:
+    async def discover_schema(self, database: str = None) -> Dict[str, Any]:
         """
         Discover database schema using MCP protocol.
         
         Args:
-            database: Database name to discover
+            database: Database name to discover (defaults to environment TIDB_DATABASE)
             
         Returns:
             Dictionary containing schema information
         """
+        if database is None:
+            database = self.default_database
+            
         try:
             logger.info("Discovering schema via MCP", database=database)
             
@@ -257,7 +265,7 @@ class MCPDataAgent:
             
             # Get detailed schema for key tables
             detailed_schemas = {}
-            financial_tables = ['financial_overview', 'cash_flow', 'budget_tracking', 'investments', 'financial_ratios']
+            financial_tables = ['revenue', 'expenses', 'cashflow', 'cfo_kpis', 'pnl_statement', 'balance_Sheet']
             
             for table_info in tables:
                 table_name = table_info['name']
@@ -281,7 +289,7 @@ class MCPDataAgent:
     async def get_sample_data(
         self, 
         table_name: str, 
-        database: str = "Agentic_BI",
+        database: str = None,
         limit: int = 10
     ) -> Dict[str, Any]:
         """
@@ -289,12 +297,15 @@ class MCPDataAgent:
         
         Args:
             table_name: Name of the table
-            database: Database name
+            database: Database name (defaults to environment TIDB_DATABASE)
             limit: Number of sample rows
             
         Returns:
             Dictionary containing sample data
         """
+        if database is None:
+            database = self.default_database
+            
         try:
             logger.info("Getting sample data via MCP", table=table_name, database=database, limit=limit)
             
@@ -449,16 +460,16 @@ class MCPDataAgent:
             tags.append(f"metric:{metric_type}")
         
         # Add table-based tags
-        if metric_type in ['revenue', 'profit', 'expenses']:
-            tags.append('table:financial_overview')
-        elif 'cash_flow' in metric_type:
-            tags.append('table:cash_flow')
-        elif 'budget' in metric_type:
-            tags.append('table:budget_tracking')
-        elif 'investment' in metric_type:
-            tags.append('table:investments')
-        elif 'ratio' in metric_type:
-            tags.append('table:financial_ratios')
+        if metric_type in ['revenue', 'sales', 'income']:
+            tags.append('table:revenue')
+        elif metric_type in ['expenses', 'costs']:
+            tags.append('table:expenses')
+        elif 'cash_flow' in metric_type or 'cash' in metric_type:
+            tags.append('table:cashflow')
+        elif 'profit' in metric_type or 'pnl' in metric_type:
+            tags.append('table:pnl_statement')
+        elif 'kpi' in metric_type:
+            tags.append('table:cfo_kpis')
         
         # Add time-based tags
         time_period = query_intent.get('time_period', '')

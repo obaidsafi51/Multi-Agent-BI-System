@@ -10,6 +10,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Dict, Any, Optional
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -37,6 +38,25 @@ logging.basicConfig(
     stream=sys.stdout
 )
 
+# Configure structlog
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.processors.JSONRenderer()
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=True,
+)
+
 logger = logging.getLogger(__name__)
 
 # Pydantic models
@@ -58,22 +78,13 @@ class QueryExecuteResponse(BaseModel):
 
 # Global references
 data_agent = None
-app = FastAPI(title="Data Agent API", version="1.0.0")
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize Data Agent on startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan events"""
     global data_agent
     
+    # Startup
     logger.info(f"Starting Data Agent (MCP mode: {USE_MCP})...")
     
     try:
@@ -88,18 +99,27 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start Data Agent: {e}")
         raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup Data Agent on shutdown"""
-    global data_agent
     
+    yield
+    
+    # Shutdown
     if data_agent:
         if USE_MCP:
             await close_mcp_data_agent()
         else:
             await close_data_agent()
         logger.info("Data Agent stopped")
+
+app = FastAPI(title="Data Agent API", version="1.0.0", lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/execute", response_model=QueryExecuteResponse)
 async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
