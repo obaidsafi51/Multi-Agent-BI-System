@@ -13,8 +13,12 @@ from .config import MCPSchemaConfig, SchemaValidationConfig
 from .enhanced_cache import EnhancedSchemaCache
 from .models import (
     DatabaseInfo, TableInfo, ColumnInfo, TableSchema, ValidationResult,
-    ValidationError, ValidationWarning, ValidationSeverity, CacheStats
+    ValidationError, ValidationWarning, ValidationSeverity, CacheStats,
+    QueryIntent, QueryContext, QueryResult
 )
+from .semantic_mapper import SemanticSchemaMapper, SemanticMappingConfig
+from .query_builder import IntelligentQueryBuilder
+from .change_detector import SchemaChangeDetector
 
 # Import monitoring components
 try:
@@ -98,7 +102,9 @@ class MCPSchemaManager:
         mcp_config: Optional[MCPSchemaConfig] = None,
         validation_config: Optional[SchemaValidationConfig] = None,
         enable_monitoring: bool = True,
-        enhanced_cache: Optional[EnhancedSchemaCache] = None
+        enhanced_cache: Optional[EnhancedSchemaCache] = None,
+        enable_semantic_mapping: bool = True,
+        enable_change_detection: bool = True
     ):
         """
         Initialize MCP Schema Manager.
@@ -108,6 +114,8 @@ class MCPSchemaManager:
             validation_config: Schema validation configuration
             enable_monitoring: Whether to enable monitoring and observability
             enhanced_cache: Enhanced cache instance (optional)
+            enable_semantic_mapping: Whether to enable semantic mapping capabilities
+            enable_change_detection: Whether to enable schema change detection
         """
         self.mcp_config = mcp_config or MCPSchemaConfig.from_env()
         self.validation_config = validation_config or SchemaValidationConfig.from_env()
@@ -121,6 +129,31 @@ class MCPSchemaManager:
                 config=self.mcp_config,
                 default_ttl=self.mcp_config.cache_ttl
             )
+        
+        # Initialize Phase 2 components
+        self.enable_semantic_mapping = enable_semantic_mapping
+        self.enable_change_detection = enable_change_detection
+        
+        if self.enable_semantic_mapping:
+            semantic_config = SemanticMappingConfig.from_env()
+            self.semantic_mapper = SemanticSchemaMapper(config=semantic_config)
+            self.query_builder = IntelligentQueryBuilder(
+                schema_manager=self,
+                semantic_mapper=self.semantic_mapper
+            )
+            logger.info("Initialized semantic mapping and intelligent query building")
+        else:
+            self.semantic_mapper = None
+            self.query_builder = None
+        
+        if self.enable_change_detection:
+            self.change_detector = SchemaChangeDetector(
+                schema_manager=self,
+                cache_manager=self.enhanced_cache
+            )
+            logger.info("Initialized schema change detection")
+        else:
+            self.change_detector = None
         
         # Legacy cache for backward compatibility
         self._schema_cache: Dict[str, Dict[str, Any]] = {}
@@ -163,19 +196,33 @@ class MCPSchemaManager:
     
     async def connect(self) -> bool:
         """
-        Connect to the MCP server.
+        Connect to the MCP server and start Phase 2 services.
         
         Returns:
             True if connection successful, False otherwise
         """
         try:
-            return await self.client.connect()
+            success = await self.client.connect()
+            
+            if success and self.enable_change_detection and self.change_detector:
+                # Start schema change monitoring
+                await self.change_detector.start_monitoring()
+                logger.info("Started schema change monitoring")
+            
+            return success
         except Exception as e:
             logger.error(f"Failed to connect MCP Schema Manager: {e}")
             return False
     
     async def disconnect(self):
-        """Disconnect from the MCP server."""
+        """Disconnect from the MCP server and stop Phase 2 services."""
+        try:
+            if self.enable_change_detection and self.change_detector:
+                await self.change_detector.stop_monitoring()
+                logger.info("Stopped schema change monitoring")
+        except Exception as e:
+            logger.error(f"Error stopping change detection: {e}")
+        
         await self.client.disconnect()
     
     def _get_cache_key(self, operation: str, **kwargs) -> str:
@@ -824,3 +871,402 @@ class MCPSchemaManager:
                 logger.error(f"Error in monitoring loop: {e}")
                 # Wait a bit before retrying
                 await asyncio.sleep(60)
+    
+    # Phase 2 Methods: Semantic Understanding and Query Intelligence
+    
+    async def map_business_term_to_schema(
+        self,
+        business_term: str,
+        context: Optional[str] = None,
+        filter_criteria: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Map a business term to database schema elements using semantic analysis.
+        
+        Args:
+            business_term: Business term to map (e.g., 'revenue', 'customer')
+            context: Optional context to improve mapping accuracy
+            filter_criteria: Optional criteria to filter schema elements
+            
+        Returns:
+            List of semantic mappings with confidence scores
+        """
+        if not self.enable_semantic_mapping or not self.semantic_mapper:
+            logger.warning("Semantic mapping is not enabled")
+            return []
+        
+        try:
+            # Discover current schema for analysis
+            await self._ensure_schema_analyzed()
+            
+            # Perform semantic mapping
+            mappings = await self.semantic_mapper.map_business_term(
+                business_term,
+                context=context,
+                schema_filter=filter_criteria
+            )
+            
+            # Convert to serializable format
+            result = []
+            for mapping in mappings:
+                result.append({
+                    'business_term': mapping.business_term,
+                    'schema_element_type': mapping.schema_element_type,
+                    'schema_element_path': mapping.schema_element_path,
+                    'confidence_score': mapping.confidence_score,
+                    'similarity_type': mapping.similarity_type,
+                    'context_match': mapping.context_match,
+                    'metadata': mapping.metadata,
+                    'created_at': mapping.created_at.isoformat()
+                })
+            
+            logger.info(f"Mapped '{business_term}' to {len(result)} schema elements")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to map business term '{business_term}': {e}")
+            return []
+    
+    async def build_intelligent_query(
+        self,
+        query_intent: Dict[str, Any],
+        query_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Build an intelligent SQL query from natural language intent.
+        
+        Args:
+            query_intent: Parsed query intent with metrics, filters, etc.
+            query_context: Query context with user info, preferences, etc.
+            
+        Returns:
+            Query result with SQL, confidence score, and metadata
+        """
+        if not self.enable_semantic_mapping or not self.query_builder:
+            logger.warning("Intelligent query building is not enabled")
+            return {
+                'success': False,
+                'error': 'Intelligent query building is not available',
+                'sql': '',
+                'confidence_score': 0.0
+            }
+        
+        try:
+            # Convert dictionaries to proper objects
+            intent = QueryIntent(
+                metric_type=query_intent.get('metric_type', ''),
+                filters=query_intent.get('filters', {}),
+                time_period=query_intent.get('time_period'),
+                aggregation_type=query_intent.get('aggregation_type', 'sum'),
+                group_by=query_intent.get('group_by', []),
+                order_by=query_intent.get('order_by'),
+                limit=query_intent.get('limit'),
+                confidence=query_intent.get('confidence', 0.0),
+                parsed_entities=query_intent.get('parsed_entities', {})
+            )
+            
+            context = QueryContext(
+                user_id=query_context.get('user_id', ''),
+                session_id=query_context.get('session_id', ''),
+                query_history=query_context.get('query_history', []),
+                available_schemas=query_context.get('available_schemas', []),
+                user_preferences=query_context.get('user_preferences', {}),
+                business_context=query_context.get('business_context')
+            )
+            
+            # Build the query
+            result = await self.query_builder.build_query(intent, context)
+            
+            # Convert result to serializable format
+            return {
+                'success': True,
+                'sql': result.sql,
+                'parameters': result.parameters,
+                'estimated_rows': result.estimated_rows,
+                'optimization_hints': result.optimization_hints,
+                'alternative_queries': result.alternative_queries,
+                'confidence_score': result.confidence_score,
+                'processing_time_ms': result.processing_time_ms,
+                'used_mappings': [
+                    {
+                        'business_term': m.business_term,
+                        'schema_element_path': m.schema_element_path,
+                        'confidence_score': m.confidence_score
+                    }
+                    for m in result.used_mappings
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to build intelligent query: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'sql': '',
+                'confidence_score': 0.0
+            }
+    
+    async def get_schema_change_history(
+        self,
+        database: Optional[str] = None,
+        table: Optional[str] = None,
+        change_types: Optional[List[str]] = None,
+        severity_levels: Optional[List[str]] = None,
+        since: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get schema change history with optional filtering.
+        
+        Args:
+            database: Filter by database name
+            table: Filter by table name
+            change_types: Filter by change types
+            severity_levels: Filter by severity levels
+            since: Filter by changes since this ISO datetime string
+            limit: Maximum number of changes to return
+            
+        Returns:
+            List of schema changes
+        """
+        if not self.enable_change_detection or not self.change_detector:
+            logger.warning("Schema change detection is not enabled")
+            return []
+        
+        try:
+            # Convert string parameters to proper types
+            change_type = None
+            if change_types and len(change_types) == 1:
+                from .change_detector import ChangeType
+                try:
+                    change_type = ChangeType(change_types[0])
+                except ValueError:
+                    pass
+            
+            severity = None
+            if severity_levels and len(severity_levels) == 1:
+                from .change_detector import ChangeSeverity
+                try:
+                    severity = ChangeSeverity(severity_levels[0])
+                except ValueError:
+                    pass
+            
+            since_dt = None
+            if since:
+                try:
+                    since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
+                except ValueError:
+                    pass
+            
+            # Get filtered changes
+            changes = self.change_detector.get_change_history(
+                database=database,
+                table=table,
+                change_type=change_type,
+                severity=severity,
+                since=since_dt,
+                limit=limit
+            )
+            
+            # Convert to serializable format
+            result = []
+            for change in changes:
+                result.append({
+                    'change_id': change.change_id,
+                    'change_type': change.change_type.value,
+                    'severity': change.severity.value,
+                    'database': change.database,
+                    'table': change.table,
+                    'element_name': change.element_name,
+                    'old_definition': change.old_definition,
+                    'new_definition': change.new_definition,
+                    'detected_at': change.detected_at.isoformat(),
+                    'impact_analysis': change.impact_analysis,
+                    'migration_suggestions': change.migration_suggestions,
+                    'affected_queries': change.affected_queries
+                })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get schema change history: {e}")
+            return []
+    
+    async def force_schema_change_check(self) -> Dict[str, Any]:
+        """
+        Force an immediate check for schema changes.
+        
+        Returns:
+            Dictionary with check results
+        """
+        if not self.enable_change_detection or not self.change_detector:
+            return {
+                'success': False,
+                'error': 'Schema change detection is not enabled',
+                'changes_detected': 0
+            }
+        
+        try:
+            changes = await self.change_detector.force_schema_check()
+            
+            return {
+                'success': True,
+                'changes_detected': len(changes),
+                'changes': [
+                    {
+                        'change_type': c.change_type.value,
+                        'severity': c.severity.value,
+                        'database': c.database,
+                        'table': c.table,
+                        'element_name': c.element_name
+                    }
+                    for c in changes
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to force schema change check: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'changes_detected': 0
+            }
+    
+    async def get_semantic_mapping_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about semantic mapping performance.
+        
+        Returns:
+            Dictionary with semantic mapping statistics
+        """
+        if not self.enable_semantic_mapping or not self.semantic_mapper:
+            return {
+                'enabled': False,
+                'message': 'Semantic mapping is not enabled'
+            }
+        
+        try:
+            return {
+                'enabled': True,
+                **self.semantic_mapper.get_mapping_statistics()
+            }
+        except Exception as e:
+            logger.error(f"Failed to get semantic mapping statistics: {e}")
+            return {
+                'enabled': True,
+                'error': str(e)
+            }
+    
+    async def get_change_detection_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about schema change detection.
+        
+        Returns:
+            Dictionary with change detection statistics
+        """
+        if not self.enable_change_detection or not self.change_detector:
+            return {
+                'enabled': False,
+                'message': 'Schema change detection is not enabled'
+            }
+        
+        try:
+            return {
+                'enabled': True,
+                **self.change_detector.get_change_statistics()
+            }
+        except Exception as e:
+            logger.error(f"Failed to get change detection statistics: {e}")
+            return {
+                'enabled': True,
+                'error': str(e)
+            }
+    
+    async def _ensure_schema_analyzed(self):
+        """Ensure that current database schemas have been analyzed for semantic mapping."""
+        try:
+            databases = await self.discover_databases()
+            
+            for database in databases:
+                if database.accessible:
+                    tables = await self.get_tables(database.name)
+                    
+                    for table in tables:
+                        table_schema = await self.get_table_schema(database.name, table.name)
+                        if table_schema and self.semantic_mapper:
+                            # Analyze table schema for semantic information
+                            await self.semantic_mapper.analyze_table_schema(table_schema)
+            
+            logger.debug("Schema analysis completed for semantic mapping")
+            
+        except Exception as e:
+            logger.error(f"Failed to ensure schema analyzed: {e}")
+    
+    def learn_from_successful_query(
+        self,
+        business_term: str,
+        schema_element_path: str,
+        success_score: float = 1.0
+    ):
+        """
+        Learn from a successful query to improve future semantic mappings.
+        
+        Args:
+            business_term: Business term that was successfully mapped
+            schema_element_path: Schema element that was successfully used
+            success_score: Score indicating how successful the mapping was (0.0 to 1.0)
+        """
+        if not self.enable_semantic_mapping or not self.semantic_mapper:
+            logger.warning("Semantic mapping is not enabled - cannot learn from successful query")
+            return
+        
+        try:
+            from .semantic_mapper import SemanticMapping
+            
+            # Create a mapping object for learning
+            mapping = SemanticMapping(
+                business_term=business_term,
+                schema_element_type='column',  # Assume column for now
+                schema_element_path=schema_element_path,
+                confidence_score=0.8,  # Base confidence
+                similarity_type='learned',
+                context_match=True,
+                metadata={'learned_from_query': True},
+                created_at=datetime.now()
+            )
+            
+            # Learn from this successful mapping
+            self.semantic_mapper.learn_successful_mapping(mapping, success_score)
+            
+            logger.info(f"Learned from successful mapping: '{business_term}' -> '{schema_element_path}'")
+            
+        except Exception as e:
+            logger.error(f"Failed to learn from successful query: {e}")
+    
+    def add_schema_change_listener(self, listener_func):
+        """
+        Add a listener function to be notified of schema changes.
+        
+        Args:
+            listener_func: Function to call when schema changes are detected
+        """
+        if not self.enable_change_detection or not self.change_detector:
+            logger.warning("Schema change detection is not enabled - cannot add listener")
+            return
+        
+        self.change_detector.add_change_listener(listener_func)
+        logger.info("Added schema change listener")
+    
+    def remove_schema_change_listener(self, listener_func):
+        """
+        Remove a schema change listener function.
+        
+        Args:
+            listener_func: Function to remove from listeners
+        """
+        if not self.enable_change_detection or not self.change_detector:
+            logger.warning("Schema change detection is not enabled - cannot remove listener")
+            return
+        
+        self.change_detector.remove_change_listener(listener_func)
+        logger.info("Removed schema change listener")

@@ -183,6 +183,82 @@ class CacheStats:
     newest_entry_age_seconds: int
 
 
+@dataclass
+class SemanticMapping:
+    """Represents a semantic mapping between a business term and schema element."""
+    business_term: str
+    schema_element_type: str  # 'table', 'column', 'index'
+    schema_element_path: str  # e.g., 'database.table.column'
+    confidence_score: float
+    similarity_type: str  # 'semantic', 'fuzzy', 'exact', 'learned'
+    context_match: bool
+    metadata: Dict[str, Any]
+    created_at: datetime
+
+
+@dataclass
+class BusinessTerm:
+    """Represents a business term with its variants and context."""
+    primary_term: str
+    synonyms: List[str]
+    category: str  # e.g., 'financial', 'operational', 'customer'
+    description: Optional[str]
+    context_keywords: List[str]
+    usage_frequency: int = 0
+
+
+@dataclass
+class SchemaElement:
+    """Enhanced schema element with semantic metadata."""
+    element_type: str  # 'table', 'column', 'index'
+    full_path: str
+    name: str
+    description: Optional[str]
+    semantic_tags: List[str]
+    business_concepts: List[str]
+    data_type: Optional[str]
+    sample_values: Optional[List[str]]
+    usage_patterns: Dict[str, Any]
+
+
+@dataclass
+class QueryIntent:
+    """Represents the intent extracted from a natural language query."""
+    metric_type: str
+    filters: Dict[str, Any]
+    time_period: Optional[str]
+    aggregation_type: str  # 'sum', 'count', 'avg', 'max', 'min'
+    group_by: List[str]
+    order_by: Optional[str]
+    limit: Optional[int]
+    confidence: float
+    parsed_entities: Dict[str, Any]
+
+
+@dataclass
+class QueryContext:
+    """Context information for query building."""
+    user_id: str
+    session_id: str
+    query_history: List[str]
+    available_schemas: List[str]
+    user_preferences: Dict[str, Any]
+    business_context: Optional[str]
+
+
+@dataclass
+class QueryResult:
+    """Result of intelligent query building."""
+    sql: str
+    parameters: Dict[str, Any]
+    estimated_rows: Optional[int]
+    optimization_hints: List[str]
+    alternative_queries: List[str]
+    confidence_score: float
+    processing_time_ms: int
+    used_mappings: List[SemanticMapping]
+
+
 # Serialization and deserialization utilities
 class SchemaModelEncoder(json.JSONEncoder):
     """Custom JSON encoder for schema models."""
