@@ -270,14 +270,41 @@ class DynamicSchemaManager:
             
             # Convert TableInfo to basic schema representation for fast response
             for table in tables:
-                # Create a basic table representation without full schema details
+                # Get essential column information for NLP context (but skip complex details)
+                columns = []
+                try:
+                    # Get basic column info with timeout to keep it fast
+                    table_schema = await asyncio.wait_for(
+                        self.schema_manager.get_table_schema(primary_db.name, table.name),
+                        timeout=5.0  # 5 second timeout per table
+                    )
+                    if table_schema and table_schema.columns:
+                        # Extract essential column info (name, type, nullable)
+                        columns = [
+                            {
+                                'name': col.name,
+                                'type': str(col.type) if hasattr(col, 'type') else 'unknown',
+                                'nullable': getattr(col, 'nullable', True),
+                                'primary_key': getattr(col, 'primary_key', False)
+                            }
+                            for col in table_schema.columns[:15]  # Limit to first 15 columns for speed
+                        ]
+                        logger.debug(f"Retrieved {len(columns)} columns for {table.name}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"Column discovery timeout for {table.name}, using empty columns")
+                    columns = []
+                except Exception as e:
+                    logger.warning(f"Column discovery failed for {table.name}: {e}")
+                    columns = []
+                
+                # Create a basic table representation with essential column info
                 basic_table = type('BasicTable', (), {
                     'name': table.name,
                     'database': primary_db.name,
                     'type': table.type,
                     'rows': table.rows,
                     'size_mb': table.size_mb,
-                    'columns': []  # Empty for fast mode - avoid slow schema calls
+                    'columns': columns  # Include basic column info for NLP context
                 })()
                 schema_info.tables.append(basic_table)
             
