@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -69,22 +70,13 @@ class QueryResponse(BaseModel):
 nlp_agent: Optional[NLPAgent] = None
 dynamic_schema_manager = None
 intelligent_query_builder = None
-app = FastAPI(title="NLP Agent API", version="1.0.0")
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize NLP Agent and Dynamic Schema Management on startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup and shutdown"""
     global nlp_agent, dynamic_schema_manager, intelligent_query_builder
     
+    # Startup
     logger.info("Starting NLP Agent with Dynamic Schema Management...")
     
     # Validate environment variables
@@ -118,15 +110,24 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start NLP Agent: {e}")
         raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup NLP Agent on shutdown"""
-    global nlp_agent
     
+    yield
+    
+    # Shutdown
     if nlp_agent:
         await nlp_agent.stop()
         logger.info("NLP Agent stopped")
+
+app = FastAPI(title="NLP Agent API", version="1.0.0", lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/process", response_model=QueryResponse)
 async def process_query(request: QueryRequest) -> QueryResponse:
@@ -169,6 +170,9 @@ async def process_query(request: QueryRequest) -> QueryResponse:
         # Generate SQL query from intent using dynamic schema management
         sql_query = await generate_sql_from_intent_dynamic(query_context.intent)
         
+        # Get dynamic schema context
+        schema_context = await get_dynamic_schema_context()
+        
         # Build response
         response = QueryResponse(
             success=True,
@@ -190,11 +194,7 @@ async def process_query(request: QueryRequest) -> QueryResponse:
                 "entities": [entity.dict() for entity in query_context.entities] if query_context.entities else [],
                 "ambiguities": query_context.ambiguities,
                 "clarifications": query_context.clarifications,
-                "schema_context": {
-                    "tables": ["financial_overview", "cash_flow", "budget_tracking", "investments", "financial_ratios"],
-                    "metrics": ["revenue", "profit", "expenses", "cash_flow", "roi"],
-                    "time_periods": ["daily", "weekly", "monthly", "quarterly", "yearly"]
-                }
+                "schema_context": schema_context
             },
             processing_time_ms=result.processing_time_ms
         )
@@ -212,6 +212,71 @@ async def process_query(request: QueryRequest) -> QueryResponse:
             processing_time_ms=processing_time,
             error=str(e)
         )
+
+async def get_dynamic_schema_context() -> Dict[str, Any]:
+    """
+    Get dynamic schema context from the schema manager.
+    
+    Returns:
+        Dictionary containing tables, metrics, and time periods discovered from schema
+    """
+    global dynamic_schema_manager
+    
+    try:
+        if dynamic_schema_manager:
+            # Get current schema information using fast mode for quicker response
+            schema_info = await dynamic_schema_manager.discover_schema(fast_mode=True)
+            
+            if schema_info and schema_info.databases:
+                # Extract table names and metrics
+                tables = []
+                metrics = set()
+                time_periods = ["daily", "weekly", "monthly", "quarterly", "yearly"]  # Standard periods
+                
+                for db_name, db_info in schema_info.databases.items():
+                    for table_name, table_info in db_info.tables.items():
+                        tables.append(table_name)
+                        
+                        # Extract potential metrics from column names
+                        for column in table_info.columns:
+                            column_name = column.name.lower()
+                            # Common financial metrics
+                            if any(metric in column_name for metric in [
+                                'revenue', 'profit', 'income', 'expense', 'cost', 'cash', 'flow',
+                                'roi', 'margin', 'sales', 'amount', 'value', 'total', 'balance'
+                            ]):
+                                metrics.add(column_name)
+                
+                logger.info(f"Dynamic schema context discovered: {len(tables)} tables, {len(metrics)} metrics")
+                return {
+                    "tables": sorted(tables),
+                    "metrics": sorted(list(metrics)),
+                    "time_periods": time_periods,
+                    "schema_source": "dynamic_discovery",
+                    "last_updated": datetime.now().isoformat()
+                }
+        
+        # Fallback to static schema context
+        logger.warning("Using fallback static schema context")
+        return {
+            "tables": ["financial_overview", "cash_flow", "budget_tracking", "investments", "financial_ratios"],
+            "metrics": ["revenue", "profit", "expenses", "cash_flow", "roi"],
+            "time_periods": ["daily", "weekly", "monthly", "quarterly", "yearly"],
+            "schema_source": "static_fallback",
+            "last_updated": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting dynamic schema context: {e}")
+        # Return minimal fallback context
+        return {
+            "tables": [],
+            "metrics": [],
+            "time_periods": ["daily", "weekly", "monthly", "quarterly", "yearly"],
+            "schema_source": "error_fallback",
+            "error": str(e),
+            "last_updated": datetime.now().isoformat()
+        }
 
 async def generate_sql_from_intent_dynamic(intent) -> str:
     """
@@ -379,6 +444,23 @@ async def health_check():
             except Exception as e:
                 schema_status["query_builder_metrics_error"] = str(e)
         
+        # Test dynamic schema context function
+        try:
+            test_schema_context = await get_dynamic_schema_context()
+            schema_status["schema_context_test"] = {
+                "success": True,
+                "source": test_schema_context.get("schema_source", "unknown"),
+                "tables_count": len(test_schema_context.get("tables", [])),
+                "metrics_count": len(test_schema_context.get("metrics", [])),
+                "sample_tables": test_schema_context.get("tables", [])[:3],  # First 3 tables
+                "sample_metrics": test_schema_context.get("metrics", [])[:3]  # First 3 metrics
+            }
+        except Exception as e:
+            schema_status["schema_context_test"] = {
+                "success": False,
+                "error": str(e)
+            }
+        
         health_status["dynamic_schema_management"] = schema_status
         
         return health_status
@@ -386,6 +468,23 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/test-schema-context")
+async def test_schema_context():
+    """Test endpoint to verify dynamic schema context works"""
+    try:
+        schema_context = await get_dynamic_schema_context()
+        return {
+            "success": True,
+            "schema_context": schema_context,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @app.get("/status")
 async def get_status():

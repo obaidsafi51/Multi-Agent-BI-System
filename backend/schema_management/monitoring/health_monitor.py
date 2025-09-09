@@ -83,7 +83,7 @@ class MCPHealthMonitor:
     def __init__(
         self,
         check_interval_seconds: int = 30,
-        connectivity_timeout: int = 5,
+        connectivity_timeout: int = 15,
         performance_threshold_ms: float = 1000.0,
         cache_hit_rate_threshold: float = 70.0,
         validation_success_threshold: float = 95.0,

@@ -259,6 +259,16 @@ class QueryResult:
     used_mappings: List[SemanticMapping]
 
 
+@dataclass
+class SchemaInfo:
+    """Complete schema information containing databases and tables."""
+    databases: List[DatabaseInfo]
+    tables: List[TableInfo]
+    version: str
+    discovery_timestamp: Optional[datetime] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
 # Serialization and deserialization utilities
 class SchemaModelEncoder(json.JSONEncoder):
     """Custom JSON encoder for schema models."""

@@ -8,6 +8,7 @@ between agents and the MCP server via standard HTTP requests.
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -56,11 +57,38 @@ class ClearCacheRequest(BaseModel):
 # Global MCP server instance
 mcp_server: Optional[TiDBMCPServer] = None
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown"""
+    global mcp_server
+    
+    # Startup
+    try:
+        logger.info("Starting TiDB MCP Server HTTP API...")
+        
+        # Just start the HTTP API - initialization will be done via /admin/initialize
+        
+        logger.info("TiDB MCP Server HTTP API started successfully")
+        
+    except Exception as e:
+        logger.error(f"Failed to start TiDB MCP Server HTTP API: {e}")
+        raise
+    
+    yield
+    
+    # Shutdown
+    if mcp_server:
+        await mcp_server.shutdown()
+        logger.info("TiDB MCP Server HTTP API stopped")
+
+
 # Create FastAPI app
 app = FastAPI(
     title="TiDB MCP Server HTTP API",
     description="HTTP API wrapper for TiDB MCP Server tools",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -122,23 +150,6 @@ async def get_mcp_status():
     return status
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize MCP server on startup"""
-    global mcp_server
-    
-    try:
-        logger.info("Starting TiDB MCP Server HTTP API...")
-        
-        # Just start the HTTP API - initialization will be done via /admin/initialize
-        
-        logger.info("TiDB MCP Server HTTP API started successfully")
-        
-    except Exception as e:
-        logger.error(f"Failed to start TiDB MCP Server HTTP API: {e}")
-        raise
-
-
 async def start_mcp_server():
     """Start the MCP server in background"""
     global mcp_server
@@ -147,16 +158,6 @@ async def start_mcp_server():
             await mcp_server.start()
     except Exception as e:
         logger.error(f"MCP server startup failed: {e}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    global mcp_server
-    
-    if mcp_server:
-        await mcp_server.shutdown()
-        logger.info("TiDB MCP Server HTTP API stopped")
 
 
 # HTTP endpoints for MCP tools
