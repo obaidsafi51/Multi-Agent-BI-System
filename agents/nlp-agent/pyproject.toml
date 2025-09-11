@@ -1,22 +1,20 @@
 [project]
-name = "ai-cfo-nlp-agent"
-version = "0.1.0"
-description = "NLP Agent with KIMI integration for AI CFO BI Agent"
+name = "nlp-agent"
+version = "2.0.0"
+description = "NLP Agent with KIMI integration and MCP context sharing"
 authors = [
-    {name = "AI CFO Team", email = "team@ai-cfo.com"}
+    {name = "Your Name", email = "your.email@example.com"}
 ]
 dependencies = [
-    "pydantic>=2.8.0",
-    "redis>=5.0.1",
-    "pika>=1.3.2",
-    "httpx>=0.25.2",
-    "aiohttp>=3.9.0",
-    "fastapi>=0.104.1",
-    "uvicorn>=0.24.0",
-    "spacy>=3.7.2",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "httpx>=0.25.0",
+    "pydantic>=2.4.0", 
     "python-dotenv>=1.0.0",
-    "orjson>=3.9.10",
-    "structlog>=23.2.0",
+    "asyncio-mqtt>=0.11.1",
+    "redis>=5.0.0",
+    "aiofiles>=23.2.1",
+    "structlog>=23.2.0"
 ]
 requires-python = ">=3.11"
 

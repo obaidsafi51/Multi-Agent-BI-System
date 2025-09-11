@@ -1,4 +1,4 @@
-"""Main NLP Agent service with KIMI integration and MCP context sharing"""
+"""Simplified NLP Agent focused on core responsibilities with MCP integration"""
 
 import asyncio
 import json
@@ -12,76 +12,95 @@ from .kimi_client import KimiClient, KimiAPIError
 from .models import ProcessingResult, QueryContext
 from .query_parser import QueryParser
 from .mcp_context_client import get_mcp_context_client
+from .mcp_client import get_mcp_client
 
 logger = logging.getLogger(__name__)
 
 
 class NLPAgent:
-    """NLP Agent with KIMI integration and MCP context sharing for financial query processing"""
+    """
+    Simplified NLP Agent focused on core responsibilities:
+    - Natural language parsing with KIMI
+    - Intent extraction and entity recognition 
+    - Context building for other agents
+    - MCP server communication for database operations
+    """
     
     def __init__(
         self,
         kimi_api_key: Optional[str] = None,
-        redis_url: Optional[str] = None
+        mcp_server_url: Optional[str] = None
     ):
-        # Initialize KIMI client
+        # Initialize KIMI client for natural language processing
         self.kimi_client = KimiClient(api_key=kimi_api_key)
         
         # Initialize query parser and context builder
         self.query_parser = QueryParser(self.kimi_client)
         self.context_builder = ContextBuilder()
         
-        # MCP Context Client for context sharing
+        # MCP Context Client for context sharing between agents
         self.mcp_context_client = get_mcp_context_client()
         
-        # Backend URL for cached schema access
-        self.backend_url = os.getenv("BACKEND_URL", "http://backend:8001")
+        # MCP Client for database operations
+        self.mcp_client = get_mcp_client(
+            base_url=mcp_server_url or os.getenv("MCP_SERVER_URL", "http://tidb-mcp-server:8000")
+        )
         
         # Agent configuration
         self.agent_id = f"nlp-agent-{uuid.uuid4().hex[:8]}"
         self.is_running = False
         
-        logger.info(f"NLP Agent initialized with ID: {self.agent_id}")
+        logger.info(f"Simplified NLP Agent initialized with ID: {self.agent_id}")
 
-    async def get_cached_schema(self) -> Dict[str, Any]:
-        """Get schema from backend cache for fast access"""
+    async def get_schema_context(self) -> Dict[str, Any]:
+        """Get schema context from MCP server for query processing"""
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.backend_url}/api/schema/cached",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        schema_data = await response.json()
-                        if schema_data.get("success"):
-                            logger.info(f"Schema loaded from {schema_data.get('source', 'unknown')}")
-                            return schema_data.get("schema", {})
-                        else:
-                            logger.warning(f"Schema fetch failed: {schema_data.get('error', 'Unknown error')}")
-                            return {}
-                    else:
-                        logger.error(f"Schema endpoint returned {response.status}")
-                        return {}
+            logger.info("Fetching schema context from MCP server...")
+            
+            # Build comprehensive schema context using MCP server
+            schema_context = await self.mcp_client.build_schema_context()
+            
+            logger.info(f"Schema context retrieved: {len(schema_context.get('tables', []))} tables, "
+                       f"{len(schema_context.get('metrics', []))} metrics")
+            
+            return schema_context
+            
         except Exception as e:
-            logger.error(f"Failed to fetch cached schema: {e}")
-            return {}
+            logger.error(f"Failed to fetch schema context from MCP server: {e}")
+            
+            # Return minimal fallback context
+            return {
+                "databases": {},
+                "tables": [],
+                "metrics": [],
+                "timestamp": asyncio.get_event_loop().time(),
+                "source": "fallback",
+                "error": str(e)
+            }
     
     async def start(self):
         """Start the NLP Agent"""
         try:
-            logger.info("Starting NLP Agent...")
+            logger.info("Starting simplified NLP Agent...")
+            
+            # Test connection to MCP server
+            mcp_connected = await self.mcp_client.connect()
+            if not mcp_connected:
+                logger.warning("MCP server connection failed - will use fallback mode")
+            else:
+                logger.info("Successfully connected to MCP server")
             
             # Initialize MCP context connection
             await self._init_mcp_context()
             
             # Verify KIMI API connectivity
             if not await self.kimi_client.health_check():
-                raise Exception("KIMI API health check failed")
-            logger.info("KIMI API health check passed")
+                logger.warning("KIMI API health check failed - NLP parsing may be limited")
+            else:
+                logger.info("KIMI API health check passed")
             
             self.is_running = True
-            logger.info("NLP Agent started successfully")
+            logger.info("Simplified NLP Agent started successfully")
             
         except Exception as e:
             logger.error(f"Failed to start NLP Agent: {e}")
@@ -121,19 +140,25 @@ class NLPAgent:
         session_id: str,
         context: Optional[Dict[str, Any]] = None
     ) -> ProcessingResult:
-        """Process a natural language query and store context via MCP"""
+        """
+        Process a natural language query using simplified architecture:
+        1. Parse intent with KIMI
+        2. Get schema context from MCP server 
+        3. Generate SQL using MCP server
+        4. Build context for other agents
+        """
         query_id = f"q_{uuid.uuid4().hex[:8]}"
         
         try:
             logger.info(f"Processing query {query_id}: {query}")
             
-            # Get cached schema context first
-            schema_context = await self.get_cached_schema()
+            # Step 1: Get schema context from MCP server
+            schema_context = await self.get_schema_context()
             
-            # Retrieve session context for continuity
+            # Step 2: Retrieve session context for continuity
             session_context = await self.mcp_context_client.get_session_context(session_id)
             
-            # Create initial query context
+            # Step 3: Create initial query context
             query_context = QueryContext(
                 query_id=query_id,
                 user_id=user_id,
@@ -143,16 +168,19 @@ class NLPAgent:
                 session_context=session_context
             )
             
-            # Parse query using KIMI with schema context
+            # Step 4: Parse query intent using KIMI with schema context
             try:
                 intent = await self.query_parser.parse_intent(query, query_context, schema_context)
-                logger.info(f"Query intent parsed for {query_id}: {intent.metric_type} (with schema context)")
+                logger.info(f"Query intent parsed for {query_id}: {intent.metric_type}")
             except KimiAPIError as e:
                 logger.error(f"KIMI API error for query {query_id}: {e}")
                 # Fallback to basic parsing
                 intent = self._fallback_intent_parsing(query)
             
-            # Build comprehensive context including schema
+            # Step 5: Generate SQL query using MCP server
+            sql_query = await self._generate_sql_with_mcp(query, intent, schema_context)
+            
+            # Step 6: Build comprehensive context for other agents
             comprehensive_context = self.context_builder.build_query_context(
                 query=query,
                 intent=intent,
@@ -161,10 +189,7 @@ class NLPAgent:
                 schema_context=schema_context
             )
             
-            # Generate SQL query
-            sql_query = self.context_builder.generate_sql_query(intent, comprehensive_context)
-            
-            # Store context via MCP for other agents
+            # Step 7: Store context via MCP for other agents
             await self._store_mcp_context(query_context, intent, comprehensive_context, sql_query)
             
             # Create processing result
@@ -178,7 +203,7 @@ class NLPAgent:
                 processing_time_ms=0  # Will be calculated by caller
             )
             
-            logger.info(f"Query {query_id} processed successfully")
+            logger.info(f"Query {query_id} processed successfully with MCP integration")
             return result
             
         except Exception as e:
@@ -195,6 +220,81 @@ class NLPAgent:
                 mcp_context_stored=False,
                 processing_time_ms=0
             )
+    
+    async def _generate_sql_with_mcp(
+        self,
+        query: str,
+        intent,
+        schema_context: Dict[str, Any]
+    ) -> str:
+        """Generate SQL query using MCP server's LLM tools"""
+        try:
+            # Prepare schema information for SQL generation
+            schema_info = self._format_schema_for_llm(schema_context)
+            
+            # Use MCP server's SQL generation tool
+            result = await self.mcp_client.generate_sql(
+                natural_language_query=query,
+                schema_info=schema_info,
+                examples=None  # Could add examples based on intent
+            )
+            
+            if result and result.get("success"):
+                sql_query = result.get("sql", "")
+                
+                # Validate the generated SQL
+                is_valid = await self.mcp_client.validate_query(sql_query)
+                if is_valid:
+                    logger.info(f"Generated and validated SQL query via MCP server")
+                    return sql_query
+                else:
+                    logger.warning("Generated SQL failed validation, using fallback")
+                    return self._fallback_sql_generation(intent)
+            else:
+                logger.warning("MCP SQL generation failed, using fallback")
+                return self._fallback_sql_generation(intent)
+                
+        except Exception as e:
+            logger.error(f"Error generating SQL with MCP: {e}")
+            return self._fallback_sql_generation(intent)
+    
+    def _format_schema_for_llm(self, schema_context: Dict[str, Any]) -> str:
+        """Format schema context for LLM consumption"""
+        try:
+            schema_lines = ["Database Schema Information:"]
+            
+            # Add available tables
+            tables = schema_context.get("tables", [])
+            if tables:
+                schema_lines.append(f"\nAvailable Tables: {', '.join(tables[:10])}")  # Limit to 10 tables
+            
+            # Add available metrics
+            metrics = schema_context.get("metrics", [])
+            if metrics:
+                schema_lines.append(f"\nAvailable Metrics: {', '.join(metrics[:20])}")  # Limit to 20 metrics
+            
+            # Add database information
+            databases = schema_context.get("databases", {})
+            if databases:
+                schema_lines.append(f"\nDatabases: {', '.join(databases.keys())}")
+            
+            return "\n".join(schema_lines)
+            
+        except Exception as e:
+            logger.error(f"Error formatting schema for LLM: {e}")
+            return "Schema information unavailable"
+    
+    def _fallback_sql_generation(self, intent) -> str:
+        """Simple fallback SQL generation when MCP server is unavailable"""
+        metric_type = getattr(intent, 'metric_type', 'revenue')
+        
+        # Very basic SQL templates
+        if metric_type == "revenue":
+            return "SELECT period_date, SUM(revenue) as revenue FROM financial_overview WHERE period_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) GROUP BY period_date ORDER BY period_date"
+        elif metric_type == "profit":
+            return "SELECT period_date, SUM(net_income) as profit FROM financial_overview WHERE period_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) GROUP BY period_date ORDER BY period_date"
+        else:
+            return "SELECT period_date, SUM(revenue) as revenue FROM financial_overview WHERE period_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) GROUP BY period_date ORDER BY period_date"
     
     async def _store_mcp_context(
         self,
@@ -297,11 +397,24 @@ class NLPAgent:
                 "error": str(e)
             }
         
+        # Check MCP server connection
+        try:
+            mcp_healthy = await self.mcp_client.health_check()
+            health_status["components"]["mcp_server"] = {
+                "status": "healthy" if mcp_healthy else "unhealthy",
+                "connected": self.mcp_client.is_connected
+            }
+        except Exception as e:
+            health_status["components"]["mcp_server"] = {
+                "status": "error",
+                "error": str(e)
+            }
+        
         # Check MCP context store
         try:
-            mcp_healthy = await self.mcp_context_client.health_check()
+            mcp_context_healthy = await self.mcp_context_client.health_check()
             health_status["components"]["mcp_context_store"] = {
-                "status": "healthy" if mcp_healthy else "unhealthy",
+                "status": "healthy" if mcp_context_healthy else "unhealthy",
                 "connected": self.mcp_context_client.is_connected
             }
         except Exception as e:
