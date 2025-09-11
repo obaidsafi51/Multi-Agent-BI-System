@@ -1,6 +1,6 @@
-# TiDB MCP Server
+# Universal MCP Server
 
-A Model Context Protocol (MCP) server that provides secure, efficient access to TiDB Cloud databases with comprehensive caching, performance monitoring, and rate limiting capabilities.
+A comprehensive Model Context Protocol (MCP) server that provides secure, efficient access to multiple AI tools including TiDB Cloud databases and LLM services, with comprehensive caching, performance monitoring, and rate limiting capabilities.
 
 ## Features
 

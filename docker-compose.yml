@@ -60,19 +60,28 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # NLP Agent with KIMI Integration
+  # NLP Agent with Optimized Performance Features
   nlp-agent:
     build:
       context: .
       dockerfile: agents/nlp-agent/Dockerfile
     ports:
       - "8002:8001"
+      - "8012:8012"  # WebSocket port
     env_file:
       - .env
     environment:
       - KIMI_API_KEY=${KIMI_API_KEY}
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - MCP_SERVER_URL=http://tidb-mcp-server:8000
+      - BACKEND_WS_URL=ws://backend:8001/ws
+      - ENABLE_WEBSOCKETS=true
+      - ENABLE_ADVANCED_CACHING=true
+      - CONNECTION_POOL_MIN=3
+      - CONNECTION_POOL_MAX=15
+      - CACHE_L1_TTL=300
+      - CACHE_L2_TTL=1800
     # Remove volumes mount to avoid permission issues
     # volumes:
     #   - ./agents/nlp-agent:/app
@@ -174,6 +183,12 @@ services:
 
       # HTTP API Configuration
       - USE_HTTP_API=${USE_HTTP_API:-true}
+
+      # LLM Configuration (using KIMI API)
+      - LLM_API_KEY=sk-5Y8bNUX9k7kQDYIMBSkAr3NUcc0TPeSYoXglhb6fTe9dCElX
+      - LLM_BASE_URL=https://api.moonshot.cn/v1
+      - LLM_MODEL=kimi-k2-0905-preview
+      - LLM_TOOLS_ENABLED=true
 
       # Logging Configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

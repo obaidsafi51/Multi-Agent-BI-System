@@ -1,8 +1,9 @@
 """
-TiDB MCP Server implementation with error handling and logging.
+Universal MCP Server implementation with error handling and logging.
 
-This module implements the main TiDBMCPServer class using FastMCP framework with
+This module implements the main UniversalMCPServer class using FastMCP framework with
 comprehensive error handling, logging, rate limiting, and connection management.
+Supports multiple tool categories including database operations and LLM services.
 """
 
 import asyncio
@@ -34,11 +35,16 @@ from .schema_inspector import SchemaInspector
 logger = logging.getLogger(__name__)
 
 
-class TiDBMCPServer:
+class UniversalMCPServer:
     """
-    Main TiDB MCP Server implementation with comprehensive error handling and logging.
+    Main Universal MCP Server implementation with comprehensive error handling and logging.
     
-    Provides MCP server capabilities for TiDB database access with features including:
+    Provides MCP server capabilities for multiple tool categories including:
+    - Database operations (schema discovery, querying)
+    - LLM services (text generation, analysis)
+    - Analytics and visualization tools
+    
+    Features:
     - Connection health checking and recovery
     - Rate limiting and request throttling
     - Comprehensive error handling and logging
@@ -48,7 +54,7 @@ class TiDBMCPServer:
     
     def __init__(self, config: ServerConfig):
         """
-        Initialize the TiDB MCP Server.
+        Initialize the Universal MCP Server.
         
         Args:
             config: Server configuration object
@@ -77,13 +83,16 @@ class TiDBMCPServer:
         self._last_health_check = 0
         
         self.logger.info(
-            "TiDBMCPServer initialized",
+            "UniversalMCPServer initialized",
             extra={
                 "server_name": config.mcp_server_name,
                 "server_version": config.mcp_server_version,
                 "max_connections": config.mcp_max_connections,
                 "cache_enabled": config.cache_enabled,
-                "rate_limit_rpm": config.rate_limit_requests_per_minute
+                "rate_limit_rpm": config.rate_limit_requests_per_minute,
+                "enabled_tools": config.enabled_tools,
+                "database_tools": config.database_tools_enabled,
+                "llm_tools": config.llm_tools_enabled
             }
         )
     
@@ -96,10 +105,11 @@ class TiDBMCPServer:
             MCPProtocolError: If MCP server initialization fails
         """
         try:
-            self.logger.info("Starting TiDB MCP Server initialization...")
+            self.logger.info("Starting Universal MCP Server initialization...")
             
-            # Initialize database connection with retry logic
-            await self._initialize_database_connection()
+            # Initialize database connection with retry logic (if enabled)
+            if self.config.database_tools_enabled:
+                await self._initialize_database_connection()
             
             # Initialize cache manager
             await self._initialize_cache_manager()
@@ -107,8 +117,13 @@ class TiDBMCPServer:
             # Initialize rate limiter
             await self._initialize_rate_limiter()
             
-            # Initialize schema inspector and query executor
-            await self._initialize_database_components()
+            # Initialize database components (if enabled)
+            if self.config.database_tools_enabled:
+                await self._initialize_database_components()
+            
+            # Initialize LLM components (if enabled)  
+            if self.config.llm_tools_enabled:
+                await self._initialize_llm_components()
             
             # Initialize MCP server
             await self._initialize_mcp_server()
@@ -120,10 +135,11 @@ class TiDBMCPServer:
             self._running = True
             
             self.logger.info(
-                "TiDB MCP Server started successfully",
+                "Universal MCP Server started successfully",
                 extra={
                     "startup_time_ms": (time.time() - self._start_time) * 1000,
-                    "server_status": "running"
+                    "server_status": "running",
+                    "enabled_tools": self.config.enabled_tools
                 }
             )
             
@@ -291,6 +307,20 @@ class TiDBMCPServer:
         
         self.logger.info("Database components initialized successfully")
     
+    async def _initialize_llm_components(self) -> None:
+        """Initialize LLM client and tools."""
+        self.logger.info("Initializing LLM components...")
+        
+        # Import LLM tools (lazy import to avoid circular dependencies)
+        from .llm_tools import initialize_llm_tools
+        
+        llm_config = self.config.get_llm_config()
+        
+        # Initialize LLM tools with configuration and cache manager
+        initialize_llm_tools(llm_config, self.cache_manager)
+        
+        self.logger.info("LLM components initialized successfully")
+    
     async def _initialize_mcp_server(self) -> None:
         """
         Initialize FastMCP server and register tools.
@@ -314,7 +344,8 @@ class TiDBMCPServer:
                 schema_inspector=self.schema_inspector,
                 query_executor=self.query_executor,
                 cache_manager=self.cache_manager,
-                mcp_server=self.mcp_server
+                mcp_server=self.mcp_server,
+                config=self.config
             )
             
             # Register all MCP tools

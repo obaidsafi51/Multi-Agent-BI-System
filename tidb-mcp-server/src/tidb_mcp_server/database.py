@@ -11,6 +11,10 @@ import datetime
 import decimal
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +109,10 @@ class TiDBConnection:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     # Execute the query
-                    cursor.execute(query, params or ())
+                    if params:
+                        cursor.execute(query, params)
+                    else:
+                        cursor.execute(query)
                     
                     # Determine how to fetch results based on query type
                     query_upper = query.strip().upper()

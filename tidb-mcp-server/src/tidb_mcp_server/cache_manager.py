@@ -1,8 +1,8 @@
 """
-Cache management system for TiDB MCP Server.
+Cache management system for Universal MCP Server.
 
 This module provides in-memory caching with TTL-based expiration for database
-schema information, query results, and other frequently accessed data.
+schema information, query results, LLM responses, and other frequently accessed data.
 """
 
 import time
@@ -287,6 +287,7 @@ class CacheKeyGenerator:
     PREFIX_SCHEMA = "schema"
     PREFIX_SAMPLE_DATA = "sample"
     PREFIX_QUERY = "query"
+    PREFIX_LLM = "llm"
     
     @staticmethod
     def databases_key() -> str:
@@ -347,6 +348,25 @@ class CacheKeyGenerator:
             Cache key for query results
         """
         return f"{CacheKeyGenerator.PREFIX_QUERY}:{query_hash}"
+    
+    @staticmethod
+    def llm_key(prompt: str, system_prompt: str = None, max_tokens: int = None, temperature: float = None) -> str:
+        """
+        Generate cache key for LLM requests.
+        
+        Args:
+            prompt: User prompt
+            system_prompt: System prompt
+            max_tokens: Maximum tokens
+            temperature: Temperature setting
+            
+        Returns:
+            Cache key for LLM response
+        """
+        import hashlib
+        content = f"{prompt}:{system_prompt}:{max_tokens}:{temperature}"
+        hash_value = hashlib.sha256(content.encode()).hexdigest()[:16]
+        return f"{CacheKeyGenerator.PREFIX_LLM}:{hash_value}"
     
     @staticmethod
     def database_pattern() -> str:
