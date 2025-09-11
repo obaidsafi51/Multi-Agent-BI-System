@@ -80,13 +80,12 @@ class Ambiguity(BaseModel):
 
 
 class ProcessingResult(BaseModel):
-    """Result of NLP processing"""
+    """Result of simplified NLP processing"""
     query_id: str = Field(..., description="Query identifier")
     success: bool = Field(..., description="Whether processing was successful")
     intent: Optional[QueryIntent] = Field(None, description="Extracted query intent")
     sql_query: Optional[str] = Field(None, description="Generated SQL query")
-    query_context: Optional[QueryContext] = Field(None, description="Processed query context")
+    query_context: Optional[Dict[str, Any]] = Field(None, description="Processed query context as dict")
     mcp_context_stored: bool = Field(default=False, description="Whether context was stored in MCP")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    processing_time_ms: int = Field(..., description="Processing time in milliseconds")
-    kimi_usage: Optional[Dict[str, int]] = Field(None, description="KIMI API usage stats")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    processing_time_ms: int = Field(default=0, description="Processing time in milliseconds")
