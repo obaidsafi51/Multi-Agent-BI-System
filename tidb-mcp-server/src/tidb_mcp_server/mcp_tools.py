@@ -1,9 +1,8 @@
 """
-MCP tools for TiDB MCP Server.
+MCP tools for Universal MCP Server.
 
-This module implements MCP tool functions for database operations including
-database discovery, table schema inspection, sample data retrieval, and
-query execution. All tools follow MCP specification and include proper
+This module implements MCP tool functions for database operations, LLM services,
+and other AI-powered tools. All tools follow MCP specification and include proper
 parameter validation and error handling.
 """
 
@@ -34,7 +33,8 @@ _mcp_server: FastMCP | None = None
 def initialize_tools(schema_inspector: SchemaInspector,
                     query_executor: QueryExecutor,
                     cache_manager: CacheManager,
-                    mcp_server: FastMCP) -> None:
+                    mcp_server: FastMCP,
+                    config: Any) -> None:
     """
     Initialize the MCP tools with required dependencies.
     
@@ -43,13 +43,21 @@ def initialize_tools(schema_inspector: SchemaInspector,
         query_executor: QueryExecutor instance
         cache_manager: CacheManager instance
         mcp_server: FastMCP server instance
+        config: Server configuration for tool enablement
     """
     global _schema_inspector, _query_executor, _cache_manager, _mcp_server
     _schema_inspector = schema_inspector
     _query_executor = query_executor
     _cache_manager = cache_manager
     _mcp_server = mcp_server
-    logger.info("MCP tools initialized")
+    
+    # Initialize LLM tools if enabled
+    if config.llm_tools_enabled:
+        from .llm_tools import initialize_llm_tools
+        llm_config = config.get_llm_config()
+        initialize_llm_tools(llm_config, cache_manager)
+    
+    logger.info(f"MCP tools initialized (database: {config.database_tools_enabled}, llm: {config.llm_tools_enabled})")
 
 
 def _ensure_initialized() -> None:
@@ -621,7 +629,7 @@ def register_all_tools() -> None:
     if not _mcp_server:
         raise RuntimeError("MCP server not initialized")
 
-    # Register all tools with the MCP server using proper FastMCP decorators
+    # Register database tools
     @_mcp_server.tool()
     def discover_databases_tool() -> list[dict[str, Any]]:
         """Discover all accessible databases in the TiDB instance."""
@@ -663,7 +671,41 @@ def register_all_tools() -> None:
         """Clear cached data to force fresh retrieval."""
         return _with_error_handling_and_rate_limiting(clear_cache, "clear_cache")(cache_type)
 
-    logger.info("All MCP tools registered successfully")
+    # Register LLM tools
+    try:
+        from .llm_tools import generate_text_tool, analyze_data_tool, generate_sql_tool, explain_results_tool
+
+        @_mcp_server.tool()
+        async def llm_generate_text_tool(prompt: str, system_prompt: str = None, 
+                                        max_tokens: int = None, temperature: float = None,
+                                        use_cache: bool = True) -> dict[str, Any]:
+            """Generate text using LLM."""
+            return await generate_text_tool(prompt, system_prompt, max_tokens, temperature, use_cache)
+
+        @_mcp_server.tool()
+        async def llm_analyze_data_tool(data: str, analysis_type: str = "general", 
+                                       context: str = None) -> dict[str, Any]:
+            """Analyze data using LLM."""
+            return await analyze_data_tool(data, analysis_type, context)
+
+        @_mcp_server.tool()
+        async def llm_generate_sql_tool(natural_language_query: str, schema_info: str = None,
+                                       examples: list[str] = None) -> dict[str, Any]:
+            """Generate SQL query from natural language."""
+            return await generate_sql_tool(natural_language_query, schema_info, examples)
+
+        @_mcp_server.tool()
+        async def llm_explain_results_tool(query: str, results: list[dict[str, Any]], 
+                                          context: str = None) -> dict[str, Any]:
+            """Explain query results in natural language."""
+            return await explain_results_tool(query, results, context)
+
+        logger.info("LLM tools registered successfully")
+        
+    except ImportError as e:
+        logger.warning(f"LLM tools not available: {e}")
+
+    logger.info("All available MCP tools registered successfully")
 
 
 # List of all available MCP tools for registration

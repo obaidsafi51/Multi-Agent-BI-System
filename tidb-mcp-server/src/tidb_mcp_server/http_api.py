@@ -1,8 +1,9 @@
 """
-FastAPI HTTP wrapper for TiDB MCP Server tools.
+FastAPI HTTP wrapper for Universal MCP Server tools.
 
 This module creates HTTP endpoints for MCP tools to enable communication
 between agents and the MCP server via standard HTTP requests.
+Supports both database operations and LLM services.
 """
 
 import asyncio
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from tidb_mcp_server.config import ServerConfig
-from tidb_mcp_server.mcp_server import TiDBMCPServer
+from tidb_mcp_server.mcp_server import UniversalMCPServer
 import tidb_mcp_server.mcp_tools as mcp_tools
 
 logger = logging.getLogger(__name__)
@@ -54,8 +55,35 @@ class ClearCacheRequest(BaseModel):
     cache_type: str = "all"
 
 
+# LLM request models
+class GenerateTextRequest(BaseModel):
+    prompt: str
+    system_prompt: Optional[str] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    use_cache: bool = True
+
+
+class AnalyzeDataRequest(BaseModel):
+    data: str
+    analysis_type: str = "general"
+    context: Optional[str] = None
+
+
+class GenerateSQLRequest(BaseModel):
+    natural_language_query: str
+    schema_info: Optional[str] = None
+    examples: Optional[List[str]] = None
+
+
+class ExplainResultsRequest(BaseModel):
+    query: str
+    results: List[Dict[str, Any]]
+    context: Optional[str] = None
+
+
 # Global MCP server instance
-mcp_server: Optional[TiDBMCPServer] = None
+mcp_server: Optional[UniversalMCPServer] = None
 
 
 @asynccontextmanager
@@ -112,7 +140,7 @@ async def initialize_mcp_tools():
             config = ServerConfig()
             
             # Initialize MCP server
-            mcp_server = TiDBMCPServer(config)
+            mcp_server = UniversalMCPServer(config)
             
             # Initialize just the MCP server components without starting the full server
             await mcp_server._initialize_database_connection()
@@ -270,13 +298,80 @@ async def clear_cache_endpoint(request: ClearCacheRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# LLM tool endpoints
+@app.post("/tools/llm_generate_text_tool")
+async def llm_generate_text_endpoint(request: GenerateTextRequest):
+    """Generate text using LLM"""
+    try:
+        from . import llm_tools
+        result = await llm_tools.generate_text_tool(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            use_cache=request.use_cache
+        )
+        return result
+    except Exception as e:
+        logger.error(f"llm_generate_text failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/llm_analyze_data_tool")
+async def llm_analyze_data_endpoint(request: AnalyzeDataRequest):
+    """Analyze data using LLM"""
+    try:
+        from . import llm_tools
+        result = await llm_tools.analyze_data_tool(
+            data=request.data,
+            analysis_type=request.analysis_type,
+            context=request.context
+        )
+        return result
+    except Exception as e:
+        logger.error(f"llm_analyze_data failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/llm_generate_sql_tool")
+async def llm_generate_sql_endpoint(request: GenerateSQLRequest):
+    """Generate SQL query from natural language"""
+    try:
+        from . import llm_tools
+        result = await llm_tools.generate_sql_tool(
+            natural_language_query=request.natural_language_query,
+            schema_info=request.schema_info,
+            examples=request.examples
+        )
+        return result
+    except Exception as e:
+        logger.error(f"llm_generate_sql failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/llm_explain_results_tool")
+async def llm_explain_results_endpoint(request: ExplainResultsRequest):
+    """Explain query results in natural language"""
+    try:
+        from . import llm_tools
+        result = await llm_tools.explain_results_tool(
+            query=request.query,
+            results=request.results,
+            context=request.context
+        )
+        return result
+    except Exception as e:
+        logger.error(f"llm_explain_results failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Additional endpoints for direct tool access
 
 @app.get("/tools")
 async def list_tools():
     """List all available MCP tools"""
     return {
-        "tools": [
+        "database_tools": [
             "discover_databases_tool",
             "discover_tables_tool",
             "get_table_schema_tool",
@@ -286,7 +381,13 @@ async def list_tools():
             "get_server_stats_tool",
             "clear_cache_tool"
         ],
-        "description": "Available MCP tools for TiDB operations"
+        "llm_tools": [
+            "llm_generate_text_tool",
+            "llm_analyze_data_tool", 
+            "llm_generate_sql_tool",
+            "llm_explain_results_tool"
+        ],
+        "description": "Available MCP tools for database operations and LLM services"
     }
 
 

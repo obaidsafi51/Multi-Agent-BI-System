@@ -1,4 +1,4 @@
-"""Main entry point for TiDB MCP Server with HTTP API support."""
+"""Main entry point for Universal MCP Server with HTTP API support."""
 
 import argparse
 import asyncio
@@ -12,7 +12,7 @@ import uvicorn
 
 from .config import load_config
 from .exceptions import ConfigurationError, DatabaseConnectionError
-from .mcp_server import TiDBMCPServer
+from .mcp_server import UniversalMCPServer
 
 
 def setup_logging(log_level: str, log_format: str) -> None:
@@ -42,8 +42,8 @@ def setup_logging(log_level: str, log_format: str) -> None:
 
 
 async def main_async(config=None) -> int:
-    """Async main entry point for the TiDB MCP Server with HTTP API."""
-    server: Optional[TiDBMCPServer] = None
+    """Async main entry point for the Universal MCP Server with HTTP API."""
+    server: Optional[UniversalMCPServer] = None
     
     try:
         # Load configuration if not provided
@@ -57,14 +57,15 @@ async def main_async(config=None) -> int:
         
         if use_http_api:
             logger.info(
-                f"Starting TiDB MCP Server v{config.mcp_server_version} with HTTP API "
+                f"Starting Universal MCP Server v{config.mcp_server_version} with HTTP API "
                 f"connecting to {config.tidb_host}:{config.tidb_port}",
                 extra={
                     "server_version": config.mcp_server_version,
                     "tidb_host": config.tidb_host,
                     "tidb_port": config.tidb_port,
                     "log_level": config.log_level,
-                    "http_api_enabled": True
+                    "http_api_enabled": True,
+                    "enabled_tools": config.enabled_tools
                 }
             )
             
@@ -86,14 +87,15 @@ async def main_async(config=None) -> int:
         else:
             # Original MCP protocol mode
             logger.info(
-                f"Starting TiDB MCP Server v{config.mcp_server_version} "
+                f"Starting Universal MCP Server v{config.mcp_server_version} "
                 f"connecting to {config.tidb_host}:{config.tidb_port}",
                 extra={
                     "server_version": config.mcp_server_version,
                     "tidb_host": config.tidb_host,
                     "tidb_port": config.tidb_port,
                     "log_level": config.log_level,
-                    "http_api_enabled": False
+                    "http_api_enabled": False,
+                    "enabled_tools": config.enabled_tools
                 }
             )
             
@@ -102,7 +104,7 @@ async def main_async(config=None) -> int:
             logger.info("Configuration validation successful")
             
             # Initialize and start MCP server
-            server = TiDBMCPServer(config)
+            server = UniversalMCPServer(config)
             
             # Set up signal handlers for graceful shutdown
             def signal_handler(signum, frame):

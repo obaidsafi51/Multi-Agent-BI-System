@@ -1,9 +1,64 @@
-"""Configuration management for TiDB MCP Server."""
+"""Configuration management for Universal MCP Server."""
 
 import os
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from pydantic_settings import BaseSettings
+
+
+class LLMConfig(BaseModel):
+    """LLM service configuration."""
+    
+    provider: str = Field(default="kimi", description="LLM provider name")
+    api_key: str = Field(..., description="LLM API key")
+    base_url: Optional[str] = Field(default=None, description="LLM API base URL")
+    model: str = Field(default="moonshot-v1-8k", description="LLM model name")
+    max_tokens: int = Field(default=4000, description="Maximum tokens per request")
+    temperature: float = Field(default=0.7, description="Temperature for text generation")
+    timeout: int = Field(default=30, description="Request timeout in seconds")
+    
+    @field_validator('temperature')
+    @classmethod
+    def validate_temperature(cls, v):
+        """Validate temperature is in valid range."""
+        if not 0.0 <= v <= 2.0:
+            raise ValueError('Temperature must be between 0.0 and 2.0')
+        return v
+    
+    @field_validator('max_tokens')
+    @classmethod
+    def validate_max_tokens(cls, v):
+        """Validate max tokens is positive."""
+        if v <= 0:
+            raise ValueError('Max tokens must be positive')
+        return v
+
+
+class ToolsConfig(BaseModel):
+    """Configuration for available tools."""
+    
+    enabled_tools: List[str] = Field(
+        default_factory=lambda: ["database", "llm"],
+        description="List of enabled tool categories"
+    )
+    database_tools_enabled: bool = Field(default=True, description="Enable database tools")
+    llm_tools_enabled: bool = Field(default=True, description="Enable LLM tools") 
+    analytics_tools_enabled: bool = Field(default=True, description="Enable analytics tools")
+    
+    @field_validator('enabled_tools', mode='before')
+    @classmethod
+    def validate_enabled_tools(cls, v):
+        """Validate enabled tools list. Handle comma-separated strings."""
+        if isinstance(v, str):
+            # Handle comma-separated string from environment variable
+            v = [tool.strip() for tool in v.split(',') if tool.strip()]
+        
+        valid_tools = ["database", "llm", "analytics", "visualization", "export"]
+        invalid_tools = [tool for tool in v if tool not in valid_tools]
+        if invalid_tools:
+            raise ValueError(f'Invalid tools: {invalid_tools}. Valid tools: {valid_tools}')
+        return v
+        return v
 
 
 class DatabaseConfig(BaseModel):
@@ -39,10 +94,10 @@ class DatabaseConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """MCP server configuration."""
+    """Universal MCP server configuration."""
     
-    name: str = Field(default="tidb-mcp-server", description="Server name")
-    version: str = Field(default="0.1.0", description="Server version")
+    name: str = Field(default="universal-mcp-server", description="Server name")
+    version: str = Field(default="1.0.0", description="Server version")
     max_connections: int = Field(default=10, description="Maximum concurrent connections")
     request_timeout: int = Field(default=30, description="Request timeout in seconds")
     
@@ -127,7 +182,7 @@ class SecurityConfig(BaseModel):
 
 
 class ServerConfig(BaseSettings):
-    """Main server configuration loaded from environment variables."""
+    """Main Universal MCP server configuration loaded from environment variables."""
     
     # Database configuration
     tidb_host: str = Field(..., env="TIDB_HOST")
@@ -139,9 +194,33 @@ class ServerConfig(BaseSettings):
     tidb_ssl_verify_cert: bool = Field(default=True, env="TIDB_SSL_VERIFY_CERT")
     tidb_ssl_verify_identity: bool = Field(default=True, env="TIDB_SSL_VERIFY_IDENTITY")
     
+    # LLM configuration
+    llm_provider: str = Field(default="kimi", env="LLM_PROVIDER")
+    llm_api_key: str = Field(..., env="LLM_API_KEY")
+    llm_base_url: Optional[str] = Field(default="https://api.moonshot.cn/v1", env="LLM_BASE_URL")
+    llm_model: str = Field(default="moonshot-v1-8k", env="LLM_MODEL")
+    llm_max_tokens: int = Field(default=4000, env="LLM_MAX_TOKENS")
+    llm_temperature: float = Field(default=0.7, env="LLM_TEMPERATURE")
+    llm_timeout: int = Field(default=30, env="LLM_TIMEOUT")
+    
+    # Tools configuration
+    enabled_tools_str: str = Field(
+        default="database,llm",
+        env="ENABLED_TOOLS",
+        description="Comma-separated list of enabled tools"
+    )
+    
+    @property
+    def enabled_tools(self) -> List[str]:
+        """Get enabled tools as a list."""
+        return [tool.strip() for tool in self.enabled_tools_str.split(',') if tool.strip()]
+    database_tools_enabled: bool = Field(default=True, env="DATABASE_TOOLS_ENABLED")
+    llm_tools_enabled: bool = Field(default=True, env="LLM_TOOLS_ENABLED")
+    analytics_tools_enabled: bool = Field(default=True, env="ANALYTICS_TOOLS_ENABLED")
+    
     # MCP server configuration
-    mcp_server_name: str = Field(default="tidb-mcp-server", env="MCP_SERVER_NAME")
-    mcp_server_version: str = Field(default="0.1.0", env="MCP_SERVER_VERSION")
+    mcp_server_name: str = Field(default="universal-mcp-server", env="MCP_SERVER_NAME")
+    mcp_server_version: str = Field(default="1.0.0", env="MCP_SERVER_VERSION")
     mcp_max_connections: int = Field(default=10, env="MCP_MAX_CONNECTIONS")
     mcp_request_timeout: int = Field(default=30, env="MCP_REQUEST_TIMEOUT")
     
@@ -183,6 +262,27 @@ class ServerConfig(BaseSettings):
         if v.lower() not in valid_formats:
             raise ValueError(f'Log format must be one of: {valid_formats}')
         return v.lower()
+    
+    def get_llm_config(self) -> LLMConfig:
+        """Get LLM configuration object."""
+        return LLMConfig(
+            provider=self.llm_provider,
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=self.llm_model,
+            max_tokens=self.llm_max_tokens,
+            temperature=self.llm_temperature,
+            timeout=self.llm_timeout,
+        )
+    
+    def get_tools_config(self) -> ToolsConfig:
+        """Get tools configuration object."""
+        return ToolsConfig(
+            enabled_tools=self.enabled_tools,
+            database_tools_enabled=self.database_tools_enabled,
+            llm_tools_enabled=self.llm_tools_enabled,
+            analytics_tools_enabled=self.analytics_tools_enabled,
+        )
     
     def get_database_config(self) -> DatabaseConfig:
         """Get database configuration object."""
@@ -226,13 +326,22 @@ class ServerConfig(BaseSettings):
         """Validate the complete configuration and raise errors if invalid."""
         errors = []
         
-        # Validate required database fields
-        if not self.tidb_host:
-            errors.append("TIDB_HOST is required")
-        if not self.tidb_user:
-            errors.append("TIDB_USER is required")
-        if not self.tidb_password:
-            errors.append("TIDB_PASSWORD is required")
+        # Validate required database fields if database tools are enabled
+        if self.database_tools_enabled:
+            if not self.tidb_host:
+                errors.append("TIDB_HOST is required when database tools are enabled")
+            if not self.tidb_user:
+                errors.append("TIDB_USER is required when database tools are enabled")
+            if not self.tidb_password:
+                errors.append("TIDB_PASSWORD is required when database tools are enabled")
+        
+        # Validate required LLM fields if LLM tools are enabled
+        if self.llm_tools_enabled and not self.llm_api_key:
+            errors.append("LLM_API_KEY is required when LLM tools are enabled")
+        
+        # Validate enabled tools
+        if not self.enabled_tools:
+            errors.append("At least one tool category must be enabled")
         
         # Validate SSL configuration consistency
         if self.tidb_ssl_ca and not os.path.exists(self.tidb_ssl_ca):
@@ -251,6 +360,28 @@ class ServerConfig(BaseSettings):
 def load_config() -> ServerConfig:
     """Load and validate server configuration from environment variables."""
     try:
+        # Ensure .env file is loaded - try multiple paths
+        from dotenv import load_dotenv
+        import os
+        
+        # Try to load .env from different locations
+        env_paths = [
+            ".env",  # Current directory
+            os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # Project root
+            os.path.join(os.getcwd(), ".env"),  # Working directory
+        ]
+        
+        env_loaded = False
+        for env_path in env_paths:
+            if os.path.exists(env_path):
+                load_dotenv(env_path, override=True)
+                env_loaded = True
+                print(f"Loaded environment from: {env_path}")
+                break
+        
+        if not env_loaded:
+            print("Warning: No .env file found in expected locations")
+        
         config = ServerConfig()
         config.validate_configuration()
         return config
