@@ -33,7 +33,7 @@ class LLMClient:
         """
         self.config = config
         self.cache_manager = cache_manager
-        self.base_url = config.base_url or "https://api.moonshot.cn/v1"
+        self.base_url = config.base_url or "https://api.moonshot.ai/v1"
         self.headers = {
             "Authorization": f"Bearer {config.api_key}",
             "Content-Type": "application/json"

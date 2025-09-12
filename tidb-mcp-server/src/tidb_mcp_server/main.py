@@ -69,8 +69,15 @@ async def main_async(config=None) -> int:
                 }
             )
             
-            # Start HTTP API server
+            # Start HTTP API server with WebSocket support
             from .http_api import app
+            from .websocket_server import WebSocketMCPServerManager
+            
+            # Initialize WebSocket manager
+            websocket_manager = WebSocketMCPServerManager(app)
+            
+            # Start background tasks
+            await websocket_manager.start_background_tasks()
             
             # Configure uvicorn
             uvicorn_config = uvicorn.Config(
@@ -82,7 +89,12 @@ async def main_async(config=None) -> int:
             )
             
             server_instance = uvicorn.Server(uvicorn_config)
-            await server_instance.serve()
+            
+            try:
+                await server_instance.serve()
+            finally:
+                # Stop background tasks on shutdown
+                await websocket_manager.stop_background_tasks()
             
         else:
             # Original MCP protocol mode
@@ -216,10 +228,12 @@ async def validate_config_and_connection(config) -> int:
         logger.info("✓ Configuration validation successful")
         
         # Test database connection
-        from .query_executor import QueryExecutor
-        executor = QueryExecutor(config)
+        from .database import DatabaseManager
+        db_manager = DatabaseManager()
         
-        await executor.test_connection()
+        connection_ok = db_manager.test_connection()
+        if not connection_ok:
+            raise DatabaseConnectionError("Failed to connect to TiDB database")
         logger.info("✓ Database connection test successful")
         
         return 0

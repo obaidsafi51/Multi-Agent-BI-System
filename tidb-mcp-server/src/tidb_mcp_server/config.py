@@ -197,7 +197,7 @@ class ServerConfig(BaseSettings):
     # LLM configuration
     llm_provider: str = Field(default="kimi", env="LLM_PROVIDER")
     llm_api_key: str = Field(..., env="LLM_API_KEY")
-    llm_base_url: Optional[str] = Field(default="https://api.moonshot.cn/v1", env="LLM_BASE_URL")
+    llm_base_url: Optional[str] = Field(default="https://api.moonshot.ai/v1", env="LLM_BASE_URL")
     llm_model: str = Field(default="moonshot-v1-8k", env="LLM_MODEL")
     llm_max_tokens: int = Field(default=4000, env="LLM_MAX_TOKENS")
     llm_temperature: float = Field(default=0.7, env="LLM_TEMPERATURE")
@@ -357,33 +357,94 @@ class ServerConfig(BaseSettings):
             raise ValueError(f"Configuration validation failed: {'; '.join(errors)}")
 
 
+def _is_containerized_environment() -> bool:
+    """Detect if running in a containerized environment."""
+    import os
+    
+    # Check for common container indicators
+    container_indicators = [
+        os.path.exists('/.dockerenv'),  # Docker creates this file
+        os.environ.get('DOCKER_ENV') == 'true',  # Custom Docker env flag
+        os.environ.get('CONTAINER') == 'docker',  # Some orchestrators set this
+        os.environ.get('KUBERNETES_SERVICE_HOST'),  # Kubernetes environment
+        os.path.exists('/proc/1/cgroup') and 'docker' in open('/proc/1/cgroup').read(),  # Docker cgroup
+    ]
+    
+    return any(container_indicators)
+
+
 def load_config() -> ServerConfig:
-    """Load and validate server configuration from environment variables."""
+    """Load and validate server configuration with environment-aware loading."""
+    import os
+    import logging
+    
+    # Set up logging for configuration
+    logger = logging.getLogger(__name__)
+    
     try:
-        # Ensure .env file is loaded - try multiple paths
-        from dotenv import load_dotenv
-        import os
+        # Detect environment type
+        is_containerized = _is_containerized_environment()
         
-        # Try to load .env from different locations
-        env_paths = [
-            ".env",  # Current directory
-            os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # Project root
-            os.path.join(os.getcwd(), ".env"),  # Working directory
-        ]
+        if is_containerized:
+            # Container environment: rely on environment variables passed by orchestrator
+            logger.info("Detected containerized environment - using environment variables directly")
+            
+            # Verify critical environment variables are present
+            required_env_vars = ['TIDB_HOST', 'TIDB_USER', 'TIDB_PASSWORD']
+            missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+            
+            if missing_vars:
+                logger.warning(f"Missing required environment variables: {missing_vars}")
+                logger.info("This is normal if variables are set at runtime by Docker Compose")
+            
+        else:
+            # Local development environment: try to load .env files
+            logger.info("Detected local development environment - attempting to load .env files")
+            
+            from dotenv import load_dotenv
+            
+            # Try to load .env from different locations
+            env_paths = [
+                ".env",  # Current directory
+                os.path.join(os.path.dirname(__file__), "..", "..", ".env"),  # Project root
+                os.path.join(os.getcwd(), ".env"),  # Working directory
+                os.path.expanduser("~/.config/tidb-mcp-server/.env"),  # User config directory
+            ]
+            
+            env_loaded = False
+            for env_path in env_paths:
+                if os.path.exists(env_path):
+                    load_dotenv(env_path, override=True)
+                    env_loaded = True
+                    logger.info(f"✅ Loaded environment from: {env_path}")
+                    break
+            
+            if not env_loaded:
+                logger.warning("⚠️  No .env file found - ensure environment variables are set")
+                logger.info("Expected .env file locations:")
+                for path in env_paths:
+                    logger.info(f"  - {path}")
         
-        env_loaded = False
-        for env_path in env_paths:
-            if os.path.exists(env_path):
-                load_dotenv(env_path, override=True)
-                env_loaded = True
-                print(f"Loaded environment from: {env_path}")
-                break
-        
-        if not env_loaded:
-            print("Warning: No .env file found in expected locations")
-        
+        # Create and validate configuration
+        # Pydantic automatically reads from environment variables
         config = ServerConfig()
+        
+        # Validate the configuration
         config.validate_configuration()
+        
+        # Log configuration summary (without sensitive data)
+        logger.info("✅ Configuration loaded successfully")
+        logger.info(f"  - Environment: {'Container' if is_containerized else 'Local Development'}")
+        logger.info(f"  - TiDB Host: {config.tidb_host}")
+        logger.info(f"  - LLM Provider: {config.llm_provider}")
+        logger.info(f"  - Enabled Tools: {', '.join(config.enabled_tools)}")
+        logger.info(f"  - MCP Server: {config.mcp_server_name} v{config.mcp_server_version}")
+        
         return config
+        
     except Exception as e:
+        logger.error(f"❌ Failed to load configuration: {e}")
+        if not is_containerized:
+            logger.error("💡 For local development, ensure you have a .env file with required variables")
+            logger.error("💡 For Docker deployment, ensure environment variables are passed via docker-compose")
         raise ValueError(f"Failed to load configuration: {e}") from e
