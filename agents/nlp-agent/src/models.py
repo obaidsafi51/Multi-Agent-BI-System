@@ -89,3 +89,4 @@ class ProcessingResult(BaseModel):
     mcp_context_stored: bool = Field(default=False, description="Whether context was stored in MCP")
     error: Optional[str] = Field(None, description="Error message if failed")
     processing_time_ms: int = Field(default=0, description="Processing time in milliseconds")
+    processing_path: str = Field(default="unknown", description="Processing path taken")
