@@ -53,8 +53,8 @@ class KIMIAPIClient:
     def __init__(self, api_key: str, config: Dict[str, Any]):
         self.api_key = api_key
         self.config = config
-        self.base_url = "https://api.moonshot.cn/v1/chat/completions"
-        self.model = config.get('model', 'moonshot-v1-8k')
+        self.base_url = "https://api.moonshot.ai/v1/chat/completions"
+        self.model = config.get('model', 'kimi-k2-0905-preview')
         self.temperature = config.get('temperature', 0.1)
         self.max_tokens = config.get('max_tokens', 1000)
         
