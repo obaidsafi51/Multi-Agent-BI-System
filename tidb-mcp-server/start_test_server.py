@@ -27,7 +27,7 @@ def setup_test_environment():
         # LLM Configuration (mock for testing)
         'LLM_PROVIDER': 'kimi',
         'LLM_API_KEY': 'test-mock-api-key-for-testing',
-        'LLM_BASE_URL': 'https://api.moonshot.cn/v1',
+        'LLM_BASE_URL': 'https://api.moonshot.ai/v1',
         'LLM_MODEL': 'moonshot-v1-8k',
         'LLM_MAX_TOKENS': '1000',
         'LLM_TEMPERATURE': '0.7',

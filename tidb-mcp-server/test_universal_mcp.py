@@ -117,7 +117,7 @@ class UniversalMCPTester:
             llm_config = LLMConfig(
                 provider="kimi",
                 api_key="test-mock-key",
-                base_url="https://api.moonshot.cn/v1",
+                base_url="https://api.moonshot.ai/v1",
                 model="moonshot-v1-8k",
                 max_tokens=100,
                 temperature=0.7,

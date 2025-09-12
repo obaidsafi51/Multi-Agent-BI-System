@@ -84,6 +84,19 @@ class ExplainResultsRequest(BaseModel):
 
 # Global MCP server instance
 mcp_server: Optional[UniversalMCPServer] = None
+websocket_manager = None
+
+async def initialize_mcp_server_background(config):
+    """Initialize MCP server in background to avoid blocking FastAPI startup"""
+    global mcp_server
+    try:
+        logger.info("Starting MCP server background initialization...")
+        mcp_server = UniversalMCPServer(config)
+        await mcp_server.start()
+        logger.info("MCP server auto-initialized and started successfully")
+    except Exception as e:
+        logger.error(f"Background MCP server initialization failed: {e}")
+        mcp_server = None
 
 
 @asynccontextmanager
@@ -95,7 +108,24 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Starting TiDB MCP Server HTTP API...")
         
-        # Just start the HTTP API - initialization will be done via /admin/initialize
+        # Auto-initialize MCP server for development
+        auto_init = os.getenv("AUTO_INITIALIZE_MCP", "true").lower() == "true"
+        
+        if auto_init and mcp_server is None:
+            logger.info("Auto-initializing MCP server for development...")
+            try:
+                # Load configuration
+                from tidb_mcp_server.config import load_config
+                config = load_config()
+                
+                # Initialize and start MCP server in background task
+                asyncio.create_task(initialize_mcp_server_background(config))
+                
+                logger.info("MCP server background initialization started")
+                
+            except Exception as e:
+                logger.error(f"Auto-initialization failed: {e}")
+                logger.info("MCP server will need to be initialized manually via /admin/initialize")
         
         logger.info("TiDB MCP Server HTTP API started successfully")
         

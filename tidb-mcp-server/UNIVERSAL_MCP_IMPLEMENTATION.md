@@ -79,7 +79,7 @@ TIDB_USER=your-user
 # LLM Configuration
 LLM_PROVIDER=kimi
 LLM_API_KEY=your-kimi-api-key
-LLM_BASE_URL=https://api.moonshot.cn/v1
+LLM_BASE_URL=https://api.moonshot.ai/v1
 LLM_MODEL=moonshot-v1-8k
 
 # Tools Configuration
