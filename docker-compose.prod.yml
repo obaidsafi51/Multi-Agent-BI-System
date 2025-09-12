@@ -1,0 +1,14 @@
+# Production override for docker-compose
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d frontend
+version: '3.8'
+
+services:
+  frontend:
+    image: agenticbi-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.optimized
+    environment:
+      - NODE_ENV=production
+    volumes: []  # Remove all volumes for production
+    command: ["npm", "start"]  # Use production start command

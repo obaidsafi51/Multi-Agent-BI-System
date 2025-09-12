@@ -1,9 +1,12 @@
+# 🐳 Docker Compose - Optimized Multi-Agent BI System
+# This file creates a complete containerized environment with all agents and services
+
 services:
   # Frontend - Next.js with TypeScript and shadcn/ui
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
       cache_from:
         - node:22-alpine
       args:
@@ -12,16 +15,28 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
-      - NEXT_PUBLIC_API_URL=http://localhost:8001
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8001
+      # Fixed: Point to NLP agent (the main API gateway for queries)
+      - NEXT_PUBLIC_API_URL=http://localhost:8002
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8002
+      # Backend API for system management
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8001
+    # Development volumes (hot reload)
     volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
-    # Run stable dev to avoid Turbopack panic from spaces in host path
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - ./frontend/package.json:/app/package.json:ro
+      - ./frontend/package-lock.json:/app/package-lock.json:ro
+      - ./frontend/next.config.ts:/app/next.config.ts:ro
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts:ro
+      - ./frontend/tsconfig.json:/app/tsconfig.json:ro
+      # Preserve node_modules and .next in container
+      - node_modules_cache:/app/node_modules
+      - next_cache:/app/.next
     command: ["npm", "run", "dev:stable"]
     depends_on:
       backend:
+        condition: service_started
+      nlp-agent:
         condition: service_started
     networks:
       - ai-cfo-network
@@ -33,7 +48,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8001:8001"
+      - "8001:8001"  # Backend API
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
@@ -45,7 +60,9 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
+      # Fixed: Consistent MCP server URL with WebSocket support
+      - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
+      - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
       - USE_MCP_CLIENT=true
     volumes:
       - ./backend:/app
@@ -60,46 +77,97 @@ services:
       - ai-cfo-network
     restart: unless-stopped
 
-  # NLP Agent with Optimized Performance Features
+  # NLP Agent with Optimized Performance Features (Main Query Interface)
   nlp-agent:
     build:
-      context: .
-      dockerfile: agents/nlp-agent/Dockerfile
+      context: ./agents/nlp-agent
+      dockerfile: Dockerfile
     ports:
-      - "8002:8001"
-      - "8012:8012"  # WebSocket port
-    env_file:
-      - .env
+      - "8002:8001"  # Main NLP API
+      - "8012:8012"  # WebSocket port for real-time features
     environment:
+      # API Keys
       - KIMI_API_KEY=${KIMI_API_KEY}
+      - KIMI_API_BASE_URL=https://api.moonshot.ai/v1
+      - KIMI_MODEL=${KIMI_MODEL}
+      
+      # Service URLs - Fixed: Consistent naming
+      - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
+      - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
+      - BACKEND_URL=http://backend:8001
+      - BACKEND_WS_URL=ws://backend:8001/ws
+      
+      # Infrastructure
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - MCP_SERVER_URL=http://tidb-mcp-server:8000
-      - BACKEND_WS_URL=ws://backend:8001/ws
+      
+      # Agent Configuration
+      - AGENT_ID=nlp-agent-001
+      - AGENT_TYPE=nlp
+      - HOST=0.0.0.0
+      - PORT=8001
+      
+      # Performance Optimizations
       - ENABLE_WEBSOCKETS=true
       - ENABLE_ADVANCED_CACHING=true
+      - ENABLE_PARALLEL_PROCESSING=true
       - CONNECTION_POOL_MIN=3
       - CONNECTION_POOL_MAX=15
-      - CACHE_L1_TTL=300
-      - CACHE_L2_TTL=1800
-    # Remove volumes mount to avoid permission issues
-    # volumes:
-    #   - ./agents/nlp-agent:/app
-    #   - ./config:/app/config
+      - MAX_CONCURRENT_REQUESTS=10
+      
+      # Enhanced Monitoring & Performance v2.2.0
+      - MONITORING_ENABLED=true
+      - PERFORMANCE_OPTIMIZATION=true  
+      - WEBSOCKET_RELIABILITY=true
+      - ANOMALY_DETECTION=true
+      - EXPORT_METRICS=true
+      
+      # Cache Configuration
+      - CACHE_TTL_SECONDS=300
+      - CACHE_MAX_SIZE=1000
+      - SEMANTIC_SIMILARITY_THRESHOLD=0.85
+      - SEMANTIC_CACHE_SIZE=500
+      - QUERY_CACHE_SIZE=200
+      
+      # Enhanced WebSocket Configuration
+      - WS_HEARTBEAT_INTERVAL=30
+      - WS_RECONNECT_DELAY=1.0
+      - WS_MAX_RECONNECT_DELAY=60.0
+      - WS_MAX_RECONNECT_ATTEMPTS=-1
+      - WS_CONNECTION_TIMEOUT=10.0
+      - WS_REQUEST_TIMEOUT=30.0
+      - WS_HEALTH_CHECK_INTERVAL=60.0
+      - WS_BATCH_SIZE=5
+      - WS_BATCH_TIMEOUT=0.1
+      - WS_CIRCUIT_BREAKER_THRESHOLD=5
+      - WS_CIRCUIT_BREAKER_TIMEOUT=60.0
+      
+      # Logging
+      - LOG_LEVEL=INFO
     depends_on:
       redis:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      tidb-mcp-server:
+        condition: service_started
     networks:
       - ai-cfo-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # Data Agent with TiDB MCP Integration
   data-agent:
     build:
       context: ./agents/data-agent
       dockerfile: Dockerfile
+    ports:
+      - "8004:8004"  # Fixed: Add port for data agent API
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
@@ -109,9 +177,12 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      - USE_MCP_CLIENT=true
-      - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
+      # Fixed: Consistent MCP URLs
+      - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
+      - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
       - BACKEND_URL=http://backend:8001
+      - USE_MCP_CLIENT=true
+      - PORT=8004
     depends_on:
       redis:
         condition: service_healthy
@@ -129,31 +200,33 @@ services:
       context: ./agents/viz-agent
       dockerfile: Dockerfile
     ports:
-      - "8003:8003"
+      - "8003:8003"  # Visualization API
     environment:
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-    # Remove volumes mount to avoid permission issues
-    # volumes:
-    #   - ./agents/viz-agent:/app
+      - BACKEND_URL=http://backend:8001
+      - NLP_AGENT_URL=http://nlp-agent:8001
+      - DATA_AGENT_URL=http://data-agent:8004
+      - PORT=8003
     depends_on:
       redis:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      nlp-agent:
+        condition: service_started
     networks:
       - ai-cfo-network
     restart: unless-stopped
 
-  # TiDB MCP Server
+  # TiDB MCP Server with WebSocket Support
   tidb-mcp-server:
     build:
       context: ./tidb-mcp-server
       dockerfile: Dockerfile
     container_name: tidb-mcp-server
-    restart: unless-stopped
-    env_file:
-      - .env
+    ports:
+      - "8000:8000"  # HTTP API and WebSocket endpoint
     environment:
       # TiDB Connection (required - set in .env file)
       - TIDB_HOST=${TIDB_HOST}
@@ -168,7 +241,7 @@ services:
       # MCP Server Configuration
       - MCP_SERVER_NAME=${MCP_SERVER_NAME:-tidb-mcp-server}
       - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-0.1.0}
-      - MCP_MAX_CONNECTIONS=${MCP_MAX_CONNECTIONS:-10}
+      - MCP_MAX_CONNECTIONS=${MCP_MAX_CONNECTIONS:-20}
       - MCP_REQUEST_TIMEOUT=${MCP_REQUEST_TIMEOUT:-30}
 
       # Cache Configuration
@@ -179,22 +252,34 @@ services:
       # Security Configuration
       - MAX_QUERY_TIMEOUT=${MAX_QUERY_TIMEOUT:-30}
       - MAX_SAMPLE_ROWS=${MAX_SAMPLE_ROWS:-100}
-      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-60}
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-100}
 
       # HTTP API Configuration
       - USE_HTTP_API=${USE_HTTP_API:-true}
+      - ENABLE_WEBSOCKETS=${ENABLE_WEBSOCKETS:-true}
 
       # LLM Configuration (using KIMI API)
-      - LLM_API_KEY=sk-5Y8bNUX9k7kQDYIMBSkAr3NUcc0TPeSYoXglhb6fTe9dCElX
-      - LLM_BASE_URL=https://api.moonshot.cn/v1
+      - LLM_API_KEY=${KIMI_API_KEY}  # Primary LLM API key
+      - LLM_PROVIDER=kimi
+      - LLM_BASE_URL=https://api.moonshot.ai/v1
       - LLM_MODEL=kimi-k2-0905-preview
+      - LLM_MAX_TOKENS=4000
+      - LLM_TEMPERATURE=0.7
+      - LLM_TIMEOUT=30
+      
+      # Tools Configuration  
       - LLM_TOOLS_ENABLED=true
+      - DATABASE_TOOLS_ENABLED=true
+      - ANALYTICS_TOOLS_ENABLED=true
+      - ENABLED_TOOLS=database,llm,analytics
 
       # Logging Configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-json}
-    ports:
-      - "8000:8000"  # Expose HTTP API port
+      
+      # WebSocket Configuration
+      - WS_HEARTBEAT_INTERVAL=60
+      - WS_CLEANUP_INTERVAL=30
     volumes:
       # Mount logs directory for persistence
       - ./tidb-mcp-server/logs:/app/logs
@@ -205,43 +290,50 @@ services:
     deploy:
       resources:
         limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
           memory: 512M
           cpus: "0.5"
-        reservations:
-          memory: 256M
-          cpus: "0.25"
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 60s
-      timeout: 5s
-      retries: 2
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
+    restart: unless-stopped
 
-  # Personalization Agent
-  # personal-agent:
-  #   build:
-  #     context: ./agents/personal-agent
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - REDIS_URL=redis://redis:6379
-  #     - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-  #     - DATABASE_URL=${DATABASE_URL}
-  #     - TIDB_HOST=${TIDB_HOST}
-  #     - TIDB_USER=${TIDB_USER}
-  #     - TIDB_PASSWORD=${TIDB_PASSWORD}
-  #     - TIDB_DATABASE=${TIDB_DATABASE}
-  #     - TIDB_PORT=${TIDB_PORT}
-  #   # Remove volumes mount to avoid permission issues
-  #   # volumes:
-  #   #   - ./agents/personal-agent:/app
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #     rabbitmq:
-  #       condition: service_healthy
-  #   networks:
-  #     - ai-cfo-network
-  #   restart: unless-stopped
+  # Personal Agent (Optional - can be enabled later)
+  personal-agent:
+    build:
+      context: ./agents/personal-agent
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8005"  # Personal agent API
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - DATABASE_URL=${DATABASE_URL}
+      - TIDB_HOST=${TIDB_HOST}
+      - TIDB_USER=${TIDB_USER}
+      - TIDB_PASSWORD=${TIDB_PASSWORD}
+      - TIDB_DATABASE=${TIDB_DATABASE}
+      - TIDB_PORT=${TIDB_PORT}
+      - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
+      - BACKEND_URL=http://backend:8001
+      - PORT=8005
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      tidb-mcp-server:
+        condition: service_started
+    networks:
+      - ai-cfo-network
+    restart: unless-stopped
+    profiles:
+      - full  # Only start with --profile full
 
   # Redis for MCP Context Store and Caching
   redis:
@@ -254,18 +346,23 @@ services:
       - ai-cfo-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 60s
+      interval: 30s
       timeout: 5s
-      retries: 2
-      start_period: 30s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
   # RabbitMQ for A2A Message Broker
   rabbitmq:
     image: rabbitmq:3-management-alpine
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
     environment:
       - RABBITMQ_DEFAULT_USER=guest
       - RABBITMQ_DEFAULT_PASS=guest
@@ -275,38 +372,33 @@ services:
       - ai-cfo-network
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 60s
-      timeout: 5s
-      retries: 2
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
     restart: unless-stopped
-
-  # TiDB Database - DISABLED: Using TiDB Cloud instead
-  # tidb:
-  #   image: pingcap/tidb:latest
-  #   ports:
-  #     - "4000:4000"
-  #   environment:
-  #     - TIDB_PASSWORD=${TIDB_PASSWORD}
-  #   volumes:
-  #     - tidb_data:/var/lib/tidb
-  #     - ./config/tidb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-  #     - ./scripts/tidb-healthcheck.sh:/usr/local/bin/tidb-healthcheck.sh:ro
-  #   networks:
-  #     - ai-cfo-network
-  #   healthcheck:
-  #     test: ["CMD", "bash", "/usr/local/bin/tidb-healthcheck.sh"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 5
-  #     start_period: 60s
-  #   restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
 
 volumes:
   redis_data:
+    driver: local
   rabbitmq_data:
+    driver: local
   tidb_data:
+    driver: local
+  # Frontend cache volumes to prevent rebuilds
+  node_modules_cache:
+    driver: local
+  next_cache:
+    driver: local
 
 networks:
   ai-cfo-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
