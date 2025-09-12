@@ -1,51 +1,53 @@
-FROM python:3.11-slim-bookworm
+# Optimized NLP Agent Dockerfile for Production
+FROM python:3.11-slim AS runtime
 
+# Install system dependencies and curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install UV for fast dependency management
+RUN pip install --no-cache-dir uv
+
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies in a single RUN command
-RUN apt-get update && apt-get install -y gcc curl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir uv
+# Copy dependency files first for better caching
+COPY pyproject.toml uv.lock* ./
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
+# Install dependencies directly to system Python (no venv needed in Docker)
+RUN uv pip install --system .
 
-# Copy dependency files first for better layer caching
-COPY --chown=appuser:appuser agents/nlp-agent/pyproject.toml agents/nlp-agent/uv.lock* ./
-
-# Install Python dependencies directly to system Python (no venv needed in containers)
-RUN uv pip install --system \
-    fastapi==0.115.5 \
-    uvicorn==0.32.1 \
-    pydantic==2.11.7 \
-    python-dotenv==1.0.0 \
-    redis==5.0.1 \
-    pika==1.3.2 \
-    httpx==0.28.1 \
-    spacy==3.7.6 \
-    orjson==3.10.12 \
-    structlog==23.2.0 \
-    aiohttp>=3.8.0 \
-    pandas>=2.3.2 \
-    pymysql>=1.1.0 \
-    cryptography>=41.0.7 \
-    aio-pika>=9.3.1 \
-    pyyaml>=6.0 \
-    psutil>=5.9.0
-
-# Copy backend schema management modules (required for dynamic schema functionality)
-COPY --chown=appuser:appuser backend/schema_management ./schema_management
-COPY --chown=appuser:appuser backend/models ./backend_models
-COPY --chown=appuser:appuser backend/database ./backend_database
-COPY --chown=appuser:appuser backend/__init__.py ./
+# Set environment variables
+ENV PYTHONPATH="/app"
+ENV PYTHONUNBUFFERED=1
 
 # Copy source code
-COPY --chown=appuser:appuser agents/nlp-agent/ .
+COPY src/ ./src/
+COPY main_optimized.py ./main.py
+COPY config_optimized.py ./config.py
+COPY performance_config.py ./performance_config.py
+
+# Create directories and non-root user
+RUN mkdir -p logs cache && \
+    groupadd -r nlpagent && \
+    useradd -r -g nlpagent nlpagent && \
+    chown -R nlpagent:nlpagent /app
 
 # Switch to non-root user
-USER appuser
+USER nlpagent
 
-# Start the NLP agent using system python
+# Environment variables for container
+ENV HOST=0.0.0.0
+ENV PORT=8001
+
+# Expose ports (main API and WebSocket)
+EXPOSE 8001 8012
+
+# Health check for optimized agent
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# Start the optimized NLP agent directly with system Python
 CMD ["python", "main.py"]
