@@ -1,0 +1,43 @@
+{
+  "test_timestamp": "2025-09-13T00:36:39.630733",
+  "test_results": [
+    {
+      "status": "ERROR",
+      "agent": "nlp-agent",
+      "message": "Connection failed: Cannot connect to host localhost:8002 ssl:default [Connect call failed ('127.0.0.1', 8002)]"
+    },
+    {
+      "status": "ERROR",
+      "agent": "data-agent",
+      "message": "Connection failed: "
+    },
+    {
+      "status": "ERROR",
+      "agent": "viz-agent",
+      "message": "Connection failed: Cannot connect to host localhost:8003 ssl:default [Connect call failed ('127.0.0.1', 8003)]"
+    },
+    {
+      "status": "PASS",
+      "agent": "backend",
+      "message": "Backend processed request successfully",
+      "response_format": "QueryResponse",
+      "fields_present": [
+        "columns",
+        "rows",
+        "row_count",
+        "execution_time_ms",
+        "truncated",
+        "success",
+        "error",
+        "error_type"
+      ],
+      "validation_logs_present": "Validated agent responses in backend"
+    }
+  ],
+  "summary": {
+    "total_tests": 4,
+    "passed": 1,
+    "failed": 0,
+    "errors": 3
+  }
+}
