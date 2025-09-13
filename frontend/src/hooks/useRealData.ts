@@ -53,15 +53,23 @@ export function useRealData(): UseRealDataReturn {
 
   const loadInitialDashboard = useCallback(async () => {
     try {
+      // Check if we have a selected database first
+      const selectedDatabase = sessionStorage.getItem('selected_database');
+      if (!selectedDatabase) {
+        console.log("No database selected - skipping initial dashboard load");
+        setBentoCards([]);
+        return;
+      }
+
       // Check if we already have cached data to avoid redundant calls
-      const cacheKey = 'dashboard_initial_data';
+      const cacheKey = `dashboard_initial_data_${selectedDatabase}`;
       const cachedData = sessionStorage.getItem(cacheKey);
       
       if (cachedData) {
         try {
           const parsed = JSON.parse(cachedData);
           if (Date.now() - parsed.timestamp < 300000) { // 5 minutes cache
-            console.log("Using cached dashboard data");
+            console.log("Using cached dashboard data for database:", selectedDatabase);
             setBentoCards(parsed.cards);
             return;
           }
@@ -69,6 +77,9 @@ export function useRealData(): UseRealDataReturn {
           console.warn("Failed to parse cached data:", e);
         }
       }
+
+      // Only load dashboard data after database is properly selected and schema is initialized
+      console.log("Loading initial dashboard data for database:", selectedDatabase);
 
       const initialCards: BentoGridCard[] = [];
       
@@ -178,11 +189,12 @@ export function useRealData(): UseRealDataReturn {
       
       setBentoCards(initialCards);
       
-      // Cache the successful result
+      // Cache the successful result with database context
       if (initialCards.length > 0) {
         sessionStorage.setItem(cacheKey, JSON.stringify({
           cards: initialCards,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          database: selectedDatabase
         }));
       }
       

@@ -2,36 +2,73 @@ import { BentoGridCard, QuerySuggestion, CardType, CardSize } from "@/types/dash
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Standardized interface matching backend models exactly
 export interface QueryRequest {
   query: string;
   context?: Record<string, unknown>;
+  user_id?: string;
+  session_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface QueryIntent {
+  metric_type: string;
+  time_period: string;
+  aggregation_level: string;
+  filters?: Record<string, unknown>;
+  comparison_periods?: string[];
+  visualization_hint?: string;
+  confidence_score?: number;
+}
+
+export interface QueryResult {
+  data: unknown[];
+  columns: string[];
+  row_count: number;
+  processing_time_ms: number;
+  data_quality_score?: number;
+  query_metadata?: Record<string, unknown>;
+}
+
+export interface ErrorResponse {
+  error_type: string;
+  message: string;
+  recovery_action: string;
+  suggestions?: string[];
+  error_code?: string;
+  context?: Record<string, unknown>;
+}
+
+export interface ProcessingMetadata {
+  query_id: string;
+  workflow_path: string[];
+  agent_performance: Record<string, unknown>;
+  total_processing_time_ms: number;
+  cache_hit?: boolean;
+  database_queries?: number;
+}
+
+export interface PerformanceMetrics {
+  response_time_ms: number;
+  memory_usage_mb?: number;
+  cpu_usage_percent?: number;
+  cache_hit_rate?: number;
+  throughput_qps?: number;
+  error_rate?: number;
 }
 
 export interface QueryResponse {
   query_id: string;
-  intent: {
-    metric_type: string;
-    time_period: string;
-    aggregation_level: string;
-    visualization_hint: string;
-  };
-  result?: {
-    data: unknown[];
-    columns: string[];
-    row_count: number;
-    processing_time_ms: number;
-  };
+  intent: QueryIntent;
+  result?: QueryResult;
   visualization?: {
     chart_type: string;
     title: string;
     config: Record<string, unknown>;
   };
-  error?: {
-    error_type: string;
-    message: string;
-    recovery_action: string;
-    suggestions: string[];
-  };
+  error?: ErrorResponse;
+  processing_metadata?: ProcessingMetadata;
+  performance_metrics?: PerformanceMetrics;
 }
 
 
@@ -98,14 +135,17 @@ class ApiService {
   }
 
   async processQuery(request: QueryRequest): Promise<QueryResponse> {
-    // Simplified request without query modification
-    const enhancedRequest = {
+    // Enhanced request with standardized format
+    const enhancedRequest: QueryRequest = {
       ...request,
+      user_id: request.user_id || "demo_user",
+      session_id: request.session_id || crypto.randomUUID().slice(0, 8),
       metadata: {
         timestamp: Date.now(),
         source: "frontend",
-        user_id: "demo_user",
-        session_id: crypto.randomUUID().slice(0, 8)
+        platform: "web",
+        user_agent: navigator.userAgent.slice(0, 100), // Truncate for safety
+        ...request.metadata
       }
     };
     

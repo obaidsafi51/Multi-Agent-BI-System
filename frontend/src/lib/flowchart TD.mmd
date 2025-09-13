@@ -1,0 +1,34 @@
+flowchart TD
+    Frontend["Frontend<br/>(React)"] -->|HTTP/API| Backend["Backend<br/>(FastAPI)"]
+    
+    Backend --> NLP["NLP Agent<br/>(Query NLP)"]
+    Backend --> Data["Data Agent<br/>(SQL Exec)"]
+    Backend --> Viz["Viz Agent<br/>(Charts)"]
+    
+    NLP --> MCP["TiDB MCP Server<br/>(Database Interface & LLM Tools)"]
+    Data --> MCP
+    
+    MCP --> TiDB["TiDB Cloud<br/>(Database)"]
+    
+    %% Cache and messaging connections
+    NLP -.-> Redis["Redis<br/>(Cache)"]
+    Data -.-> Redis
+    Viz -.-> Redis
+    Backend -.-> Redis
+    
+    NLP -.-> RabbitMQ["RabbitMQ<br/>(Pub/Sub)"]
+    Data -.-> RabbitMQ
+    Viz -.-> RabbitMQ
+    
+    %% Styling with better text visibility
+    classDef frontend fill:#e1f5fe,stroke:#000,stroke-width:2px,color:#000000
+    classDef backend fill:#f3e5f5,stroke:#000,stroke-width:2px,color:#000000
+    classDef agent fill:#e8f5e8,stroke:#000,stroke-width:2px,color:#000000
+    classDef database fill:#fff3e0,stroke:#000,stroke-width:2px,color:#000000
+    classDef infrastructure fill:#fce4ec,stroke:#000,stroke-width:2px,color:#000000
+    
+    class Frontend frontend
+    class Backend backend
+    class NLP,Data,Viz agent
+    class MCP,TiDB database
+    class Redis,RabbitMQ infrastructure
