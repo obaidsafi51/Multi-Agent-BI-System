@@ -15,11 +15,11 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
-      # Fixed: Point to NLP agent (the main API gateway for queries)
-      - NEXT_PUBLIC_API_URL=http://localhost:8002
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8002
-      # Backend API for system management
-      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8001
+      # Fixed: Frontend should call backend for API operations (updated port)
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080
+      # Backend API for system management (same as API URL for consistency)
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8080
     # Development volumes (hot reload)
     volumes:
       - ./frontend/src:/app/src:ro
@@ -48,7 +48,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8001:8001"  # Backend API
+      - "8080:8000"  # Backend API (separate from MCP server on 8000)
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
@@ -60,12 +60,34 @@ services:
       - TIDB_PASSWORD=${TIDB_PASSWORD}
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
-      # Fixed: Consistent MCP server URL with WebSocket support
+      # Agent Service URLs (HTTP for compatibility + WebSocket for Phase 1)
+      - NLP_AGENT_URL=http://nlp-agent:8001
+      - DATA_AGENT_URL=http://data-agent:8002
+      - VIZ_AGENT_URL=http://viz-agent:8003
+      # Phase 1: WebSocket URLs for enhanced communication
+      - NLP_AGENT_WS_URL=ws://nlp-agent:8011
+      - DATA_AGENT_WS_URL=ws://data-agent:8012
+      - VIZ_AGENT_WS_URL=ws://viz-agent:8013
+      # Phase 1: Feature flags for gradual migration
+      - NLP_AGENT_USE_WS=true
+      - DATA_AGENT_USE_WS=true
+      - VIZ_AGENT_USE_WS=true
+      # Frontend & Backend URLs
+      - BACKEND_URL=http://backend:8000
+      - FRONTEND_URL=http://frontend:3000
+      - LOCALHOST_FRONTEND_URL=http://localhost:3000
+      # Fixed: Use consistent MCP server URLs
+      - TIDB_MCP_SERVER_URL=http://tidb-mcp-server:8000
       - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
       - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
       - USE_MCP_CLIENT=true
+      # Logging configuration
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=standard
+      - PYTHONUNBUFFERED=1
     volumes:
       - ./backend:/app
+      - ./config/logging/backend_logging.yaml:/app/logging_config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -76,6 +98,11 @@ services:
     networks:
       - ai-cfo-network
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # NLP Agent with Optimized Performance Features (Main Query Interface)
   nlp-agent:
@@ -83,19 +110,19 @@ services:
       context: ./agents/nlp-agent
       dockerfile: Dockerfile
     ports:
-      - "8002:8001"  # Main NLP API
-      - "8012:8012"  # WebSocket port for real-time features
+      - "8001:8001"  # Main NLP API (HTTP)
+      - "8011:8011"  # WebSocket port for Phase 1 parallel implementation
     environment:
       # API Keys
       - KIMI_API_KEY=${KIMI_API_KEY}
       - KIMI_API_BASE_URL=https://api.moonshot.ai/v1
       - KIMI_MODEL=${KIMI_MODEL}
       
-      # Service URLs - Fixed: Consistent naming
+      # Service URLs - Fixed: Use correct WebSocket port and backend URL
       - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
       - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
-      - BACKEND_URL=http://backend:8001
-      - BACKEND_WS_URL=ws://backend:8001/ws
+      - BACKEND_URL=http://backend:8000
+      - BACKEND_WS_URL=ws://backend:8000/ws
       
       # Infrastructure
       - REDIS_URL=redis://redis:6379
@@ -106,6 +133,11 @@ services:
       - AGENT_TYPE=nlp
       - HOST=0.0.0.0
       - PORT=8001
+      
+      # Phase 1: Enable both HTTP and WebSocket servers
+      - ENABLE_WEBSOCKETS=true
+      - WEBSOCKET_HOST=0.0.0.0
+      - WEBSOCKET_PORT=8011
       
       # Performance Optimizations
       - ENABLE_WEBSOCKETS=true
@@ -144,6 +176,9 @@ services:
       
       # Logging
       - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./config/logging/nlp_agent_logging.yaml:/app/logging_config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -160,6 +195,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Data Agent with TiDB MCP Integration
   data-agent:
@@ -167,7 +207,8 @@ services:
       context: ./agents/data-agent
       dockerfile: Dockerfile
     ports:
-      - "8004:8004"  # Fixed: Add port for data agent API
+      - "8002:8002"  # HTTP API port
+      - "8012:8012"  # WebSocket port for Phase 2 parallel implementation
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379
@@ -180,9 +221,19 @@ services:
       # Fixed: Consistent MCP URLs
       - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
       - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
-      - BACKEND_URL=http://backend:8001
+      - BACKEND_URL=http://backend:8000
       - USE_MCP_CLIENT=true
-      - PORT=8004
+      - PORT=8002
+      # WebSocket Configuration (Phase 2)
+      - ENABLE_WEBSOCKETS=true
+      - WEBSOCKET_PORT=8012
+      - WEBSOCKET_HOST=0.0.0.0
+      - HTTP_PORT=8002
+      # Logging
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./config/logging/data_agent_logging.yaml:/app/logging_config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -193,6 +244,11 @@ services:
     networks:
       - ai-cfo-network
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Visualization Agent
   viz-agent:
@@ -200,14 +256,20 @@ services:
       context: ./agents/viz-agent
       dockerfile: Dockerfile
     ports:
-      - "8003:8003"  # Visualization API
+      - "8003:8003"  # HTTP API port
+      - "8013:8013"  # WebSocket port for Phase 2 parallel implementation
     environment:
       - REDIS_URL=redis://redis:6379
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - BACKEND_URL=http://backend:8001
+      - BACKEND_URL=http://backend:8000
       - NLP_AGENT_URL=http://nlp-agent:8001
-      - DATA_AGENT_URL=http://data-agent:8004
+      - DATA_AGENT_URL=http://data-agent:8002
       - PORT=8003
+      # WebSocket Configuration (Phase 2)
+      - ENABLE_WEBSOCKETS=true
+      - WEBSOCKET_PORT=8013
+      - WEBSOCKET_HOST=0.0.0.0
+      - HTTP_PORT=8003
     depends_on:
       redis:
         condition: service_healthy
@@ -275,7 +337,8 @@ services:
 
       # Logging Configuration
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_FORMAT=json
+      - PYTHONUNBUFFERED=1
       
       # WebSocket Configuration
       - WS_HEARTBEAT_INTERVAL=60
@@ -283,6 +346,8 @@ services:
     volumes:
       # Mount logs directory for persistence
       - ./tidb-mcp-server/logs:/app/logs
+      # Mount logging configuration
+      - ./config/logging/mcp_server_logging.yaml:/app/logging_config.yaml:ro
       # Mount SSL certificates if needed
       - ${SSL_CERT_PATH:-/dev/null}:/app/certs:ro
     networks:
@@ -302,6 +367,11 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Personal Agent (Optional - can be enabled later)
   personal-agent:
@@ -320,7 +390,7 @@ services:
       - TIDB_DATABASE=${TIDB_DATABASE}
       - TIDB_PORT=${TIDB_PORT}
       - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
-      - BACKEND_URL=http://backend:8001
+      - BACKEND_URL=http://backend:8000
       - PORT=8005
     depends_on:
       redis:
