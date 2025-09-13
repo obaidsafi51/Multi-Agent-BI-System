@@ -141,75 +141,45 @@ async def create_visualization(request: VisualizeRequest) -> VisualizationRespon
         )
         
         # Build standardized response
-        if result.success:
-            chart_config = {
-                "chart_type": result.chart_spec.chart_config.chart_type.value if hasattr(result.chart_spec.chart_config, 'chart_type') else "table",
-                "title": result.chart_spec.chart_config.title if hasattr(result.chart_spec.chart_config, 'title') else "Chart",
-                "x_axis_label": getattr(result.chart_spec.chart_config, 'x_axis_label', ''),
-                "y_axis_label": getattr(result.chart_spec.chart_config, 'y_axis_label', ''),
-                "color_scheme": getattr(result.chart_spec.chart_config, 'color_scheme', 'corporate'),
-                "interactive": getattr(result.chart_spec.chart_config, 'interactive', True),
-                "height": getattr(result.chart_spec.chart_config, 'height', 400),
-                "width": getattr(result.chart_spec.chart_config, 'width', 600),
-                "responsive": True
+        chart_config = {
+            "chart_type": result.chart_spec.chart_config.chart_type.value,
+            "title": result.chart_spec.chart_config.title,
+            "x_axis_label": result.chart_spec.chart_config.x_axis_label,
+            "y_axis_label": result.chart_spec.chart_config.y_axis_label,
+            "color_scheme": result.chart_spec.chart_config.color_scheme,
+            "interactive": result.chart_spec.chart_config.interactive,
+            "height": result.chart_spec.chart_config.height,
+            "width": result.chart_spec.chart_config.width,
+            "responsive": True
+        }
+        
+        # Build chart data from result
+        chart_data = result.chart_json
+        
+        # Create dashboard cards (basic implementation)
+        dashboard_cards = [
+            {
+                "type": "kpi",
+                "title": "Data Points",
+                "value": str(len(request.data)),
+                "trend": "neutral"
             }
-            
-            # Build chart data from result
-            chart_data = result.chart_json if hasattr(result, 'chart_json') else {}
-            
-            # Create dashboard cards (basic implementation)
-            dashboard_cards = [
-                {
-                    "type": "kpi",
-                    "title": "Data Points",
-                    "value": str(len(request.data)),
-                    "trend": "neutral"
-                }
-            ]
-            
-            # Export options
-            export_options = {
-                "formats": ["png", "pdf", "svg"],
-                "sizes": ["small", "medium", "large"]
-            }
-
-            response = VisualizationResponse(
-                success=True,
-                agent_metadata=agent_metadata,
-                chart_config=chart_config,
-                chart_data=chart_data,
-                dashboard_cards=dashboard_cards,
-                export_options=export_options
-            )
-        else:
-            # Handle failure case - use empty/default values
-            chart_config = {
-                "chart_type": "table",
-                "title": "Error",
-                "responsive": True
-            }
-            chart_data = {}
-            dashboard_cards = []
-            export_options = {"formats": [], "sizes": []}
-            
-            response = VisualizationResponse(
-                success=False,
-                agent_metadata=agent_metadata,
-                chart_config=chart_config,
-                chart_data=chart_data,
-                dashboard_cards=dashboard_cards,
-                export_options=export_options,
-                error=ErrorResponse(
-                    error_type="visualization_error",
-                    message=result.error_message or "Unknown visualization error",
-                    recovery_action="retry",
-                    suggestions=[
-                        "Check data format compatibility",
-                        "Verify chart configuration",
-                        "Try a different visualization type"
-                    ]
-                )
-            )
+        ]
+        
+        # Export options
+        export_options = {
+            "formats": ["png", "pdf", "svg"],
+            "sizes": ["small", "medium", "large"]
+        }
+        
+        response = VisualizationResponse(
+            success=True,
+            agent_metadata=agent_metadata,
+            chart_config=chart_config,
+            chart_data=chart_data,
+            dashboard_cards=dashboard_cards,
+            export_options=export_options
+        )
         
         logger.info(f"Successfully created visualization for query {request.query_id} in {result.processing_time_ms}ms")
         return response
@@ -242,10 +212,6 @@ async def create_visualization(request: VisualizeRequest) -> VisualizationRespon
         return VisualizationResponse(
             success=False,
             agent_metadata=agent_metadata,
-            chart_config={"chart_type": "error", "title": "Error", "responsive": True},
-            chart_data={},
-            dashboard_cards=[],
-            export_options={"formats": [], "sizes": []},
             error=error_response
         )
 
@@ -295,69 +261,10 @@ async def get_status():
     }
 
 if __name__ == "__main__":
-    import signal
-    
-    # Check if WebSocket server should be enabled
-    enable_websockets = os.getenv('ENABLE_WEBSOCKETS', 'true').lower() == 'true'
-    websocket_port = int(os.getenv('WEBSOCKET_PORT', '8013'))
-    http_port = int(os.getenv('PORT', '8003'))
-    
-    async def start_servers():
-        """Start both HTTP and WebSocket servers"""
-        logger.info(f"Starting Enhanced Viz Agent v2.2.0 with HTTP server (:{http_port})")
-        
-        # Start HTTP server
-        config = uvicorn.Config(
-            "main:app",
-            host="0.0.0.0", 
-            port=http_port,
-            reload=False,
-            log_level="info"
-        )
-        http_server = uvicorn.Server(config)
-        http_task = asyncio.create_task(http_server.serve())
-        
-        tasks = [http_task]
-        
-        # Start WebSocket server if enabled
-        if enable_websockets:
-            logger.info(f"WebSocket support enabled - starting WebSocket server on port {websocket_port}")
-            from websocket_server import start_websocket_server
-            
-            websocket_task = asyncio.create_task(start_websocket_server())
-            tasks.append(websocket_task)
-            
-            logger.info(f"Starting Enhanced Viz Agent v2.2.0 with both HTTP (:{http_port}) and WebSocket (:{websocket_port}) servers")
-            logger.info("Features: WebSocket reliability, real-time chart generation, interactive features")
-        else:
-            logger.info("WebSocket support disabled - HTTP only mode")
-        
-        # Wait for all tasks
-        try:
-            await asyncio.gather(*tasks)
-        except KeyboardInterrupt:
-            logger.info("Shutting down servers...")
-            
-            # Stop WebSocket server if running
-            if enable_websockets:
-                try:
-                    from websocket_server import stop_websocket_server
-                    await stop_websocket_server()
-                except Exception as e:
-                    logger.error(f"Error stopping WebSocket server: {e}")
-            
-            # Stop HTTP server
-            try:
-                http_server.should_exit = True
-                await http_task
-            except Exception as e:
-                logger.error(f"Error stopping HTTP server: {e}")
-    
-    # Run the servers
-    try:
-        asyncio.run(start_servers())
-    except KeyboardInterrupt:
-        logger.info("Viz Agent shutdown complete")
-    except Exception as e:
-        logger.error(f"Error starting Viz Agent: {e}")
-        sys.exit(1)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8003,
+        reload=False,
+        log_level="info"
+    )

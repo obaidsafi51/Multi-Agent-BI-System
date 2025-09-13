@@ -343,7 +343,7 @@ class DynamicSchemaManager:
     
     async def find_tables_for_metric(self, metric_type: str) -> List[SchemaMapping]:
         """
-        Find database tables that contain data for the specified metric.
+        Find database tables that contain data for the specified metric using MCP server intelligence.
         
         Args:
             metric_type: Business metric type (e.g., 'revenue', 'cash_flow')
@@ -353,33 +353,51 @@ class DynamicSchemaManager:
         """
         self.metrics['mapping_requests'] += 1
         
-        metric_lower = metric_type.lower()
-        mappings = []
-        
-        # Use dynamic discovery instead of static mappings
-        # Check if we have cached dynamic mappings
-        if metric_lower in self._dynamic_mappings_cache:
-            cached_mapping = self._dynamic_mappings_cache[metric_lower]
-            if time.time() - cached_mapping['timestamp'] < self._mapping_cache_ttl:
-                table_name, column_name = cached_mapping['mapping']
-                mapping = SchemaMapping(
-                    business_term=metric_type,
-                    schema_path=f"default.{table_name}.{column_name}",
-                    table_name=table_name,
-                    column_name=column_name,
-                    confidence_score=0.85,  # Slightly lower for dynamic discovery
-                    mapping_type="dynamic_cached"
-                )
-                mappings.append(mapping)
-        
-        # Look for semantic matches (this should now be the primary method)
-        semantic_matches = await self._find_semantic_matches(metric_lower)
-        mappings.extend(semantic_matches)
-        
-        # Sort by confidence score
-        mappings.sort(key=lambda x: x.confidence_score, reverse=True)
-        
-        return mappings[:self.config['max_alternatives']]
+        try:
+            # Use MCP server for business term mapping
+            from mcp_client import get_backend_mcp_client
+            mcp_client = get_backend_mcp_client()
+            
+            result = await mcp_client._send_request(
+                "discover_business_mappings_tool",
+                {
+                    "business_terms": [metric_type],
+                    "confidence_threshold": self.config['confidence_threshold']
+                }
+            )
+            
+            mappings = []
+            if result and result.get("success"):
+                term_mappings = result.get("mappings", {}).get(metric_type, [])
+                
+                for mapping_data in term_mappings:
+                    mapping = SchemaMapping(
+                        business_term=metric_type,
+                        schema_path=f"{mapping_data.get('database_name', 'default')}.{mapping_data.get('table_name')}.{mapping_data.get('column_name', '*')}",
+                        table_name=mapping_data.get('table_name', ''),
+                        column_name=mapping_data.get('column_name', '*'),
+                        confidence_score=mapping_data.get('confidence_score', 0.0),
+                        mapping_type="mcp_server_intelligence"
+                    )
+                    mappings.append(mapping)
+                
+                logger.info(f"Found {len(mappings)} mappings for '{metric_type}' via MCP server")
+            else:
+                logger.warning(f"MCP server mapping discovery failed for '{metric_type}': {result.get('error') if result else 'No response'}")
+                # Fall back to local semantic matching as backup
+                mappings = await self._find_semantic_matches(metric_type.lower())
+            
+            # Sort by confidence score
+            mappings.sort(key=lambda x: x.confidence_score, reverse=True)
+            
+            return mappings[:self.config['max_alternatives']]
+            
+        except Exception as e:
+            logger.error(f"Error finding tables for metric '{metric_type}' via MCP: {e}")
+            # Fall back to local semantic matching
+            mappings = await self._find_semantic_matches(metric_type.lower())
+            mappings.sort(key=lambda x: x.confidence_score, reverse=True)
+            return mappings[:self.config['max_alternatives']]
     
     async def _find_semantic_matches(self, metric_term: str) -> List[SchemaMapping]:
         """Find semantic matches for a business term using dynamic discovery."""
@@ -475,7 +493,7 @@ class DynamicSchemaManager:
     
     async def generate_query_context(self, intent: Dict[str, Any]) -> QueryContext:
         """
-        Generate enhanced query context with discovered schema.
+        Generate enhanced query context with discovered schema using MCP server intelligence.
         
         Args:
             intent: Query intent from NLP agent
@@ -483,9 +501,45 @@ class DynamicSchemaManager:
         Returns:
             QueryContext with table/column mappings and optimization hints
         """
+        try:
+            # Use MCP server to analyze query intent if available
+            from mcp_client import get_backend_mcp_client
+            mcp_client = get_backend_mcp_client()
+            
+            # Get the original query if available
+            original_query = intent.get('original_query', '')
+            
+            if original_query:
+                # Use MCP server's query intent analysis
+                intent_result = await mcp_client._send_request(
+                    "analyze_query_intent_tool",
+                    {
+                        "natural_language_query": original_query,
+                        "context": intent
+                    }
+                )
+                
+                if intent_result and intent_result.get("success"):
+                    mcp_intent = intent_result.get("intent", {})
+                    suggested_sql = intent_result.get("suggested_sql")
+                    
+                    # Enhance intent with MCP server results
+                    enhanced_intent = {**intent, **mcp_intent}
+                    if suggested_sql:
+                        enhanced_intent['suggested_sql'] = suggested_sql
+                    
+                    logger.info(f"Enhanced query intent using MCP server intelligence")
+                    intent = enhanced_intent
+                else:
+                    logger.warning(f"MCP server intent analysis failed: {intent_result.get('error') if intent_result else 'No response'}")
+            
+        except Exception as e:
+            logger.warning(f"Error using MCP server for query intent analysis: {e}")
+            # Continue with original intent if MCP fails
+        
         metric_type = intent.get('metric_type', '')
         
-        # Find table mappings
+        # Find table mappings using MCP-enhanced method
         table_mappings = await self.find_tables_for_metric(metric_type)
         
         # Find column mappings
@@ -601,8 +655,56 @@ class DynamicSchemaManager:
                 (self.metrics['cache_hits'] + self.metrics['cache_misses'])
                 if self.metrics['cache_hits'] + self.metrics['cache_misses'] > 0 
                 else 0
-            )
+            ),
+            'source': 'mcp_server_driven'
         }
+    
+    async def learn_from_successful_mapping(
+        self,
+        business_term: str,
+        database_name: str,
+        table_name: str,
+        column_name: Optional[str] = None,
+        success_score: float = 1.0
+    ) -> bool:
+        """
+        Report successful mapping to MCP server for learning.
+        
+        Args:
+            business_term: The business term that was successfully mapped
+            database_name: Target database name
+            table_name: Target table name  
+            column_name: Target column name (optional)
+            success_score: Score indicating mapping success (0.0 to 1.0)
+            
+        Returns:
+            True if learning was successful, False otherwise
+        """
+        try:
+            from mcp_client import get_backend_mcp_client
+            mcp_client = get_backend_mcp_client()
+            
+            result = await mcp_client._send_request(
+                "learn_from_successful_mapping_tool",
+                {
+                    "business_term": business_term,
+                    "database_name": database_name,
+                    "table_name": table_name,
+                    "column_name": column_name,
+                    "success_score": success_score
+                }
+            )
+            
+            if result and result.get("success"):
+                logger.info(f"Successfully reported mapping to MCP server: {business_term} -> {database_name}.{table_name}.{column_name or '*'}")
+                return True
+            else:
+                logger.warning(f"Failed to report mapping to MCP server: {result.get('error') if result else 'No response'}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error reporting successful mapping to MCP server: {e}")
+            return False
 
 
 # Global instance for easy access
