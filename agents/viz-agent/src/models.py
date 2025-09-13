@@ -1,5 +1,8 @@
 """
 Data models for the Visualization Agent
+
+This module now imports standardized models from local shared.models
+and defines only agent-specific models not covered by shared models.
 """
 
 from pydantic import BaseModel, Field
@@ -7,20 +10,12 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 from enum import Enum
 
-
-class ChartType(str, Enum):
-    """Supported chart types for financial data visualization"""
-    LINE = "line"
-    BAR = "bar"
-    COLUMN = "column"
-    PIE = "pie"
-    AREA = "area"
-    SCATTER = "scatter"
-    HEATMAP = "heatmap"
-    TABLE = "table"
-    WATERFALL = "waterfall"
-    GAUGE = "gauge"
-    CANDLESTICK = "candlestick"
+# Import standardized shared models from local package
+from shared.models.visualization import (
+    ChartType, ChartConfiguration, ChartData, ChartSeries,
+    DashboardCard, DashboardLayout, ExportFormat, ExportConfiguration
+)
+from shared.models.workflow import AgentResponse, VisualizationResponse
 
 
 class DataCharacteristics(BaseModel):
@@ -100,11 +95,13 @@ class ChartSpecification(BaseModel):
 class VisualizationRequest(BaseModel):
     """Request for visualization generation"""
     request_id: str = Field(..., description="Unique request identifier")
-    user_id: str = Field(..., description="User making the request")
-    query_intent: Dict[str, Any] = Field(..., description="Original query intent")
+    user_id: Optional[str] = Field(default="test_user", description="User making the request")
+    query_intent: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Original query intent")
     data: List[Dict[str, Any]] = Field(..., description="Raw data to visualize")
     preferences: Dict[str, Any] = Field(default_factory=dict, description="User preferences")
     export_config: Optional[ExportConfig] = Field(None, description="Export configuration")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Chart configuration")
+    query_context: Dict[str, Any] = Field(default_factory=dict, description="Query context")
 
 
 class VisualizationResponse(BaseModel):

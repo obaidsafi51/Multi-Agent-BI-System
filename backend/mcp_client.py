@@ -76,20 +76,58 @@ class BackendMCPClient:
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    return result
+                    # The MCP server returns the result directly, convert to backend format
+                    if isinstance(result, dict):
+                        return {
+                            "success": True,
+                            "data": result.get("rows", []),
+                            "columns": result.get("columns", []),
+                            "row_count": result.get("row_count", 0)
+                        }
+                    else:
+                        return {
+                            "success": True,
+                            "data": result if isinstance(result, list) else [],
+                            "columns": [],
+                            "row_count": len(result) if isinstance(result, list) else 0
+                        }
                 else:
                     error_text = await response.text()
                     logger.error(f"MCP query execution failed ({response.status}): {error_text}")
-                    return {"error": f"HTTP {response.status}: {error_text}"}
+                    return {"success": False, "error": f"HTTP {response.status}: {error_text}"}
                     
         except Exception as e:
             logger.error(f"MCP query execution error: {e}")
-            return {"error": str(e)}
+            return {"success": False, "error": str(e)}
     
 
     
-    async def discover_schema(self, database: str = "Agentic_BI") -> Optional[Dict[str, Any]]:
-        """Discover database schema through MCP server."""
+    async def discover_databases(self) -> Optional[Dict[str, Any]]:
+        """Discover all databases through MCP server."""
+        try:
+            if not self.session:
+                await self.connect()
+            
+            # No payload needed for discover_databases
+            async with self.session.post(
+                f"{self.server_url}/tools/discover_databases_tool",
+                json={},
+                headers={"Content-Type": "application/json"}
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"MCP database discovery failed ({response.status}): {error_text}")
+                    return {"error": f"HTTP {response.status}: {error_text}"}
+                    
+        except Exception as e:
+            logger.error(f"MCP database discovery error: {e}")
+            return {"error": str(e)}
+    
+    async def discover_tables(self, database: str) -> Optional[Dict[str, Any]]:
+        """Discover tables in a specific database through MCP server."""
         try:
             if not self.session:
                 await self.connect()
@@ -97,7 +135,7 @@ class BackendMCPClient:
             payload = {"database": database}
             
             async with self.session.post(
-                f"{self.server_url}/tools/discover_databases_tool",
+                f"{self.server_url}/tools/discover_tables_tool",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             ) as response:
@@ -106,11 +144,36 @@ class BackendMCPClient:
                     return result
                 else:
                     error_text = await response.text()
-                    logger.error(f"MCP schema discovery failed ({response.status}): {error_text}")
+                    logger.error(f"MCP table discovery failed ({response.status}): {error_text}")
                     return {"error": f"HTTP {response.status}: {error_text}"}
                     
         except Exception as e:
-            logger.error(f"MCP schema discovery error: {e}")
+            logger.error(f"MCP table discovery error: {e}")
+            return {"error": str(e)}
+    
+    async def call_tool(self, tool_name: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """Generic method to call any MCP tool."""
+        try:
+            if not self.session:
+                await self.connect()
+            
+            payload = params or {}
+            
+            async with self.session.post(
+                f"{self.server_url}/tools/{tool_name}",
+                json=payload,
+                headers={"Content-Type": "application/json"}
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"MCP tool '{tool_name}' failed ({response.status}): {error_text}")
+                    return {"error": f"HTTP {response.status}: {error_text}"}
+                    
+        except Exception as e:
+            logger.error(f"MCP tool '{tool_name}' error: {e}")
             return {"error": str(e)}
     
     async def health_check(self) -> bool:
@@ -166,17 +229,12 @@ async def execute_mcp_query(query: str, params: Optional[List] = None) -> Dict[s
     """Execute a query through MCP client."""
     async with mcp_connection() as client:
         result = await client.execute_query(query, params)
-        if result and not result.get('error'):
-            return {
-                'success': True,
-                'data': result.get('rows', []),
-                'columns': result.get('columns', []),
-                'row_count': result.get('row_count', 0)
-            }
+        if result and result.get('success'):
+            return result
         else:
             return {
                 'success': False,
-                'error': result.get('error', 'Unknown error'),
+                'error': result.get('error', 'Unknown error') if result else 'No response from MCP server',
                 'data': [],
                 'columns': [],
                 'row_count': 0

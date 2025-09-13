@@ -12,9 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create user
 RUN useradd -m appuser && chown appuser:appuser /app
 
-# Copy source code directly
+# Copy source code and shared models
 COPY --chown=appuser:appuser src/ ./src/
-COPY --chown=appuser:appuser main.py ./
+COPY --chown=appuser:appuser shared/ ./shared/
+COPY --chown=appuser:appuser main.py websocket_server.py ./
 
 # Install only essential dependencies directly to system Python
 RUN uv pip install --system \
@@ -27,7 +28,8 @@ RUN uv pip install --system \
     pymysql==1.1.0 \
     aiomysql==0.2.0 \
     aiohttp==3.9.0 \
-    structlog==23.2.0
+    structlog==23.2.0 \
+    websockets==12.0
 
 USER appuser
 

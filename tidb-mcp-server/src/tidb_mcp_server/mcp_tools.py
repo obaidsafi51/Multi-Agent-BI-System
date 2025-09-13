@@ -20,6 +20,16 @@ from .exceptions import (
 )
 from .query_executor import QueryExecutor
 from .schema_inspector import SchemaInspector
+from .schema_intelligence import (
+    SchemaIntelligenceEngine, 
+    get_schema_intelligence,
+    initialize_schema_intelligence,
+    discover_business_mappings_impl,
+    analyze_query_intent_impl, 
+    suggest_schema_optimizations_impl,
+    get_schema_intelligence_stats_impl,
+    learn_from_successful_mapping_impl
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +38,7 @@ _schema_inspector: SchemaInspector | None = None
 _query_executor: QueryExecutor | None = None
 _cache_manager: CacheManager | None = None
 _mcp_server: FastMCP | None = None
+_schema_intelligence: SchemaIntelligenceEngine | None = None
 
 
 def initialize_tools(schema_inspector: SchemaInspector,
@@ -45,11 +56,18 @@ def initialize_tools(schema_inspector: SchemaInspector,
         mcp_server: FastMCP server instance
         config: Server configuration for tool enablement
     """
-    global _schema_inspector, _query_executor, _cache_manager, _mcp_server
+    global _schema_inspector, _query_executor, _cache_manager, _mcp_server, _schema_intelligence
     _schema_inspector = schema_inspector
     _query_executor = query_executor
     _cache_manager = cache_manager
     _mcp_server = mcp_server
+    
+    # Initialize schema intelligence engine
+    _schema_intelligence = initialize_schema_intelligence(
+        schema_inspector=schema_inspector,
+        query_executor=query_executor,
+        cache_manager=cache_manager
+    )
     
     # Initialize LLM tools if enabled
     if config.llm_tools_enabled:
@@ -57,12 +75,12 @@ def initialize_tools(schema_inspector: SchemaInspector,
         llm_config = config.get_llm_config()
         initialize_llm_tools(llm_config, cache_manager)
     
-    logger.info(f"MCP tools initialized (database: {config.database_tools_enabled}, llm: {config.llm_tools_enabled})")
+    logger.info(f"MCP tools initialized (database: {config.database_tools_enabled}, llm: {config.llm_tools_enabled}, schema_intelligence: True)")
 
 
 def _ensure_initialized() -> None:
     """Ensure tools are initialized before use."""
-    global _schema_inspector, _query_executor, _cache_manager, _mcp_server
+    global _schema_inspector, _query_executor, _cache_manager, _mcp_server, _schema_intelligence
     
     if not all([_schema_inspector, _query_executor, _cache_manager, _mcp_server]):
         # Auto-initialize if not already done
@@ -72,13 +90,19 @@ def _ensure_initialized() -> None:
             from .query_executor import QueryExecutor
             from .schema_inspector import SchemaInspector
             from .cache_manager import CacheManager
-            from fastmcp import FastMCP
             
             # Create instances directly (without MCP server dependency for now)
             _query_executor = QueryExecutor()
             _schema_inspector = SchemaInspector()
             _cache_manager = CacheManager()
-            _mcp_server = FastMCP(name="tidb-mcp-server", version="0.1.0")  # Minimal instance
+            _mcp_server = None  # Will be set when properly initialized
+            
+            # Initialize schema intelligence
+            _schema_intelligence = initialize_schema_intelligence(
+                schema_inspector=_schema_inspector,
+                query_executor=_query_executor,
+                cache_manager=_cache_manager
+            )
             
             logger.info("MCP tools auto-initialized successfully")
             
@@ -524,6 +548,343 @@ def clear_cache(cache_type: str = "all") -> dict[str, Any]:
         raise TiDBMCPServerError(f"Failed to clear cache: {str(e)}")
 
 
+def discover_business_mappings(
+    business_terms: list[str] | None = None,
+    databases: list[str] | None = None,
+    confidence_threshold: float = 0.6
+) -> dict[str, Any]:
+    """
+    Discover mappings between business terms and database schema elements.
+    
+    Uses semantic analysis to map business terminology to actual database
+    tables and columns, helping users understand what data is available.
+    
+    Args:
+        business_terms: List of business terms to map (if None, uses common terms)
+        databases: List of databases to analyze (if None, analyzes all)
+        confidence_threshold: Minimum confidence score for mappings (0.0 to 1.0)
+        
+    Returns:
+        Dictionary with discovered business mappings
+        
+    Raises:
+        Exception: If business mapping discovery fails
+    """
+    _ensure_initialized()
+    
+    if not _schema_intelligence:
+        raise TiDBMCPServerError("Schema intelligence engine not initialized")
+    
+    if confidence_threshold < 0.0 or confidence_threshold > 1.0:
+        raise ValueError("Confidence threshold must be between 0.0 and 1.0")
+    
+    if business_terms is not None and not isinstance(business_terms, list):
+        raise ValueError("Business terms must be a list of strings")
+    
+    if databases is not None and not isinstance(databases, list):
+        raise ValueError("Databases must be a list of strings")
+    
+    try:
+        import asyncio
+        logger.info(f"Discovering business mappings (terms: {business_terms}, databases: {databases})")
+        
+        # Run async function in sync context
+        try:
+            loop = asyncio.get_event_loop()
+            mappings = loop.run_until_complete(
+                _schema_intelligence.discover_business_mappings(
+                    business_terms=business_terms,
+                    databases=databases,
+                    confidence_threshold=confidence_threshold
+                )
+            )
+        except RuntimeError:
+            # No event loop, create one
+            mappings = asyncio.run(
+                _schema_intelligence.discover_business_mappings(
+                    business_terms=business_terms,
+                    databases=databases,
+                    confidence_threshold=confidence_threshold
+                )
+            )
+        
+        result = {
+            "mappings": [mapping.to_dict() for mapping in mappings],
+            "total_mappings": len(mappings),
+            "confidence_threshold": confidence_threshold,
+            "business_terms_analyzed": business_terms or "default_terms",
+            "databases_analyzed": databases or "all_databases"
+        }
+        
+        logger.info(f"Discovered {len(mappings)} business mappings")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Business mappings discovery failed: {e}")
+        raise TiDBMCPServerError(f"Failed to discover business mappings: {str(e)}")
+
+
+def analyze_query_intent(
+    natural_language_query: str,
+    context: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """
+    Analyze natural language query to extract intent and suggest mappings.
+    
+    Processes user queries to understand what they're looking for and
+    suggests appropriate database schema elements to query.
+    
+    Args:
+        natural_language_query: Natural language query from user
+        context: Optional context information (user preferences, history)
+        
+    Returns:
+        Dictionary with analyzed query intent and suggested mappings
+        
+    Raises:
+        Exception: If query intent analysis fails
+    """
+    _ensure_initialized()
+    
+    if not _schema_intelligence:
+        raise TiDBMCPServerError("Schema intelligence engine not initialized")
+    
+    if not natural_language_query or not natural_language_query.strip():
+        raise ValueError("Natural language query is required and cannot be empty")
+    
+    if context is not None and not isinstance(context, dict):
+        raise ValueError("Context must be a dictionary")
+    
+    try:
+        import asyncio
+        logger.info(f"Analyzing query intent: {natural_language_query[:100]}...")
+        
+        # Run async function in sync context
+        try:
+            loop = asyncio.get_event_loop()
+            intent = loop.run_until_complete(
+                _schema_intelligence.analyze_query_intent(
+                    natural_language_query=natural_language_query,
+                    context=context or {}
+                )
+            )
+        except RuntimeError:
+            # No event loop, create one
+            intent = asyncio.run(
+                _schema_intelligence.analyze_query_intent(
+                    natural_language_query=natural_language_query,
+                    context=context or {}
+                )
+            )
+        
+        result = intent.to_dict()
+        
+        logger.info(f"Query intent analyzed: type={intent.intent_type}, confidence={intent.confidence_score:.2f}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Query intent analysis failed: {e}")
+        raise TiDBMCPServerError(f"Failed to analyze query intent: {str(e)}")
+
+
+def suggest_schema_optimizations(
+    database: str | None = None,
+    query_patterns: list[str] | None = None,
+    performance_threshold: float = 0.5
+) -> dict[str, Any]:
+    """
+    Suggest schema optimizations based on usage patterns and performance.
+    
+    Analyzes database schema and suggests improvements like indexes,
+    partitioning, or denormalization for better query performance.
+    
+    Args:
+        database: Target database (if None, analyzes all databases)
+        query_patterns: Common query patterns to optimize for
+        performance_threshold: Minimum impact threshold for suggestions (0.0 to 1.0)
+        
+    Returns:
+        Dictionary with schema optimization suggestions
+        
+    Raises:
+        Exception: If schema optimization analysis fails
+    """
+    _ensure_initialized()
+    
+    if not _schema_intelligence:
+        raise TiDBMCPServerError("Schema intelligence engine not initialized")
+    
+    if performance_threshold < 0.0 or performance_threshold > 1.0:
+        raise ValueError("Performance threshold must be between 0.0 and 1.0")
+    
+    if database is not None and not isinstance(database, str):
+        raise ValueError("Database must be a string")
+    
+    if query_patterns is not None and not isinstance(query_patterns, list):
+        raise ValueError("Query patterns must be a list of strings")
+    
+    try:
+        import asyncio
+        logger.info(f"Generating schema optimization suggestions (db: {database}, threshold: {performance_threshold})")
+        
+        # Run async function in sync context
+        try:
+            loop = asyncio.get_event_loop()
+            optimizations = loop.run_until_complete(
+                _schema_intelligence.suggest_schema_optimizations(
+                    database=database,
+                    query_patterns=query_patterns,
+                    performance_threshold=performance_threshold
+                )
+            )
+        except RuntimeError:
+            # No event loop, create one
+            optimizations = asyncio.run(
+                _schema_intelligence.suggest_schema_optimizations(
+                    database=database,
+                    query_patterns=query_patterns,
+                    performance_threshold=performance_threshold
+                )
+            )
+        
+        result = {
+            "optimizations": [opt.to_dict() for opt in optimizations],
+            "total_suggestions": len(optimizations),
+            "performance_threshold": performance_threshold,
+            "target_database": database or "all_databases",
+            "optimization_types": list(set(opt.optimization_type for opt in optimizations))
+        }
+        
+        logger.info(f"Generated {len(optimizations)} schema optimization suggestions")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Schema optimization analysis failed: {e}")
+        raise TiDBMCPServerError(f"Failed to suggest schema optimizations: {str(e)}")
+
+
+def get_schema_intelligence_stats() -> dict[str, Any]:
+    """
+    Get statistics about schema intelligence operations.
+    
+    Returns performance metrics and usage statistics for the schema
+    intelligence engine to help monitor its effectiveness.
+    
+    Returns:
+        Dictionary with schema intelligence statistics
+        
+    Raises:
+        Exception: If statistics retrieval fails
+    """
+    _ensure_initialized()
+    
+    if not _schema_intelligence:
+        raise TiDBMCPServerError("Schema intelligence engine not initialized")
+    
+    try:
+        logger.debug("Getting schema intelligence statistics")
+        
+        stats = _schema_intelligence.get_intelligence_stats()
+        
+        result = {
+            "schema_intelligence_stats": stats,
+            "engine_initialized": True,
+            "available_features": [
+                "business_mappings",
+                "query_intent_analysis", 
+                "schema_optimizations"
+            ]
+        }
+        
+        logger.debug("Schema intelligence statistics retrieved successfully")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to get schema intelligence statistics: {e}")
+        raise TiDBMCPServerError(f"Failed to get schema intelligence statistics: {str(e)}")
+
+
+def learn_from_successful_mapping(
+    business_term: str,
+    database_name: str,
+    table_name: str,
+    column_name: str | None = None,
+    success_score: float = 1.0
+) -> dict[str, Any]:
+    """
+    Learn from successful mappings to improve future suggestions.
+    
+    Provides feedback to the schema intelligence engine about successful
+    business term mappings to improve future recommendations.
+    
+    Args:
+        business_term: Business term that was successfully mapped
+        database_name: Database name of successful mapping
+        table_name: Table name of successful mapping
+        column_name: Column name of successful mapping (optional)
+        success_score: Score indicating mapping success (0.0 to 1.0)
+        
+    Returns:
+        Dictionary with learning operation results
+        
+    Raises:
+        Exception: If learning operation fails
+    """
+    _ensure_initialized()
+    
+    if not _schema_intelligence:
+        raise TiDBMCPServerError("Schema intelligence engine not initialized")
+    
+    if not business_term or not business_term.strip():
+        raise ValueError("Business term is required and cannot be empty")
+    
+    if not database_name or not database_name.strip():
+        raise ValueError("Database name is required and cannot be empty")
+    
+    if not table_name or not table_name.strip():
+        raise ValueError("Table name is required and cannot be empty")
+    
+    if success_score < 0.0 or success_score > 1.0:
+        raise ValueError("Success score must be between 0.0 and 1.0")
+    
+    try:
+        from .schema_intelligence import BusinessMapping
+        
+        logger.info(f"Learning from successful mapping: {business_term} -> {database_name}.{table_name}.{column_name}")
+        
+        # Create mapping object
+        mapping = BusinessMapping(
+            business_term=business_term,
+            schema_element_type='column' if column_name else 'table',
+            database_name=database_name,
+            table_name=table_name,
+            column_name=column_name,
+            confidence_score=0.8,  # Base confidence for learned mappings
+            mapping_type='learned'
+        )
+        
+        # Learn from the mapping
+        _schema_intelligence.learn_from_successful_mapping(
+            business_term=business_term,
+            mapping=mapping,
+            success_score=success_score
+        )
+        
+        result = {
+            "learning_successful": True,
+            "business_term": business_term,
+            "mapped_element": f"{database_name}.{table_name}" + (f".{column_name}" if column_name else ""),
+            "success_score": success_score
+        }
+        
+        logger.info("Successful mapping learned and stored")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to learn from successful mapping: {e}")
+        raise TiDBMCPServerError(f"Failed to learn from successful mapping: {str(e)}")
+
+
 def _with_error_handling_and_rate_limiting(func, tool_name: str):
     """
     Wrapper function to add error handling and rate limiting to MCP tools.
@@ -671,6 +1032,120 @@ def register_all_tools() -> None:
         """Clear cached data to force fresh retrieval."""
         return _with_error_handling_and_rate_limiting(clear_cache, "clear_cache")(cache_type)
 
+    # Register Schema Intelligence tools (sync wrappers for HTTP API compatibility)
+    @_mcp_server.tool()
+    def discover_business_mappings_tool(
+        business_terms: list[str] | None = None,
+        databases: list[str] | None = None,
+        confidence_threshold: float = 0.6
+    ) -> dict[str, Any]:
+        """Discover mappings between business terms and database schema elements."""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(
+                    discover_business_mappings_impl(business_terms, databases, confidence_threshold)
+                )
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(
+                    discover_business_mappings_impl(business_terms, databases, confidence_threshold)
+                )
+            return result
+        except Exception as e:
+            logger.error(f"Business mappings discovery failed: {e}")
+            return {"error": str(e), "mappings": [], "total_mappings": 0}
+
+    @_mcp_server.tool()
+    def analyze_query_intent_tool(
+        natural_language_query: str,
+        context: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Analyze natural language query to extract intent and suggest mappings."""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(
+                    analyze_query_intent_impl(natural_language_query, context)
+                )
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(
+                    analyze_query_intent_impl(natural_language_query, context)
+                )
+            return result
+        except Exception as e:
+            logger.error(f"Query intent analysis failed: {e}")
+            return {"error": str(e), "intent_type": "unknown", "confidence_score": 0.0}
+
+    @_mcp_server.tool()
+    def suggest_schema_optimizations_tool(
+        database: str | None = None,
+        query_patterns: list[str] | None = None,
+        performance_threshold: float = 0.5
+    ) -> dict[str, Any]:
+        """Suggest schema optimizations based on usage patterns and performance."""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(
+                    suggest_schema_optimizations_impl(database, query_patterns, performance_threshold)
+                )
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(
+                    suggest_schema_optimizations_impl(database, query_patterns, performance_threshold)
+                )
+            return result
+        except Exception as e:
+            logger.error(f"Schema optimization analysis failed: {e}")
+            return {"error": str(e), "optimizations": [], "total_suggestions": 0}
+
+    @_mcp_server.tool()
+    def get_schema_intelligence_stats_tool() -> dict[str, Any]:
+        """Get statistics about schema intelligence operations."""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(get_schema_intelligence_stats_impl())
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(get_schema_intelligence_stats_impl())
+            return result
+        except Exception as e:
+            logger.error(f"Schema intelligence stats failed: {e}")
+            return {"error": str(e), "engine_initialized": False}
+
+    @_mcp_server.tool()
+    def learn_from_successful_mapping_tool(
+        business_term: str,
+        database_name: str,
+        table_name: str,
+        column_name: str | None = None,
+        success_score: float = 1.0
+    ) -> dict[str, Any]:
+        """Learn from successful mappings to improve future suggestions."""
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(
+                    learn_from_successful_mapping_impl(business_term, database_name, table_name, column_name, success_score)
+                )
+            except RuntimeError:
+                # No event loop, create one
+                result = asyncio.run(
+                    learn_from_successful_mapping_impl(business_term, database_name, table_name, column_name, success_score)
+                )
+            return result
+        except Exception as e:
+            logger.error(f"Learning from successful mapping failed: {e}")
+            return {"error": str(e), "learning_successful": False}
+
     # Register LLM tools
     try:
         from .llm_tools import generate_text_tool, analyze_data_tool, generate_sql_tool, explain_results_tool
@@ -717,5 +1192,11 @@ MCP_TOOLS = [
     execute_query,
     validate_query,
     get_server_stats,
-    clear_cache
+    clear_cache,
+    # Schema Intelligence Tools
+    discover_business_mappings_impl,
+    analyze_query_intent_impl,
+    suggest_schema_optimizations_impl,
+    get_schema_intelligence_stats_impl,
+    learn_from_successful_mapping_impl
 ]
