@@ -417,7 +417,14 @@ async def list_tools():
             "llm_generate_sql_tool",
             "llm_explain_results_tool"
         ],
-        "description": "Available MCP tools for database operations and LLM services"
+        "schema_intelligence_tools": [
+            "discover_business_mappings_tool",
+            "analyze_query_intent_tool",
+            "suggest_schema_optimizations_tool",
+            "get_schema_intelligence_stats_tool",
+            "learn_from_successful_mapping_tool"
+        ],
+        "description": "Available MCP tools for database operations, LLM services, and schema intelligence"
     }
 
 
@@ -468,6 +475,79 @@ async def get_query_suggestions():
         return {"suggestions": suggestions, "status": "success"}
     except Exception as e:
         logger.error(f"get_suggestions failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Schema Intelligence Tools HTTP Endpoints
+@app.post("/tools/discover_business_mappings_tool")
+async def discover_business_mappings_http(request: dict):
+    """HTTP endpoint for discovering business term mappings"""
+    try:
+        result = mcp_tools.discover_business_mappings_impl(
+            business_terms=request.get("business_terms"),
+            databases=request.get("databases"),
+            confidence_threshold=request.get("confidence_threshold", 0.6)
+        )
+        return await result
+    except Exception as e:
+        logger.error(f"discover_business_mappings_http failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/analyze_query_intent_tool")
+async def analyze_query_intent_http(request: dict):
+    """HTTP endpoint for analyzing query intent"""
+    try:
+        result = mcp_tools.analyze_query_intent_impl(
+            natural_language_query=request.get("natural_language_query", ""),
+            context=request.get("context")
+        )
+        return await result
+    except Exception as e:
+        logger.error(f"analyze_query_intent_http failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/suggest_schema_optimizations_tool")
+async def suggest_schema_optimizations_http(request: dict):
+    """HTTP endpoint for suggesting schema optimizations"""
+    try:
+        result = mcp_tools.suggest_schema_optimizations_impl(
+            database=request.get("database"),
+            query_patterns=request.get("query_patterns"),
+            performance_threshold=request.get("performance_threshold", 0.5)
+        )
+        return await result
+    except Exception as e:
+        logger.error(f"suggest_schema_optimizations_http failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/get_schema_intelligence_stats_tool")
+async def get_schema_intelligence_stats_http(request: dict):
+    """HTTP endpoint for getting schema intelligence stats"""
+    try:
+        result = mcp_tools.get_schema_intelligence_stats_impl()
+        return await result
+    except Exception as e:
+        logger.error(f"get_schema_intelligence_stats_http failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/learn_from_successful_mapping_tool")
+async def learn_from_successful_mapping_http(request: dict):
+    """HTTP endpoint for learning from successful mappings"""
+    try:
+        result = mcp_tools.learn_from_successful_mapping_impl(
+            business_term=request.get("business_term", ""),
+            database_name=request.get("database_name", ""),
+            table_name=request.get("table_name", ""),
+            column_name=request.get("column_name"),
+            success_score=request.get("success_score", 1.0)
+        )
+        return await result
+    except Exception as e:
+        logger.error(f"learn_from_successful_mapping_http failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

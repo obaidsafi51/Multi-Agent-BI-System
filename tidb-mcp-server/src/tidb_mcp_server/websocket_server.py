@@ -534,31 +534,40 @@ class WebSocketMCPServerManager:
             
             for database in databases:
                 try:
+                    # Handle database as dict or string
+                    if isinstance(database, dict):
+                        database_name = database.get("name", "unknown")
+                    else:
+                        database_name = str(database)
+                    
                     # Get tables for this database
-                    tables = discover_tables(database)
+                    tables = discover_tables(database_name)
                     database_info = {
-                        "name": database,
+                        "name": database_name,
                         "tables": {},
                         "table_count": len(tables)
                     }
                     
                     for table in tables:
                         try:
-                            # Get schema for each table
-                            schema = get_table_schema(database, table)
-                            database_info["tables"][table] = schema
+                            # Get schema for each table (ensure table is string)
+                            table_name = table.get("name") if isinstance(table, dict) else str(table)
+                            schema = get_table_schema(database_name, table_name)
+                            database_info["tables"][table_name] = schema
                             schema_context["total_columns"] += len(schema.get("columns", []))
                         except Exception as e:
-                            logger.warning(f"Failed to get schema for {database}.{table}: {e}")
-                            database_info["tables"][table] = {"error": str(e)}
+                            table_name = table.get("name") if isinstance(table, dict) else str(table)
+                            logger.warning(f"Failed to get schema for {database_name}.{table_name}: {e}")
+                            database_info["tables"][table_name] = {"error": str(e)}
                     
-                    schema_context["databases"][database] = database_info
-                    schema_context["tables"].extend([f"{database}.{table}" for table in tables])
+                    schema_context["databases"][database_name] = database_info
+                    schema_context["tables"].extend([f"{database_name}.{table.get('name') if isinstance(table, dict) else str(table)}" for table in tables])
                     schema_context["total_tables"] += len(tables)
                     
                 except Exception as e:
-                    logger.warning(f"Failed to process database {database}: {e}")
-                    schema_context["databases"][database] = {"error": str(e)}
+                    database_name = database.get("name") if isinstance(database, dict) else str(database)
+                    logger.warning(f"Failed to process database {database_name}: {e}")
+                    schema_context["databases"][database_name] = {"error": str(e)}
             
             return {
                 "success": True,

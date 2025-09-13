@@ -43,6 +43,30 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
   useEffect(() => {
     if (selectedDatabase && !localSelectedDatabase) {
       setLocalSelectedDatabase(selectedDatabase.name);
+  const fetchDatabases = async () => {
+    setFetchingDatabases(true);
+    setError(null);
+    
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${API_BASE_URL}/api/database/list`);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch databases: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setDatabases(data.databases || []);
+      } else {
+        throw new Error("Failed to fetch database list");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch databases");
+    } finally {
+      setFetchingDatabases(false);
+
     }
   }, [selectedDatabase, localSelectedDatabase]);
 
@@ -51,6 +75,16 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
     
     try {
       await selectDatabase(localSelectedDatabase);
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const response = await fetch(`${API_BASE_URL}/api/database/select`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          database_name: selectedDatabase,
+        }),
+      });
       
       // Call the optional callback
       if (onDatabaseSelect) {

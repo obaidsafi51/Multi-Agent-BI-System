@@ -1,12 +1,13 @@
 """
 Configuration for Enhanced NLP Agent with WebSocket optimizations
 """
+import os
 
 # Environment Variables Configuration
 ENVIRONMENT_VARIABLES = {
     # WebSocket MCP Server
-    "MCP_SERVER_WS_URL": "ws://localhost:8000/ws",
-    "MCP_SERVER_HTTP_URL": "http://localhost:8000",
+    "MCP_SERVER_WS_URL": os.getenv("MCP_SERVER_WS_URL", "ws://localhost:8000/ws"),
+    "MCP_SERVER_HTTP_URL": os.getenv("MCP_SERVER_HTTP_URL", "http://localhost:8000"),
     
     # KIMI API Configuration
     "KIMI_API_KEY": "your_kimi_api_key_here",

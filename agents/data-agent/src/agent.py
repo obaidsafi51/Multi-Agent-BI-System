@@ -24,39 +24,91 @@ from .optimization.optimizer import get_query_optimizer
 BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8001")
 
 class SchemaManagerMCPClient:
-    """MCP client for schema management via HTTP calls to backend"""
+    """MCP client for schema management via HTTP calls to backend with local caching"""
     
     def __init__(self, backend_url: str = BACKEND_URL):
         self.backend_url = backend_url.rstrip('/')
+        self._schema_cache = {}
+        self._cache_timestamps = {}
+        self._cache_ttl = 1800  # 30 minutes TTL for schema information
+        
+    def _is_cache_valid(self, key: str) -> bool:
+        """Check if cache entry is still valid"""
+        if key not in self._cache_timestamps:
+            return False
+        return (time.time() - self._cache_timestamps[key]) < self._cache_ttl
+        
+    def _cache_schema_data(self, key: str, data: Dict[str, Any]) -> None:
+        """Cache schema data with timestamp"""
+        self._schema_cache[key] = data
+        self._cache_timestamps[key] = time.time()
         
     async def get_schema_discovery(self, fast: bool = True) -> Dict[str, Any]:
-        """Get schema discovery from backend"""
+        """Get schema discovery from backend with local caching"""
+        cache_key = f"schema_discovery_{'fast' if fast else 'full'}"
+        
+        # Check cache first
+        if self._is_cache_valid(cache_key):
+            logger.info(f"Using cached schema discovery data")
+            return self._schema_cache[cache_key]
+            
         endpoint = f"{self.backend_url}/api/schema/discovery/fast" if fast else f"{self.backend_url}/api/schema/discovery"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
-                        return await response.json()
+                        data = await response.json()
+                        # Cache the successful response
+                        self._cache_schema_data(cache_key, data)
+                        logger.info(f"Schema discovery cached successfully")
+                        return data
                     else:
                         logger.error(f"Schema discovery failed: {response.status}")
+                        # Return cached data if available, even if expired
+                        if cache_key in self._schema_cache:
+                            logger.warning(f"Using expired cache due to API failure")
+                            return self._schema_cache[cache_key]
                         return {}
         except Exception as e:
             logger.error(f"Schema discovery error: {e}")
+            # Return cached data if available, even if expired (fallback mechanism)
+            if cache_key in self._schema_cache:
+                logger.warning(f"Using expired cache due to network error")
+                return self._schema_cache[cache_key]
             return {}
     
     async def get_table_mappings(self, metric_type: str = "revenue") -> Dict[str, Any]:
-        """Get schema mappings for a specific metric type"""
+        """Get schema mappings for a specific metric type with local caching"""
+        cache_key = f"table_mappings_{metric_type}"
+        
+        # Check cache first
+        if self._is_cache_valid(cache_key):
+            logger.info(f"Using cached table mappings for {metric_type}")
+            return self._schema_cache[cache_key]
+            
         endpoint = f"{self.backend_url}/api/schema/mappings/{metric_type}"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(endpoint, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
-                        return await response.json()
+                        data = await response.json()
+                        # Cache the successful response
+                        self._cache_schema_data(cache_key, data)
+                        logger.info(f"Table mappings for {metric_type} cached successfully")
+                        return data
                     else:
                         logger.error(f"Schema mappings failed: {response.status}")
+                        # Return cached data if available, even if expired (fallback mechanism)
+                        if cache_key in self._schema_cache:
+                            logger.warning(f"Using expired cache for {metric_type} due to API failure")
+                            return self._schema_cache[cache_key]
                         return {}
         except Exception as e:
             logger.error(f"Schema mappings error: {e}")
+            # Return cached data if available, even if expired (fallback mechanism)
+            if cache_key in self._schema_cache:
+                logger.warning(f"Using expired cache for {metric_type} due to network error")
+                return self._schema_cache[cache_key]
             return {}
     
     async def process_query_with_context(self, query: str, user_id: str = None, session_id: str = None) -> Dict[str, Any]:
@@ -78,6 +130,24 @@ class SchemaManagerMCPClient:
         except Exception as e:
             logger.error(f"Query processing error: {e}")
             return {"error": f"Query processing error: {e}"}
+    
+    def clear_schema_cache(self) -> None:
+        """Clear all cached schema information"""
+        self._schema_cache.clear()
+        self._cache_timestamps.clear()
+        logger.info("Schema cache cleared")
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get schema cache statistics"""
+        current_time = time.time()
+        valid_entries = sum(1 for key in self._cache_timestamps 
+                           if (current_time - self._cache_timestamps[key]) < self._cache_ttl)
+        return {
+            "total_entries": len(self._schema_cache),
+            "valid_entries": valid_entries,
+            "expired_entries": len(self._schema_cache) - valid_entries,
+            "cache_ttl_seconds": self._cache_ttl
+        }
 
 # Initialize schema manager MCP client
 schema_mcp_client = SchemaManagerMCPClient()

@@ -1,6 +1,37 @@
 """
 AI CFO Backend - FastAPI Gateway with WebSocket Support
 Main FastAPI application with async endpoints, WebSocket handlers, and authentication.
+
+INTENDED WORKFLOW:
+1. System Initialization:
+   - Frontend loads and checks for user session
+   - If no database selected, call /api/database/list to get available databases
+   - User selects database via database selector modal
+   - Frontend calls /api/database/select to initialize schema context
+   - MCP server stores schema context for subsequent agent operations
+
+2. Query Processing Workflow:
+   - User enters natural language query in frontend
+   - Frontend sends query to /api/query endpoint
+   - Backend routes query through agent workflow:
+     a) NLP Agent: processes query, extracts intent, generates SQL
+     b) Data Agent: executes SQL via MCP server, validates and processes data  
+     c) Viz Agent: generates dashboard visualizations based on processed data
+   - Backend returns combined response to frontend
+   - Frontend updates dashboard with new visualizations
+
+3. Agent Communication Pattern:
+   Frontend → Backend → NLP Agent → Data Agent → Viz Agent → MCP Server
+   
+4. Error Handling:
+   - Each agent has fallback mechanisms
+   - MCP server provides direct database access as last resort
+   - User receives meaningful error messages and recovery suggestions
+
+5. Caching and Performance:
+   - Schema context cached after database selection
+   - Query results cached for performance
+   - Agent responses cached when appropriate
 """
 
 import os
@@ -18,6 +49,16 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+# Import orchestration utilities
+from orchestration import (
+    CircuitBreaker, CircuitBreakerException, RetryConfig, 
+    retry_with_backoff, RetryExhaustedException,
+    orchestration_metrics, WebSocketProgressReporter
+)
+
+# Import WebSocket Agent Manager for Phase 1 parallel implementation
+from websocket_agent_manager import websocket_agent_manager, AgentType
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -27,9 +68,17 @@ from dotenv import load_dotenv
 import redis.asyncio as redis
 import httpx
 
-from models.core import QueryIntent, QueryResult, ErrorResponse
+# Import standardized shared models  
+from shared.models.workflow import (
+    QueryRequest, QueryResponse, QueryIntent, QueryResult, ErrorResponse,
+    ProcessingMetadata, PerformanceMetrics, NLPResponse, DataQueryResponse, VisualizationResponse
+)
 from models.ui import BentoGridLayout, BentoGridCard
+from database_context import DatabaseContextManager
 from models.user import UserProfile, PersonalizationRecommendation, QueryHistoryEntry
+
+# Import Pydantic for remaining local models
+from pydantic import BaseModel, Field
 
 # Import dynamic schema management
 try:
@@ -64,11 +113,56 @@ limiter = Limiter(key_func=get_remote_address)
 # Global connections
 redis_client: Optional[redis.Redis] = None
 websocket_connections: Dict[str, WebSocket] = {}
+database_context_manager: Optional[DatabaseContextManager] = None
 
 # Dynamic schema management globals
 dynamic_schema_manager = None
 intelligent_query_builder = None
 configuration_manager = None
+
+# Circuit breakers for agent protection
+nlp_agent_circuit_breaker = CircuitBreaker(
+    failure_threshold=5,
+    recovery_timeout=60.0,
+    timeout=30.0,
+    name="NLP_Agent"
+)
+
+data_agent_circuit_breaker = CircuitBreaker(
+    failure_threshold=5,
+    recovery_timeout=120.0,
+    timeout=120.0,
+    name="Data_Agent"
+)
+
+viz_agent_circuit_breaker = CircuitBreaker(
+    failure_threshold=3,
+    recovery_timeout=45.0,
+    timeout=45.0,
+    name="Viz_Agent"
+)
+
+# Retry configurations
+nlp_retry_config = RetryConfig(
+    max_attempts=3,
+    base_delay=1.0,
+    max_delay=30.0,
+    retry_exceptions=(aiohttp.ClientError, asyncio.TimeoutError)
+)
+
+data_retry_config = RetryConfig(
+    max_attempts=2,
+    base_delay=2.0,
+    max_delay=60.0,
+    retry_exceptions=(aiohttp.ClientError, asyncio.TimeoutError)
+)
+
+viz_retry_config = RetryConfig(
+    max_attempts=2,
+    base_delay=1.0,
+    max_delay=30.0,
+    retry_exceptions=(aiohttp.ClientError, asyncio.TimeoutError)
+)
 
 
 @asynccontextmanager
@@ -90,9 +184,15 @@ app = FastAPI(
 
 # Add middleware
 app.add_middleware(SlowAPIMiddleware)
+
+# Get CORS origins from environment variables
+frontend_url = os.getenv("FRONTEND_URL", "http://frontend:3000")
+localhost_frontend = os.getenv("LOCALHOST_FRONTEND_URL", "http://localhost:3000")
+cors_origins = [frontend_url, localhost_frontend]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://frontend:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,9 +207,212 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+# Response validation functions
+def validate_nlp_response(response_data: Dict[str, Any]) -> Optional[NLPResponse]:
+    """Validate and convert NLP agent response to standardized format"""
+    try:
+        # Try to parse as standardized NLPResponse first
+        nlp_response = NLPResponse(**response_data)
+        logger.info("NLP response successfully validated as standardized format")
+        return nlp_response
+    except Exception as e:
+        logger.warning(f"NLP response validation failed, attempting conversion: {e}")
+        try:
+            # Attempt to convert various legacy formats to standardized format
+            success = response_data.get("success", True)
+            
+            # Handle different response structure variations
+            agent_metadata = response_data.get("agent_metadata", {})
+            if not agent_metadata:
+                # Create default metadata
+                agent_metadata = {
+                    "agent_name": "nlp-agent",
+                    "agent_version": "2.2.0",
+                    "processing_time_ms": int(response_data.get("execution_time", response_data.get("processing_time_ms", 0)) * 1000) if response_data.get("execution_time", 0) < 100 else int(response_data.get("execution_time", response_data.get("processing_time_ms", 0))),
+                    "operation_id": f"nlp_op_{int(datetime.utcnow().timestamp() * 1000)}",
+                    "status": "success" if success else "error"
+                }
+            
+            # Extract or create intent
+            intent_data = None
+            if "intent" in response_data:
+                intent_data = response_data["intent"]
+            elif "query_intent" in response_data:
+                intent_data = response_data["query_intent"]
+            
+            converted_response = {
+                "success": success,
+                "agent_metadata": agent_metadata,
+                "intent": intent_data,
+                "sql_query": response_data.get("sql_query", ""),
+                "entities_recognized": response_data.get("entities", response_data.get("entities_recognized", [])),
+                "confidence_score": response_data.get("confidence_score", 0.0),
+                "processing_path": response_data.get("processing_path", "standard")
+            }
+            
+            if not success:
+                error_info = response_data.get("error", {})
+                if isinstance(error_info, str):
+                    error_info = {"message": error_info}
+                
+                converted_response["error"] = {
+                    "error_type": error_info.get("error_type", "nlp_processing_error"),
+                    "message": error_info.get("message", response_data.get("error", "Unknown NLP processing error")),
+                    "recovery_action": error_info.get("recovery_action", "retry"),
+                    "suggestions": error_info.get("suggestions", ["Try rephrasing your query", "Check query complexity"])
+                }
+            
+            return NLPResponse(**converted_response)
+        except Exception as conv_error:
+            logger.error(f"Failed to convert NLP response: {conv_error}")
+            return None
+
+def validate_data_response(response_data: Dict[str, Any]) -> Optional[DataQueryResponse]:
+    """Validate and convert Data agent response to standardized format"""
+    try:
+        # Try to parse as standardized DataQueryResponse first
+        data_response = DataQueryResponse(**response_data)
+        logger.info("Data response successfully validated as standardized format")
+        return data_response
+    except Exception as e:
+        logger.warning(f"Data response validation failed, attempting conversion: {e}")
+        try:
+            # Attempt to convert various legacy formats to standardized format
+            success = response_data.get("success", True)
+            
+            # Handle different response structure variations
+            agent_metadata = response_data.get("agent_metadata", {})
+            if not agent_metadata:
+                # Create default metadata
+                agent_metadata = {
+                    "agent_name": "data-agent",
+                    "agent_version": "1.0.0",
+                    "processing_time_ms": response_data.get("processing_time_ms", 0),
+                    "operation_id": f"data_op_{int(datetime.utcnow().timestamp() * 1000)}",
+                    "status": "success" if success else "error"
+                }
+            
+            converted_response = {
+                "success": success,
+                "agent_metadata": agent_metadata
+            }
+            
+            if success:
+                # Extract result data with multiple fallback formats
+                result_data = response_data.get("result", {})
+                if not result_data:
+                    # Try alternative formats
+                    result_data = {
+                        "data": response_data.get("data", response_data.get("processed_data", [])),
+                        "columns": response_data.get("columns", []),
+                        "row_count": response_data.get("row_count", 0),
+                        "processing_time_ms": response_data.get("processing_time_ms", 0)
+                    }
+                
+                converted_response["result"] = result_data
+                
+                # Extract validation data
+                validation_data = response_data.get("validation", {})
+                if not validation_data:
+                    data_quality = response_data.get("data_quality", {})
+                    validation_data = {
+                        "is_valid": data_quality.get("is_valid", True),
+                        "quality_score": data_quality.get("quality_score", 1.0),
+                        "issues": data_quality.get("issues", []),
+                        "warnings": data_quality.get("warnings", [])
+                    }
+                
+                converted_response["validation"] = validation_data
+                converted_response["query_optimization"] = response_data.get("optimization", response_data.get("query_optimization", {}))
+                converted_response["cache_metadata"] = response_data.get("cache_metadata", {"cache_hit": False})
+            else:
+                error_info = response_data.get("error", {})
+                if isinstance(error_info, str):
+                    error_info = {"message": error_info}
+                
+                converted_response["error"] = {
+                    "error_type": error_info.get("error_type", "data_query_error"),
+                    "message": error_info.get("message", response_data.get("error", "Unknown data processing error")),
+                    "recovery_action": error_info.get("recovery_action", "retry"),
+                    "suggestions": error_info.get("suggestions", ["Check database connectivity", "Verify query syntax"])
+                }
+            
+            return DataQueryResponse(**converted_response)
+        except Exception as conv_error:
+            logger.error(f"Failed to convert Data response: {conv_error}")
+            return None
+
+def validate_viz_response(response_data: Dict[str, Any]) -> Optional[VisualizationResponse]:
+    """Validate and convert Visualization agent response to standardized format"""
+    try:
+        # Try to parse as standardized VisualizationResponse first
+        viz_response = VisualizationResponse(**response_data)
+        logger.info("Visualization response successfully validated as standardized format")
+        return viz_response
+    except Exception as e:
+        logger.warning(f"Visualization response validation failed, attempting conversion: {e}")
+        try:
+            # Attempt to convert various legacy formats to standardized format
+            success = response_data.get("success", True)
+            
+            # Handle different response structure variations
+            agent_metadata = response_data.get("agent_metadata", {})
+            if not agent_metadata:
+                # Create default metadata
+                agent_metadata = {
+                    "agent_name": "viz-agent",
+                    "agent_version": "1.0.0",
+                    "processing_time_ms": response_data.get("processing_time_ms", 0),
+                    "operation_id": f"viz_op_{int(datetime.utcnow().timestamp() * 1000)}",
+                    "status": "success" if success else "error"
+                }
+            
+            converted_response = {
+                "success": success,
+                "agent_metadata": agent_metadata
+            }
+            
+            if success:
+                converted_response["chart_config"] = response_data.get("chart_config", {})
+                converted_response["chart_data"] = response_data.get("chart_json", response_data.get("chart_data", {}))
+                converted_response["dashboard_cards"] = response_data.get("dashboard_cards", [])
+                converted_response["export_options"] = response_data.get("export_options", {
+                    "formats": ["png", "pdf", "svg"],
+                    "sizes": ["small", "medium", "large"]
+                })
+            else:
+                error_info = response_data.get("error", {})
+                if isinstance(error_info, str):
+                    error_info = {"message": error_info}
+                
+                converted_response["error"] = {
+                    "error_type": error_info.get("error_type", "visualization_error"),
+                    "message": error_info.get("message", response_data.get("error", "Unknown visualization error")),
+                    "recovery_action": error_info.get("recovery_action", "retry"),
+                    "suggestions": error_info.get("suggestions", ["Check data format", "Try different chart type"])
+                }
+                
+                # Still provide empty chart components for consistency
+                converted_response["chart_config"] = {"chart_type": "error", "title": "Error", "responsive": True}
+                converted_response["chart_data"] = {}
+                converted_response["dashboard_cards"] = []
+                converted_response["export_options"] = {"formats": [], "sizes": []}
+            
+            return VisualizationResponse(**converted_response)
+        except Exception as conv_error:
+            logger.error(f"Failed to convert Visualization response: {conv_error}")
+            return None
+
 async def startup_event():
     """Initialize connections, dynamic schema management, and validate environment on startup"""
-    global redis_client, dynamic_schema_manager, intelligent_query_builder, configuration_manager
+    global redis_client, dynamic_schema_manager, intelligent_query_builder, configuration_manager, database_context_manager
+    
+    # Initialize WebSocket Agent Manager (Phase 1)
+    try:
+        await websocket_agent_manager.start()
+        logger.info("WebSocket Agent Manager initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize WebSocket Agent Manager: {e}")
     
     # Initialize Redis connection
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -117,9 +420,15 @@ async def startup_event():
         redis_client = redis.from_url(redis_url, decode_responses=True)
         await redis_client.ping()
         logger.info("Redis connection established")
+        
+        # Initialize Database Context Manager
+        database_context_manager = DatabaseContextManager(redis_client=redis_client)
+        logger.info("Database Context Manager initialized")
+        
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
         redis_client = None
+        database_context_manager = None
     
     # Initialize Dynamic Schema Management
     if DYNAMIC_SCHEMA_AVAILABLE:
@@ -166,6 +475,13 @@ async def shutdown_event():
     """Clean up connections on shutdown"""
     global redis_client
     
+    # Shutdown WebSocket Agent Manager
+    try:
+        await websocket_agent_manager.stop()
+        logger.info("WebSocket Agent Manager stopped")
+    except Exception as e:
+        logger.error(f"Error stopping WebSocket Agent Manager: {e}")
+    
     if redis_client:
         await redis_client.close()
         logger.info("Redis connection closed")
@@ -196,6 +512,7 @@ class QueryResponse(BaseModel):
     visualization: Optional[Dict[str, Any]] = None
     error: Optional[ErrorResponse] = None
     agent_performance: Optional[Dict[str, Any]] = None
+
 
 class DatabaseContextError(BaseModel):
     error_type: str = Field(..., description="Specific database context error type")
@@ -282,6 +599,106 @@ async def health():
         raise HTTPException(status_code=503, detail="Service unhealthy")
 
 
+@app.get("/api/health/agents")
+async def check_agents_health():
+    """Check health status of all agents"""
+    try:
+        agent_health = await check_all_agents_health()
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "overall_status": "healthy" if agent_health["all_healthy"] else "degraded",
+            "agents": {
+                "nlp_agent": {
+                    "status": "healthy" if agent_health["nlp_agent"] else "unhealthy",
+                    "url": os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
+                },
+                "data_agent": {
+                    "status": "healthy" if agent_health["data_agent"] else "unhealthy", 
+                    "url": os.getenv("DATA_AGENT_URL", "http://data-agent:8002")
+                },
+                "viz_agent": {
+                    "status": "healthy" if agent_health["viz_agent"] else "unhealthy",
+                    "url": os.getenv("VIZ_AGENT_URL", "http://viz-agent:8003")
+                }
+            },
+            "healthy_count": sum([agent_health["nlp_agent"], agent_health["data_agent"], agent_health["viz_agent"]]),
+            "total_count": 3
+        }
+        
+    except Exception as e:
+        logger.error(f"Agent health check failed: {e}")
+        raise HTTPException(status_code=503, detail="Agent health check failed")
+
+
+@app.get("/api/orchestration/metrics")
+@limiter.limit("30/minute")
+async def get_orchestration_metrics(request: Request):
+    """Get comprehensive orchestration and circuit breaker metrics"""
+    try:
+        # Get base orchestration metrics
+        metrics = await orchestration_metrics.get_metrics()
+        
+        # Add circuit breaker statistics
+        circuit_breaker_stats = {
+            "nlp_agent": nlp_agent_circuit_breaker.get_stats(),
+            "data_agent": data_agent_circuit_breaker.get_stats(),
+            "viz_agent": viz_agent_circuit_breaker.get_stats()
+        }
+        
+        # Calculate system health score
+        total_calls = sum(cb["stats"]["total_calls"] for cb in circuit_breaker_stats.values())
+        total_successes = sum(cb["stats"]["successful_calls"] for cb in circuit_breaker_stats.values())
+        system_health_score = (total_successes / max(total_calls, 1)) * 100
+        
+        # Count open circuit breakers
+        open_circuits = sum(1 for cb in circuit_breaker_stats.values() if cb["state"] == "open")
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "orchestration_metrics": metrics,
+            "circuit_breakers": circuit_breaker_stats,
+            "system_health": {
+                "score": round(system_health_score, 2),
+                "open_circuits": open_circuits,
+                "total_circuit_breakers": len(circuit_breaker_stats),
+                "status": "healthy" if open_circuits == 0 else "degraded" if open_circuits < 2 else "critical"
+            },
+            "websocket_connections": len(websocket_connections)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get orchestration metrics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve metrics")
+
+
+@app.get("/api/orchestration/circuit-breakers/reset")
+@limiter.limit("10/minute")
+async def reset_circuit_breakers(request: Request):
+    """Reset all circuit breakers (admin function)"""
+    try:
+        # Reset all circuit breakers to closed state
+        for breaker in [nlp_agent_circuit_breaker, data_agent_circuit_breaker, viz_agent_circuit_breaker]:
+            async with breaker._lock:
+                breaker.state = breaker.state.__class__.CLOSED
+                breaker.stats.consecutive_failures = 0
+                breaker._half_open_successes = 0
+                breaker.stats.state_changes += 1
+        
+        logger.info("All circuit breakers have been reset")
+        
+        return {
+            "message": "All circuit breakers have been reset",
+            "timestamp": datetime.utcnow().isoformat(),
+            "reset_breakers": ["NLP_Agent", "Data_Agent", "Viz_Agent"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to reset circuit breakers: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset circuit breakers")
+
+
+
 @app.post("/api/query", response_model=QueryResponse)
 @limiter.limit("30/minute")
 async def process_query(
@@ -325,13 +742,119 @@ async def process_query(
                 query_request.query, 
                 user_id, 
                 session_id
+
+    """Process natural language query through enhanced multi-agent workflow with circuit breakers"""
+    # Validate request data
+    if not query_request.query or not query_request.query.strip():
+        return QueryResponse(
+            query_id=f"error_{datetime.utcnow().timestamp()}",
+            intent=QueryIntent(metric_type="unknown", time_period="unknown"),
+            error=ErrorResponse(
+                error_type="validation_error",
+                message="Query text is required and cannot be empty",
+                recovery_action="provide_query",
+                suggestions=["Please enter a question about your financial data"]
+
             )
+        )
+    
+    query_id = f"q_{datetime.utcnow().timestamp()}"
+    start_time = await orchestration_metrics.record_query_start(query_id)
+    
+    # Initialize WebSocket progress reporter
+    websocket = websocket_connections.get("anonymous")  # Use user_id in production
+    progress_reporter = WebSocketProgressReporter(websocket=websocket, user_id="anonymous")
+    
+    try:
+        logger.info(f"Starting enhanced query processing for query: {query_request.query}")
+        await progress_reporter.report_progress(query_id, "initializing", "starting", 0.0)
+        
+        # Step 0: Check agent health before processing
+        logger.info("Checking agent health before workflow execution...")
+        await progress_reporter.report_progress(query_id, "health_check", "in_progress", 10.0)
+        
+        agent_health = await check_all_agents_health()
+        
+        if not agent_health["all_healthy"]:
+            unhealthy_agents = [
+                name for name, healthy in {
+                    "NLP Agent": agent_health["nlp_agent"],
+                    "Data Agent": agent_health["data_agent"], 
+                    "Viz Agent": agent_health["viz_agent"]
+                }.items() if not healthy
+            ]
+            
+            logger.warning(f"Some agents are unhealthy: {unhealthy_agents}")
+            await progress_reporter.report_error(query_id, f"Unhealthy agents: {unhealthy_agents}", "health_check")
+            
+            # Continue with degraded service rather than failing completely
+            if not agent_health["nlp_agent"]:
+                logger.error("NLP Agent is unhealthy - cannot process query")
+                await orchestration_metrics.record_query_failure(query_id, start_time)
+                return QueryResponse(
+                    query_id=query_id,
+                    intent=QueryIntent(metric_type="unknown", time_period="unknown"),
+                    error=ErrorResponse(
+                        error_type="service_unavailable",
+                        message="NLP Agent is currently unavailable",
+                        recovery_action="retry",
+                        suggestions=["Please try again in a few moments"]
+                    )
+                )
         else:
             # Fallback to original version with session_id
             nlp_result = await send_to_nlp_agent(query_request.query, query_id, session_id)
+            logger.info("All agents are healthy - proceeding with workflow")
+            await progress_reporter.report_progress(query_id, "health_check", "completed", 20.0)
+        
+        # Extract user_id and session_id from metadata
+        user_id = query_request.user_id or "anonymous"
+        session_id = query_request.session_id or f"session_{query_id}"
+        
+        if query_request.metadata:
+            user_id = query_request.metadata.get("user_id", user_id)
+            session_id = query_request.metadata.get("session_id", session_id)
+        
+        # Step 1: Enhanced NLP processing with circuit breaker protection
+        await progress_reporter.report_progress(query_id, "nlp_processing", "in_progress", 30.0)
+        logger.info(f"Starting NLP processing with circuit breaker protection")
+        
+        try:
+            if dynamic_schema_manager:
+                nlp_result = await nlp_agent_circuit_breaker.call(
+                    send_to_nlp_agent_with_dynamic_context_protected,
+                    query_request.query,
+                    user_id,
+                    session_id
+                )
+            else:
+                nlp_result = await nlp_agent_circuit_breaker.call(
+                    send_to_nlp_agent_protected,
+                    query_request.query,
+                    query_id
+                )
+
             
-        if not nlp_result.get("success", False):
-            raise HTTPException(status_code=400, detail=f"NLP processing failed: {nlp_result.get('error', 'Unknown error')}")
+            await orchestration_metrics.update_circuit_breaker_stats(nlp_agent_circuit_breaker)
+            
+        except CircuitBreakerException as e:
+            logger.error(f"NLP Agent circuit breaker open: {e}")
+            await progress_reporter.report_error(query_id, str(e), "nlp_processing")
+            await orchestration_metrics.record_query_failure(query_id, start_time)
+            
+            return QueryResponse(
+                query_id=query_id,
+                intent=QueryIntent(metric_type="unknown", time_period="unknown"),
+                error=ErrorResponse(
+                    error_type="service_unavailable",
+                    message="NLP Agent is temporarily unavailable due to repeated failures",
+                    recovery_action="retry",
+                    suggestions=[
+                        "Please try again in a few moments",
+                        "The system is recovering from issues"
+                    ]
+                )
+            )
         
         # Step 2: Send SQL context to Data Agent with session_id
         data_result = await send_to_data_agent(nlp_result["sql_query"], nlp_result["query_context"], query_id, session_id)
@@ -339,32 +862,144 @@ async def process_query(
             # If data agent fails, try fallback processing
             logger.warning(f"Data Agent failed, trying fallback processing for query {query_id}")
             data_result = await fallback_data_processing(nlp_result["sql_query"], nlp_result["query_context"], query_id)
+
+        # Validate NLP processing result
+        if not nlp_result or nlp_result.get("error"):
+            error_message = nlp_result.get("error", "Unknown NLP processing error") if nlp_result else "NLP agent unavailable"
+            await progress_reporter.report_error(query_id, error_message, "nlp_processing")
+            await orchestration_metrics.record_query_failure(query_id, start_time)
+            raise HTTPException(status_code=400, detail=f"NLP processing failed: {error_message}")
+        
+        await progress_reporter.report_progress(query_id, "nlp_processing", "completed", 50.0)
+        
+        # Extract data from NLP response
+        sql_query = nlp_result.get("sql_query", "")
+        intent_data = nlp_result.get("intent", {})
+        query_context = {
+            "query_metadata": {
+                "original_query": query_request.query,
+                "processing_path": nlp_result.get("processing_path", "standard"),
+                "execution_time": nlp_result.get("execution_time", 0),
+                "complexity": nlp_result.get("complexity", "unknown")
+            },
+            "intent": intent_data,
+            "user_context": query_request.context or {}
+        }
+        
+        # Step 2: Enhanced Data processing with circuit breaker protection
+        if sql_query:
+            await progress_reporter.report_progress(query_id, "data_processing", "in_progress", 60.0)
+            logger.info(f"Starting data processing with circuit breaker protection")
             
-            if not data_result.get("success", False):
+            try:
+                data_result = await data_agent_circuit_breaker.call(
+                    send_to_data_agent_protected,
+                    sql_query,
+                    query_context,
+                    query_id
+                )
+                
+                await orchestration_metrics.update_circuit_breaker_stats(data_agent_circuit_breaker)
+                
+            except CircuitBreakerException as e:
+                logger.error(f"Data Agent circuit breaker open: {e}")
+                await progress_reporter.report_error(query_id, str(e), "data_processing")
+                await orchestration_metrics.record_query_failure(query_id, start_time)
+                
                 return QueryResponse(
                     query_id=query_id,
-                    intent=QueryIntent(**nlp_result["query_intent"]),
+                    intent=QueryIntent(
+                        metric_type=intent_data.get("metric_type", "unknown"),
+                        time_period=intent_data.get("time_period", "unknown")
+                    ),
                     error=ErrorResponse(
-                        error_type="database_error",
-                        message="Database connection issue. Our system is experiencing connectivity problems.",
+                        error_type="service_unavailable",
+                        message="Data processing service is temporarily unavailable",
                         recovery_action="retry",
-                        suggestions=[
-                            "Please try again in a few moments", 
-                            "The database connection may be temporarily unstable",
-                            "Try a simpler query to test connectivity"
-                        ]
+                        suggestions=["Please try again in a few moments"]
                     )
                 )
+        else:
+            await progress_reporter.report_error(query_id, "No SQL query generated", "nlp_processing")
+            await orchestration_metrics.record_query_failure(query_id, start_time)
+            
+            return QueryResponse(
+                query_id=query_id,
+                intent=QueryIntent(
+                    metric_type=intent_data.get("metric_type", "unknown"),
+                    time_period=intent_data.get("time_period", "unknown")
+                ),
+                error=ErrorResponse(
+                    error_type="nlp_processing_error",
+                    message="No SQL query was generated from the natural language query",
+                    recovery_action="retry",
+                    suggestions=[
+                        "Try rephrasing your query to be more specific", 
+                        "Ensure your query relates to available data in the selected database"
+                    ]
+                )
+            )
+        
+        if not data_result.get("success", False):
+            await progress_reporter.report_error(query_id, "Database query execution failed", "data_processing")
+            await orchestration_metrics.record_query_failure(query_id, start_time)
+            
+            return QueryResponse(
+                query_id=query_id,
+                intent=QueryIntent(
+                    metric_type=intent_data.get("metric_type", "unknown"),
+                    time_period=intent_data.get("time_period", "unknown")
+                ),
+                error=ErrorResponse(
+                    error_type="database_error",
+                    message="Database query execution failed",
+                    recovery_action="retry",
+                    suggestions=[
+                        "Please try again in a few moments", 
+                        "Try rephrasing your query",
+                        "Check if the requested data exists"
+                    ]
+                )
+            )
+        
+        await progress_reporter.report_progress(query_id, "data_processing", "completed", 80.0)
+        
+        # Step 3: Enhanced Visualization processing with circuit breaker protection
+        await progress_reporter.report_progress(query_id, "visualization", "in_progress", 85.0)
+        logger.info(f"Starting visualization processing with circuit breaker protection")
+        
+        try:
+            viz_result = await viz_agent_circuit_breaker.call(
+                send_to_viz_agent_protected,
+                data_result["processed_data"],
+                query_context,
+                query_id
+            )
+            
+            await orchestration_metrics.update_circuit_breaker_stats(viz_agent_circuit_breaker)
+            
+        except CircuitBreakerException as e:
+            logger.warning(f"Viz Agent circuit breaker open, using fallback: {e}")
+            await progress_reporter.report_progress(query_id, "visualization", "fallback", 90.0)
+            viz_result = generate_visualization_config(data_result["processed_data"], query_context)
         
         # Step 3: Send data and context to Viz Agent with session_id
         viz_result = await send_to_viz_agent(data_result["processed_data"], nlp_result["query_context"], query_id, session_id)
+
         if not viz_result.get("success", False):
-            logger.warning(f"Visualization failed, using default: {viz_result.get('error')}")
-            # Continue with basic visualization
-            viz_result = create_default_visualization(data_result["processed_data"])
+            logger.warning("Visualization generation failed, using fallback")
+            viz_result = generate_visualization_config(data_result["processed_data"], query_context)
+        
+        await progress_reporter.report_progress(query_id, "visualization", "completed", 95.0)
         
         # Step 4: Combine results
-        query_intent = QueryIntent(**nlp_result["query_intent"])
+        query_intent = QueryIntent(
+            metric_type=intent_data.get("metric_type", "unknown"),
+            time_period=intent_data.get("time_period", "unknown"),
+            aggregation_level=intent_data.get("aggregation_level", "monthly"),
+            visualization_hint=intent_data.get("visualization_hint", "table")
+        )
+        
         query_result = QueryResult(
             data=data_result["processed_data"],
             columns=data_result["columns"],
@@ -376,15 +1011,20 @@ async def process_query(
         if redis_client:
             query_history = QueryHistoryEntry(
                 query_id=query_id,
-                user_id="anonymous",
+                user_id=user_id,
                 query_text=query_request.query,
                 query_intent=query_intent.dict(),
                 response_data=query_result.dict(),
                 processing_time_ms=query_result.processing_time_ms,
                 agent_workflow={
-                    "nlp_agent": nlp_result.get("processing_time_ms", 0),
-                    "data_agent": data_result.get("processing_time_ms", 0),
-                    "viz_agent": viz_result.get("processing_time_ms", 0)
+                    "nlp_agent": nlp_result.get("execution_time", 0),
+                    "data_processing": data_result.get("processing_time_ms", 0),
+                    "visualization_generation": viz_result.get("processing_time_ms", 0)
+                },
+                circuit_breaker_stats={
+                    "nlp_agent": nlp_agent_circuit_breaker.get_stats(),
+                    "data_agent": data_agent_circuit_breaker.get_stats(),
+                    "viz_agent": viz_agent_circuit_breaker.get_stats()
                 }
             )
             await redis_client.setex(
@@ -393,41 +1033,77 @@ async def process_query(
                 json.dumps(query_history.dict(), default=str)
             )
         
-        # Create response with visualization
+        # Create response
         response = QueryResponse(
             query_id=query_id,
             intent=query_intent,
             result=query_result,
-            visualization=viz_result.get("chart_config", {
+            visualization=viz_result.get("chart_config", {}) if viz_result.get("success") else {
                 "chart_type": "table",
-                "title": "Financial Data",
+                "title": "Query Results",
                 "config": {"responsive": True}
-            }),
-            agent_performance={
-                "nlp_processing_ms": nlp_result.get("processing_time_ms", 0),
-                "data_processing_ms": data_result.get("processing_time_ms", 0),
-                "viz_processing_ms": viz_result.get("processing_time_ms", 0),
-                "total_processing_ms": (
-                    nlp_result.get("processing_time_ms", 0) +
-                    data_result.get("processing_time_ms", 0) +
-                    viz_result.get("processing_time_ms", 0)
-                )
             }
         )
         
-        logger.info(f"Multi-agent workflow completed for query {query_id}")
+        # Record successful completion
+        await orchestration_metrics.record_query_success(query_id, start_time)
+        await progress_reporter.report_completion(query_id, response.dict())
+        
+        logger.info(f"Enhanced query processing completed for query {query_id}")
         return response
         
     except Exception as e:
-        logger.error(f"Query processing failed: {e}")
+        logger.error(f"Enhanced query processing failed: {e}")
+        await progress_reporter.report_error(query_id, str(e), "processing")
+        await orchestration_metrics.record_query_failure(query_id, start_time)
+        
+        error_type = "processing_error"
+        error_message = "Failed to process query"
+        suggestions = ["Try rephrasing your query", "Check your connection"]
+        
+        # Provide more specific error messages
+        error_str = str(e).lower()
+        if "circuit breaker" in error_str:
+            error_type = "service_overload"
+            error_message = "System is temporarily overloaded"
+            suggestions = [
+                "Please wait a moment for the system to recover",
+                "Try again in a few minutes",
+                "Consider simplifying your query"
+            ]
+        elif "nlp" in error_str or "agent" in error_str:
+            error_type = "agent_communication_error"
+            error_message = "Unable to communicate with AI agents"
+            suggestions = [
+                "The AI agents may be temporarily unavailable",
+                "Try again in a few moments",
+                "Contact support if the issue persists"
+            ]
+        elif "database" in error_str or "sql" in error_str:
+            error_type = "database_error" 
+            error_message = "Database query execution failed"
+            suggestions = [
+                "Check if the database is accessible",
+                "Try rephrasing your query",
+                "Contact support if the issue persists"
+            ]
+        elif "timeout" in error_str:
+            error_type = "timeout_error"
+            error_message = "Query processing timed out"
+            suggestions = [
+                "Try a simpler query",
+                "The system may be busy, try again later",
+                "Contact support if timeouts persist"
+            ]
+        
         return QueryResponse(
             query_id=query_id,
             intent=QueryIntent(metric_type="unknown", time_period="unknown"),
             error=ErrorResponse(
-                error_type="processing_error",
-                message="Failed to process query",
+                error_type=error_type,
+                message=error_message,
                 recovery_action="retry",
-                suggestions=["Try rephrasing your query", "Check your connection"]
+                suggestions=suggestions
             )
         )
 
@@ -451,55 +1127,57 @@ async def get_database_list(request: Request):
             except Exception as cache_error:
                 logger.warning(f"Cache read error: {cache_error}")
         
-        import httpx
+        # Get MCP client and discover databases
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
         
-        # Make direct HTTP request to MCP server with timeout
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                "http://tidb-mcp-server:8000/tools/discover_databases_tool",
-                json={},
-                timeout=15.0
-            )
-            
-            if response.status_code == 200:
-                databases = response.json()
-                
-                # Filter out system databases and only include accessible ones
-                filtered_databases = []
-                for db in databases:
-                    if (db.get("accessible", True) and 
-                        db.get("name", "").lower() not in ['information_schema', 'performance_schema', 'mysql', 'sys']):
-                        filtered_databases.append({
-                            "name": db["name"],
-                            "charset": db.get("charset", "utf8mb4"),
-                            "collation": db.get("collation", "utf8mb4_general_ci"),
-                            "accessible": db.get("accessible", True)
-                        })
-                
-                result = {
-                    "success": True,
-                    "databases": filtered_databases,
-                    "total_count": len(filtered_databases)
-                }
-                
-                # Cache the successful result for 10 minutes
-                if redis_client:
-                    try:
-                        await redis_client.setex(
-                            cache_key,
-                            600,  # 10 minute cache
-                            json.dumps(result, default=str)
-                        )
-                        logger.info("Database list cached for 10 minutes")
-                    except Exception as cache_error:
-                        logger.warning(f"Cache write error: {cache_error}")
-                
-                return result
+        # Make request to MCP server to discover databases
+        databases_result = await mcp_client.discover_databases()
+        
+        if databases_result and not (isinstance(databases_result, dict) and databases_result.get("error")):
+            # Handle both list and dict responses from MCP server
+            if isinstance(databases_result, list):
+                databases = databases_result
             else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"MCP server returned status {response.status_code}"
-                )
+                databases = databases_result.get("databases", []) if isinstance(databases_result, dict) else []
+            
+            # Filter out system databases and only include accessible ones
+            filtered_databases = []
+            for db in databases:
+                if (db.get("accessible", True) and 
+                    db.get("name", "").lower() not in ['information_schema', 'performance_schema', 'mysql', 'sys']):
+                    filtered_databases.append({
+                        "name": db["name"],
+                        "charset": db.get("charset", "utf8mb4"),
+                        "collation": db.get("collation", "utf8mb4_general_ci"),
+                        "accessible": db.get("accessible", True)
+                    })
+            
+            result = {
+                "success": True,
+                "databases": filtered_databases,
+                "total_count": len(filtered_databases)
+            }
+            
+            # Cache the successful result for 10 minutes
+            if redis_client:
+                try:
+                    await redis_client.setex(
+                        cache_key,
+                        600,  # 10 minute cache
+                        json.dumps(result, default=str)
+                    )
+                    logger.info("Database list cached for 10 minutes")
+                except Exception as cache_error:
+                    logger.warning(f"Cache write error: {cache_error}")
+            
+            return result
+        else:
+            error_message = databases_result.get("error", "Unknown error") if databases_result and isinstance(databases_result, dict) else "MCP client returned invalid response"
+            raise HTTPException(
+                status_code=500,
+                detail=f"MCP server error: {error_message}"
+            )
                 
     except asyncio.TimeoutError:
         logger.error("Database list API timed out")
@@ -518,29 +1196,105 @@ async def get_database_list(request: Request):
 @app.post("/api/database/select")
 @limiter.limit("10/minute")
 async def select_database_and_fetch_schema(request: Request, body: dict):
-    """Select a database and fetch its schema information"""
+    """Select a database and fetch its schema information with context management"""
     try:
         database_name = body.get("database_name")
         session_id = body.get("session_id", f"session_{datetime.utcnow().timestamp()}")
-        
+        session_id = body.get("session_id", "default")
+
         if not database_name:
             raise HTTPException(
                 status_code=400,
                 detail="Database name is required"
             )
         
-        import httpx
-        
-        # Make direct HTTP request to MCP server to get tables for the selected database
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://tidb-mcp-server:8000/tools/discover_tables_tool",
-                json={"database": database_name},
-                timeout=30.0
+        # Validate session_id format
+        if not session_id or len(session_id.strip()) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Valid session_id is required"
             )
+        
+        # Use database context manager for enhanced validation and session management
+        if database_context_manager:
+            try:
+                # Create and validate database context
+                context = await database_context_manager.select_database(
+                    session_id=session_id,
+                    database_name=database_name
+                )
+                
+                # Get MCP client and discover tables for the selected database
+                from mcp_client import get_backend_mcp_client
+                mcp_client = get_backend_mcp_client()
+                
+                # Make request to MCP server to discover tables for the selected database
+                tables_result = await mcp_client.discover_tables(database_name)
+                
+                if tables_result and not (isinstance(tables_result, dict) and tables_result.get("error")):
+                    # Handle both list and dict responses from MCP server
+                    if isinstance(tables_result, list):
+                        tables = tables_result
+                    else:
+                        tables = tables_result.get("tables", []) if isinstance(tables_result, dict) else []
+                    
+                    # If we have dynamic schema manager available, trigger schema refresh
+                    if DYNAMIC_SCHEMA_AVAILABLE:
+                        try:
+                            dynamic_schema_manager = get_dynamic_schema_manager()
+                            if dynamic_schema_manager:
+                                # Refresh schema cache for the selected database
+                                await dynamic_schema_manager.refresh_schema_for_database(database_name)
+                        except Exception as e:
+                            logger.warning(f"Failed to refresh dynamic schema for {database_name}: {e}")
+                    
+                    return {
+                        "success": True,
+                        "database_name": database_name,
+                        "session_id": session_id,
+                        "tables": tables,
+                        "total_tables": len(tables),
+                        "schema_initialized": True,
+                        "context_created": context is not None,
+                        "database_validated": True
+                    }
+                else:
+                    error_message = tables_result.get("error", "Unknown error") if tables_result and isinstance(tables_result, dict) else "MCP client returned invalid response"
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"MCP server error: {error_message}"
+                    )
+                    
+            except ValueError as e:
+                # Database validation failed
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Database validation failed: {str(e)}"
+                )
+            except Exception as e:
+                logger.error(f"Database context management error: {e}")
+                # Fall back to basic functionality if context management fails
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Context management failed: {str(e)}"
+                )
+        else:
+            # Fallback when database context manager is not available
+            logger.warning("Database context manager not available, using basic functionality")
             
-            if response.status_code == 200:
-                tables = response.json()
+            # Get MCP client and discover tables for the selected database
+            from mcp_client import get_backend_mcp_client
+            mcp_client = get_backend_mcp_client()
+            
+            # Make request to MCP server to discover tables for the selected database
+            tables_result = await mcp_client.discover_tables(database_name)
+            
+            if tables_result and not (isinstance(tables_result, dict) and tables_result.get("error")):
+                # Handle both list and dict responses from MCP server
+                if isinstance(tables_result, list):
+                    tables = tables_result
+                else:
+                    tables = tables_result.get("tables", []) if isinstance(tables_result, dict) else []
                 
                 # Create database context for session storage
                 database_context = {
@@ -573,11 +1327,15 @@ async def select_database_and_fetch_schema(request: Request, body: dict):
                     "total_tables": len(tables),
                     "schema_initialized": True,
                     "context_stored": context_stored
+                    "context_created": False,
+                    "database_validated": False
+
                 }
             else:
+                error_message = tables_result.get("error", "Unknown error") if tables_result and isinstance(tables_result, dict) else "MCP client returned invalid response"
                 raise HTTPException(
                     status_code=500,
-                    detail=f"MCP server returned status {response.status_code}"
+                    detail=f"MCP server error: {error_message}"
                 )
             
     except HTTPException:
@@ -725,8 +1483,116 @@ async def validate_database_context(request: Request, body: dict):
 @limiter.limit("30/minute")
 async def test_database(request: Request):
     """Test database connectivity via MCP and get detailed information"""
+@limiter.limit("30/minute") 
+async def get_database_context(request: Request, session_id: str):
+    """Get the current database context for a session"""
     try:
-        from mcp_client import get_backend_mcp_client, execute_mcp_query
+        if not database_context_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="Database context manager not available"
+            )
+        
+        context = await database_context_manager.get_context(session_id)
+        if not context:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No database context found for session {session_id}"
+            )
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "context": {
+                "database_name": context.database_name,
+                "selected_at": context.selected_at.isoformat(),
+                "last_activity": context.last_activity.isoformat(),
+                "table_count": len(context.tables) if context.tables else 0,
+                "tables": context.tables[:10] if context.tables else [],  # Limit for response size
+                "is_validated": context.is_validated
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get context error for session {session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get context: {str(e)}"
+        )
+
+
+@app.delete("/api/database/context/{session_id}")
+@limiter.limit("10/minute")
+async def clear_database_context(request: Request, session_id: str):
+    """Clear the database context for a session"""
+    try:
+        if not database_context_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="Database context manager not available"
+            )
+        
+        success = await database_context_manager.clear_context(session_id)
+        
+        return {
+            "success": success,
+            "session_id": session_id,
+            "message": "Context cleared successfully" if success else "Context not found or already cleared"
+        }
+        
+    except Exception as e:
+        logger.error(f"Clear context error for session {session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to clear context: {str(e)}"
+        )
+
+
+@app.get("/api/database/contexts")
+@limiter.limit("10/minute")
+async def list_active_contexts(request: Request):
+    """List all active database contexts (for debugging/admin)"""
+    try:
+        if not database_context_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="Database context manager not available"
+            )
+        
+        contexts = await database_context_manager.list_active_sessions()
+        
+        return {
+            "success": True,
+            "active_sessions": len(contexts),
+            "contexts": [
+                {
+                    "session_id": ctx.session_id,
+                    "database_name": ctx.database_name,
+                    "selected_at": ctx.selected_at.isoformat(),
+                    "last_activity": ctx.last_activity.isoformat(),
+                    "table_count": len(ctx.tables) if ctx.tables else 0,
+                    "is_validated": ctx.is_validated
+                }
+                for ctx in contexts
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"List contexts error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list contexts: {str(e)}"
+        )
+
+
+@app.get("/api/database/test")
+@limiter.limit("30/minute")
+async def test_database(request: Request):
+    """Test database connectivity via MCP and get detailed information"""
+    try:
+        from mcp_client import get_backend_mcp_client
         
         mcp_client = get_backend_mcp_client()
         
@@ -752,8 +1618,8 @@ async def test_database(request: Request):
         
         # Test basic SELECT query
         try:
-            version_result = await execute_mcp_query("SELECT VERSION() as version")
-            if version_result.get("success"):
+            version_result = await mcp_client.execute_query("SELECT VERSION() as version")
+            if version_result and version_result.get("success"):
                 test_results["test_queries"]["version_query"] = {
                     "status": "success",
                     "result": version_result.get("data", [])
@@ -761,7 +1627,7 @@ async def test_database(request: Request):
             else:
                 test_results["test_queries"]["version_query"] = {
                     "status": "error",
-                    "error": version_result.get("error", "Unknown error")
+                    "error": version_result.get("error", "Unknown error") if version_result else "No response"
                 }
         except Exception as e:
             test_results["test_queries"]["version_query"] = {
@@ -771,8 +1637,8 @@ async def test_database(request: Request):
         
         # Test SHOW DATABASES
         try:
-            databases_result = await execute_mcp_query("SHOW DATABASES")
-            if databases_result.get("success"):
+            databases_result = await mcp_client.execute_query("SHOW DATABASES")
+            if databases_result and databases_result.get("success"):
                 test_results["test_queries"]["show_databases"] = {
                     "status": "success",
                     "result": databases_result.get("data", []),
@@ -781,7 +1647,7 @@ async def test_database(request: Request):
             else:
                 test_results["test_queries"]["show_databases"] = {
                     "status": "error",
-                    "error": databases_result.get("error", "Unknown error")
+                    "error": databases_result.get("error", "Unknown error") if databases_result else "No response"
                 }
         except Exception as e:
             test_results["test_queries"]["show_databases"] = {
@@ -791,16 +1657,16 @@ async def test_database(request: Request):
         
         # Test current database and tables
         try:
-            current_db_result = await execute_mcp_query("SELECT DATABASE() as current_db")
-            if current_db_result.get("success"):
+            current_db_result = await mcp_client.execute_query("SELECT DATABASE() as current_db")
+            if current_db_result and current_db_result.get("success"):
                 test_results["test_queries"]["current_database"] = {
                     "status": "success",
                     "result": current_db_result.get("data", [])
                 }
                 
                 # Show tables
-                tables_result = await execute_mcp_query("SHOW TABLES")
-                if tables_result.get("success"):
+                tables_result = await mcp_client.execute_query("SHOW TABLES")
+                if tables_result and tables_result.get("success"):
                     test_results["test_queries"]["show_tables"] = {
                         "status": "success",
                         "result": tables_result.get("data", []),
@@ -809,12 +1675,12 @@ async def test_database(request: Request):
                 else:
                     test_results["test_queries"]["show_tables"] = {
                         "status": "error",
-                        "error": tables_result.get("error", "Unknown error")
+                        "error": tables_result.get("error", "Unknown error") if tables_result else "No response"
                     }
             else:
                 test_results["test_queries"]["current_database"] = {
                     "status": "error",
-                    "error": current_db_result.get("error", "Unknown error")
+                    "error": current_db_result.get("error", "Unknown error") if current_db_result else "No response"
                 }
         except Exception as e:
             test_results["test_queries"]["current_database"] = {
@@ -984,54 +1850,266 @@ async def get_user_profile(request: Request):
 @app.get("/api/schema/discovery")
 async def get_schema_discovery():
     """
-    API endpoint for complete schema discovery using dynamic schema management.
-    Returns discovered tables, columns, and semantic mappings from all databases.
+    API endpoint for MCP-driven schema discovery using schema intelligence.
+    Returns discovered tables, columns, and business term mappings from MCP server.
     """
-    if not dynamic_schema_manager:
-        raise HTTPException(
-            status_code=503, 
-            detail="Dynamic schema management not available"
-        )
-    
     try:
-        # Add timeout to prevent hanging
-        import asyncio
+        from mcp_client import get_backend_mcp_client
         
-        # Perform fresh schema discovery with timeout (increased for large schemas)
-        schema_info = await asyncio.wait_for(
-            dynamic_schema_manager.discover_schema(force_refresh=True),
-            timeout=300.0  # 5 minute timeout for complete schema discovery across multiple databases
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's business mapping discovery
+        mappings_result = await mcp_client.call_tool(
+            "discover_business_mappings_tool",
+            {
+                "business_terms": ["revenue", "profit", "expenses", "cash_flow", "assets"],
+                "confidence_threshold": 0.6
+            }
         )
         
-        # Get schema manager metrics with timeout
-        metrics = await asyncio.wait_for(
-            asyncio.create_task(asyncio.to_thread(dynamic_schema_manager.get_metrics)),
-            timeout=10.0  # 10 second timeout for metrics
-        )
+        # Also get basic database structure
+        databases_result = await mcp_client.discover_databases()
         
-        return {
-            "success": True,
-            "schema": {
-                "version": schema_info.version,
-                "tables_count": len(schema_info.tables),
-                "tables": [
-                    {
-                        "name": table.name,
-                        "columns": [col.name for col in table.columns] if hasattr(table, 'columns') else []
-                    }
-                    for table in schema_info.tables[:10]  # Limit for response size
-                ]
-            },
-            "metrics": metrics,
-            "discovery_timestamp": schema_info.discovery_timestamp.isoformat() if schema_info.discovery_timestamp else None
-        }
+        if mappings_result and mappings_result.get("success"):
+            return {
+                "success": True,
+                "discovery_method": "mcp_server_driven",
+                "business_mappings": mappings_result.get("mappings", {}),
+                "databases": databases_result if isinstance(databases_result, list) else [],
+                "statistics": mappings_result.get("statistics", {}),
+                "discovery_timestamp": datetime.now().isoformat()
+            }
+        else:
+            # Fallback to basic discovery
+            return {
+                "success": True,
+                "discovery_method": "basic_fallback",
+                "databases": databases_result if isinstance(databases_result, list) else [],
+                "business_mappings": {},
+                "discovery_timestamp": datetime.now().isoformat()
+            }
         
-    except asyncio.TimeoutError:
-        logger.error("Schema discovery timed out")
-        raise HTTPException(status_code=504, detail="Schema discovery timed out")
     except Exception as e:
-        logger.error(f"Schema discovery failed: {e}")
+        logger.error(f"MCP-driven schema discovery failed: {e}")
         raise HTTPException(status_code=500, detail=f"Schema discovery failed: {str(e)}")
+
+
+@app.get("/api/schema/mappings/{business_term}")
+async def get_business_term_mappings(business_term: str):
+    """
+    Get mappings for a specific business term using MCP server intelligence.
+    """
+    try:
+        from mcp_client import get_backend_mcp_client
+        
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's business mapping discovery for specific term
+        result = await mcp_client.call_tool(
+            "discover_business_mappings_tool",
+            {
+                "business_terms": [business_term],
+                "confidence_threshold": 0.5
+            }
+        )
+        
+        if result and result.get("success"):
+            term_mappings = result.get("mappings", {}).get(business_term, [])
+            
+            return {
+                "success": True,
+                "business_term": business_term,
+                "mappings": term_mappings,
+                "total_mappings": len(term_mappings),
+                "source": "mcp_server_intelligence"
+            }
+        else:
+            return {
+                "success": False,
+                "business_term": business_term,
+                "error": result.get("error", "Failed to discover mappings"),
+                "mappings": []
+            }
+        
+    except Exception as e:
+        logger.error(f"Business term mapping failed for '{business_term}': {e}")
+        raise HTTPException(status_code=500, detail=f"Mapping discovery failed: {str(e)}")
+
+
+@app.post("/api/schema/analyze-query")
+async def analyze_query_intent_endpoint(request: dict):
+    """
+    Analyze natural language query using MCP server intelligence.
+    """
+    try:
+        query = request.get("query")
+        context = request.get("context", {})
+        
+        if not query:
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        from mcp_client import get_backend_mcp_client
+        
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's query intent analysis
+        result = await mcp_client.call_tool(
+            "analyze_query_intent_tool",
+            {
+                "natural_language_query": query,
+                "context": context
+            }
+        )
+        
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "query": query,
+                "intent": result.get("intent", {}),
+                "suggested_sql": result.get("suggested_sql"),
+                "confidence_score": result.get("confidence_score", 0.0),
+                "source": "mcp_server_intelligence"
+            }
+        else:
+            return {
+                "success": False,
+                "query": query,
+                "error": result.get("error", "Failed to analyze query intent")
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Query intent analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Query analysis failed: {str(e)}")
+
+
+@app.get("/api/schema/optimizations/{database}")
+async def get_schema_optimizations(database: str):
+    """
+    Get schema optimization suggestions from MCP server intelligence.
+    """
+    try:
+        from mcp_client import get_backend_mcp_client
+        
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's optimization suggestions
+        result = await mcp_client.call_tool(
+            "suggest_schema_optimizations_tool",
+            {
+                "database": database,
+                "performance_threshold": 0.5
+            }
+        )
+        
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "database": database,
+                "optimizations": result.get("optimizations", {}),
+                "source": "mcp_server_intelligence",
+                "analysis_timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "success": False,
+                "database": database,
+                "error": result.get("error", "Failed to analyze optimizations"),
+                "optimizations": {}
+            }
+        
+    except Exception as e:
+        logger.error(f"Schema optimization analysis failed for '{database}': {e}")
+        raise HTTPException(status_code=500, detail=f"Optimization analysis failed: {str(e)}")
+
+
+@app.post("/api/schema/learn-mapping")
+async def learn_from_mapping_success(request: dict):
+    """
+    Report successful mapping usage to improve MCP server intelligence.
+    """
+    try:
+        business_term = request.get("business_term")
+        database_name = request.get("database_name")
+        table_name = request.get("table_name")
+        column_name = request.get("column_name")
+        success_score = request.get("success_score", 1.0)
+        
+        if not all([business_term, database_name, table_name]):
+            raise HTTPException(
+                status_code=400, 
+                detail="business_term, database_name, and table_name are required"
+            )
+        
+        from mcp_client import get_backend_mcp_client
+        
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's learning capability
+        result = await mcp_client.call_tool(
+            "learn_from_successful_mapping_tool",
+            {
+                "business_term": business_term,
+                "database_name": database_name,
+                "table_name": table_name,
+                "column_name": column_name,
+                "success_score": success_score
+            }
+        )
+        
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "message": result.get("message", "Mapping learned successfully"),
+                "confidence_boost": result.get("confidence_boost", 0.0)
+            }
+        else:
+            return {
+                "success": False,
+                "error": result.get("error", "Failed to learn from mapping")
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Learning from mapping failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Learning failed: {str(e)}")
+
+
+@app.get("/api/schema/intelligence-stats")
+async def get_schema_intelligence_stats():
+    """
+    Get statistics about MCP server schema intelligence operations.
+    """
+    try:
+        from mcp_client import get_backend_mcp_client
+        
+        mcp_client = get_backend_mcp_client()
+        
+        # Use MCP server's statistics
+        result = await mcp_client.call_tool(
+            "get_schema_intelligence_stats_tool",
+            {}
+        )
+        
+        if result and result.get("success"):
+            return {
+                "success": True,
+                "statistics": result.get("statistics", {}),
+                "source": "mcp_server_intelligence",
+                "timestamp": result.get("timestamp", datetime.now().isoformat())
+            }
+        else:
+            return {
+                "success": False,
+                "error": result.get("error", "Failed to get statistics"),
+                "statistics": {}
+            }
+        
+    except Exception as e:
+        logger.error(f"Schema intelligence stats failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Stats retrieval failed: {str(e)}")
 
 
 @app.get("/api/schema/discovery/fast")
@@ -1270,51 +2348,333 @@ async def get_database_schema_discovery(database_name: str):
         raise HTTPException(status_code=500, detail=f"Database schema discovery failed: {str(e)}")
 
 
-@app.get("/api/schema/mappings/{metric_type}")
-async def get_metric_mappings(metric_type: str):
+@app.get("/api/schema/mappings/{business_term}")
+async def get_business_term_mappings(business_term: str):
     """
-    Get table and column mappings for a specific business metric.
+    Get table and column mappings for a specific business metric using MCP server.
+    Enhanced version that uses MCP server's schema intelligence capabilities.
     """
-    if not dynamic_schema_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Dynamic schema management not available"
-        )
-    
     try:
-        # Find table mappings for the metric
-        table_mappings = await dynamic_schema_manager.find_tables_for_metric(metric_type)
+        # Use MCP client to get business mappings
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
         
-        # Get column mappings
-        column_mappings = await dynamic_schema_manager.get_column_mappings(metric_type)
+        # Use MCP server's business mapping discovery for specific term
+        result = await mcp_client.call_tool(
+            "discover_business_mappings_tool",
+            {
+                "business_terms": [business_term],
+                "confidence_threshold": 0.5
+            }
+        )
+        
+        if result and result.get("success"):
+            term_mappings = result.get("mappings", {}).get(business_term, [])
+            return term_mappings
+        else:
+            logger.warning(f"MCP mapping discovery failed for '{business_term}': {result.get('error') if result else 'No response'}")
+            return []
+        
+        # Call the new MCP business mappings tool
+        business_mappings_result = await mcp_client.call_tool(
+            "discover_business_mappings_tool", 
+            {
+                "business_terms": [business_term],
+                "confidence_threshold": 0.6
+            }
+        )
+        
+        if business_mappings_result and not business_mappings_result.get("error"):
+            mappings = business_mappings_result.get("mappings", [])
+            
+            # Filter mappings for the specific business term
+            term_mappings = [
+                mapping for mapping in mappings 
+                if mapping.get("business_term", "").lower() == business_term.lower()
+            ]
+            
+            return {
+                "success": True,
+                "business_term": business_term,
+                "mappings": term_mappings,
+                "total_mappings": len(term_mappings),
+                "confidence_threshold": 0.6,
+                "source": "mcp_schema_intelligence"
+            }
+        else:
+            error_msg = business_mappings_result.get("error", "Unknown error") if business_mappings_result else "No response from MCP server"
+            logger.error(f"MCP business mappings failed: {error_msg}")
+            # Fall back to dynamic schema manager
+            return await get_metric_mappings(business_term)
+            
+    except Exception as e:
+        logger.error(f"Error getting business term mappings via MCP: {e}")
+        # Return empty list as fallback
+        return []
+
+
+@app.get("/api/schema/relationships")
+async def get_schema_relationships():
+    """
+    Get table relationships and foreign key information using MCP server intelligence.
+    """
+    try:
+        # Use MCP client to discover relationships
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
+        
+        # First get all databases
+        databases_result = await mcp_client.call_tool("discover_databases_tool", {})
+        
+        if not databases_result or databases_result.get("error"):
+            raise HTTPException(status_code=500, detail="Failed to discover databases")
+        
+        relationships = []
+        relationship_stats = {
+            "total_tables": 0,
+            "tables_with_fks": 0,
+            "total_relationships": 0,
+            "databases_analyzed": 0
+        }
+        
+        # Analyze each database for relationships
+        for database in databases_result:
+            if not database.get("accessible", True):
+                continue
+            
+            db_name = database["name"]
+            
+            try:
+                # Get tables in the database
+                tables_result = await mcp_client.call_tool(
+                    "discover_tables_tool", 
+                    {"database": db_name}
+                )
+                
+                if not tables_result or isinstance(tables_result, dict) and tables_result.get("error"):
+                    continue
+                
+                relationship_stats["databases_analyzed"] += 1
+                relationship_stats["total_tables"] += len(tables_result)
+                
+                # Analyze each table for foreign key relationships
+                for table in tables_result:
+                    table_name = table["name"]
+                    
+                    try:
+                        # Get table schema including foreign keys
+                        schema_result = await mcp_client.call_tool(
+                            "get_table_schema_tool",
+                            {"database": db_name, "table": table_name}
+                        )
+                        
+                        if schema_result and not schema_result.get("error"):
+                            foreign_keys = schema_result.get("foreign_keys", [])
+                            
+                            if foreign_keys:
+                                relationship_stats["tables_with_fks"] += 1
+                                relationship_stats["total_relationships"] += len(foreign_keys)
+                                
+                                # Add relationship information
+                                for fk in foreign_keys:
+                                    relationships.append({
+                                        "source_database": db_name,
+                                        "source_table": table_name,
+                                        "source_column": fk.get("column"),
+                                        "target_database": fk.get("referenced_database", db_name),
+                                        "target_table": fk.get("referenced_table"),
+                                        "target_column": fk.get("referenced_column"),
+                                        "constraint_name": fk.get("constraint_name"),
+                                        "relationship_type": "foreign_key"
+                                    })
+                    
+                    except Exception as table_error:
+                        logger.debug(f"Error analyzing table {db_name}.{table_name}: {table_error}")
+                        continue
+                        
+            except Exception as db_error:
+                logger.error(f"Error analyzing database {db_name}: {db_error}")
+                continue
         
         return {
             "success": True,
-            "metric_type": metric_type,
-            "table_mappings": [
-                {
-                    "table_name": mapping.table_name,
-                    "column_name": mapping.column_name,
-                    "confidence_score": mapping.confidence_score,
-                    "mapping_type": mapping.mapping_type
-                }
-                for mapping in table_mappings
-            ],
-            "column_mappings": [
-                {
-                    "table_name": mapping.table_name,
-                    "column_name": mapping.column_name,
-                    "confidence_score": mapping.confidence_score,
-                    "mapping_type": mapping.mapping_type
-                }
-                for mapping in column_mappings
-            ],
-            "alternatives": await dynamic_schema_manager.suggest_alternatives(metric_type)
+            "relationships": relationships,
+            "statistics": relationship_stats,
+            "discovery_timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"Failed to get metric mappings for {metric_type}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get mappings: {str(e)}")
+        logger.error(f"Schema relationships discovery failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to discover schema relationships: {str(e)}")
+
+
+@app.post("/api/schema/optimize")
+async def get_schema_optimizations(body: dict = None):
+    """
+    Get schema optimization suggestions using MCP server intelligence.
+    """
+    database = body.get("database") if body else None
+    performance_threshold = body.get("performance_threshold", 0.5) if body else 0.5
+    
+    try:
+        # Use MCP client to get optimization suggestions
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
+        
+        # Call the MCP schema optimization tool
+        optimization_result = await mcp_client.call_tool(
+            "suggest_schema_optimizations_tool", 
+            {
+                "database": database,
+                "performance_threshold": performance_threshold
+            }
+        )
+        
+        if optimization_result and not optimization_result.get("error"):
+            return {
+                "success": True,
+                "optimizations": optimization_result.get("optimizations", []),
+                "total_suggestions": optimization_result.get("total_suggestions", 0),
+                "performance_threshold": performance_threshold,
+                "target_database": database or "all_databases",
+                "source": "mcp_schema_intelligence"
+            }
+        else:
+            error_msg = optimization_result.get("error", "Unknown error") if optimization_result else "No response from MCP server"
+            raise HTTPException(status_code=500, detail=f"MCP optimization analysis failed: {error_msg}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Schema optimization analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze schema optimizations: {str(e)}")
+
+
+@app.post("/api/schema/analyze-intent")
+async def analyze_query_intent_endpoint(body: dict):
+    """
+    Analyze natural language query intent using MCP server intelligence.
+    """
+    query = body.get("query")
+    context = body.get("context", {})
+    
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="Query is required")
+    
+    try:
+        # Use MCP client to analyze query intent
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
+        
+        # Call the MCP query intent analysis tool
+        intent_result = await mcp_client.call_tool(
+            "analyze_query_intent_tool", 
+            {
+                "natural_language_query": query,
+                "context": context
+            }
+        )
+        
+        if intent_result and not intent_result.get("error"):
+            return {
+                "success": True,
+                "query_intent": intent_result,
+                "source": "mcp_schema_intelligence"
+            }
+        else:
+            error_msg = intent_result.get("error", "Unknown error") if intent_result else "No response from MCP server"
+            raise HTTPException(status_code=500, detail=f"MCP intent analysis failed: {error_msg}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Query intent analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze query intent: {str(e)}")
+
+
+@app.post("/api/schema/learn-mapping")
+async def learn_successful_mapping(body: dict):
+    """
+    Learn from successful business term mappings using MCP server intelligence.
+    """
+    business_term = body.get("business_term")
+    database_name = body.get("database_name")
+    table_name = body.get("table_name")
+    column_name = body.get("column_name")
+    success_score = body.get("success_score", 1.0)
+    
+    if not all([business_term, database_name, table_name]):
+        raise HTTPException(
+            status_code=400, 
+            detail="business_term, database_name, and table_name are required"
+        )
+    
+    try:
+        # Use MCP client to learn from successful mapping
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
+        
+        # Call the MCP learning tool
+        learning_result = await mcp_client.call_tool(
+            "learn_from_successful_mapping_tool", 
+            {
+                "business_term": business_term,
+                "database_name": database_name,
+                "table_name": table_name,
+                "column_name": column_name,
+                "success_score": success_score
+            }
+        )
+        
+        if learning_result and not learning_result.get("error"):
+            return {
+                "success": True,
+                "learning_result": learning_result,
+                "source": "mcp_schema_intelligence"
+            }
+        else:
+            error_msg = learning_result.get("error", "Unknown error") if learning_result else "No response from MCP server"
+            raise HTTPException(status_code=500, detail=f"MCP learning failed: {error_msg}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Learning from successful mapping failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to learn from mapping: {str(e)}")
+
+
+@app.get("/api/schema/intelligence/stats")
+async def get_schema_intelligence_statistics():
+    """
+    Get schema intelligence statistics using MCP server.
+    """
+    try:
+        # Use MCP client to get schema intelligence stats
+        from mcp_client import get_backend_mcp_client
+        mcp_client = get_backend_mcp_client()
+        
+        # Call the MCP stats tool
+        stats_result = await mcp_client.call_tool("get_schema_intelligence_stats_tool", {})
+        
+        if stats_result and not stats_result.get("error"):
+            return {
+                "success": True,
+                "intelligence_stats": stats_result,
+                "source": "mcp_schema_intelligence",
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            error_msg = stats_result.get("error", "Unknown error") if stats_result else "No response from MCP server"
+            raise HTTPException(status_code=500, detail=f"MCP stats retrieval failed: {error_msg}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Schema intelligence stats retrieval failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get intelligence stats: {str(e)}")
+
+
+# Note: This endpoint is now replaced by /api/schema/mappings/{business_term} with MCP-driven approach
 
 
 @app.get("/api/configuration/status")
@@ -1437,6 +2797,51 @@ async def get_dynamic_schema_health():
     return health_status
 
 
+# Enhanced Agent Communication Functions with Circuit Breaker Protection
+
+async def send_to_nlp_agent_protected(query: str, query_id: str) -> Dict[str, Any]:
+    """Protected NLP agent call with retry logic"""
+    return await retry_with_backoff(
+        send_to_nlp_agent,
+        nlp_retry_config,
+        query,
+        query_id
+    )
+
+
+async def send_to_nlp_agent_with_dynamic_context_protected(query: str, user_id: str, session_id: str) -> Dict[str, Any]:
+    """Protected dynamic context NLP agent call with retry logic"""
+    return await retry_with_backoff(
+        send_to_nlp_agent_with_dynamic_context,
+        nlp_retry_config,
+        query,
+        user_id,
+        session_id
+    )
+
+
+async def send_to_data_agent_protected(sql_query: str, query_context: dict, query_id: str) -> Dict[str, Any]:
+    """Protected data agent call with retry logic"""
+    return await retry_with_backoff(
+        send_to_data_agent,
+        data_retry_config,
+        sql_query,
+        query_context,
+        query_id
+    )
+
+
+async def send_to_viz_agent_protected(data: list, query_context: dict, query_id: str) -> Dict[str, Any]:
+    """Protected viz agent call with retry logic"""
+    return await retry_with_backoff(
+        send_to_viz_agent,
+        viz_retry_config,
+        data,
+        query_context,
+        query_id
+    )
+
+
 # Update the existing send_to_nlp_agent function to include dynamic schema context
 async def send_to_nlp_agent_with_dynamic_context(query: str, user_id: str, session_id: str) -> Dict[str, Any]:
     """
@@ -1448,9 +2853,6 @@ async def send_to_nlp_agent_with_dynamic_context(query: str, user_id: str, sessi
         # Prepare request with dynamic schema context
         request_data = {
             "query": query,
-            "query_id": f"backend_{int(datetime.now().timestamp() * 1000)}",
-            "user_id": user_id,
-            "session_id": session_id,
             "context": {
                 "source": "backend_gateway",
                 "dynamic_schema_available": dynamic_schema_manager is not None,
@@ -1481,27 +2883,79 @@ async def send_to_nlp_agent_with_dynamic_context(query: str, user_id: str, sessi
             except Exception as e:
                 logger.warning(f"Failed to add schema context: {e}")
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{nlp_agent_url}/process",
-                json=request_data
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"NLP agent returned status {response.status_code}: {response.text}")
-                return {
-                    "success": False,
-                    "error": f"NLP service error: {response.status_code}"
-                }
+        # Use aiohttp instead of httpx for consistency
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{nlp_agent_url}/process", json=request_data) as response:
+                if response.status == 200:
+                    return await response.json()  # Return NLP agent response as-is
+                else:
+                    error_text = await response.text()
+                    logger.error(f"NLP agent returned status {response.status}: {error_text}")
+                    return {
+                        "error": f"NLP service error: {response.status}"
+                    }
                 
     except Exception as e:
         logger.error(f"Failed to communicate with NLP agent: {e}")
         return {
-            "success": False,
             "error": f"NLP communication failed: {str(e)}"
         }
+
+
+# WebSocket endpoint for testing and general connections
+@app.websocket("/ws")
+async def websocket_test_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for testing and general communication"""
+    await websocket.accept()
+    
+    try:
+        logger.info("WebSocket test connection established")
+        
+        # Send connection established message
+        await websocket.send_json({
+            "type": "connection_established",
+            "message": "WebSocket connection established",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            message_type = data.get("type", "unknown")
+            
+            logger.info(f"Received WebSocket message: {message_type}")
+            
+            # Handle different message types
+            if message_type.lower() in ["heartbeat", "ping"]:
+                # Respond to heartbeat/ping
+                await websocket.send_json({
+                    "type": "heartbeat_response",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "correlation_id": data.get("correlation_id")
+                })
+            
+            elif message_type == "test_agent_communication":
+                # Handle test communication request
+                await websocket.send_json({
+                    "type": "test_response", 
+                    "message": "Test agent communication received",
+                    "correlation_id": data.get("correlation_id")
+                })
+            
+            else:
+                # Echo other messages
+                await websocket.send_json({
+                    "type": "echo",
+                    "original_type": message_type,
+                    "message": f"Received {message_type}",
+                    "correlation_id": data.get("correlation_id")
+                })
+                
+    except WebSocketDisconnect:
+        logger.info("WebSocket test connection disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket test error: {e}")
 
 
 # WebSocket endpoint for real-time chat
@@ -1549,6 +3003,15 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 # Respond to ping with pong
                 await websocket.send_json({
                     "type": "pong",
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+            
+            elif message_type == "get_metrics":
+                # Send orchestration metrics
+                metrics = await orchestration_metrics.get_metrics()
+                await websocket.send_json({
+                    "type": "metrics",
+                    "data": metrics,
                     "timestamp": datetime.utcnow().isoformat()
                 })
                 
@@ -1611,14 +3074,234 @@ async def set_database_context(session_id: str, database_context: Dict[str, Any]
         logger.error(f"Failed to store database context for session {session_id}: {e}")
         return False
 
+# NOTE: This function is deprecated - use send_to_data_agent instead
+# Direct SQL execution via MCP (replaces data-agent)
+async def execute_sql_via_mcp(sql_query: str, query_context: dict, query_id: str) -> dict:
+    """
+    DEPRECATED: Execute SQL query directly via MCP server, bypassing data-agent
+    This function is kept for backward compatibility but should not be used in the main workflow.
+    Use send_to_data_agent() instead to follow the proper agent workflow.
+    """
+    logger.warning("DEPRECATED: Direct MCP execution bypasses data agent. Use send_to_data_agent() instead.")
+    try:
+        logger.info(f"Executing SQL via MCP for query {query_id}: {sql_query[:100]}...")
+        
+        from mcp_client import execute_mcp_query
+        
+        # Execute query through MCP server
+        result = await execute_mcp_query(sql_query)
+        
+        if result.get("success"):
+            processed_data = result.get("data", [])
+            columns = result.get("columns", [])
+            
+            return {
+                "success": True,
+                "processed_data": processed_data,
+                "columns": columns,
+                "row_count": len(processed_data),
+                "processing_time_ms": 200,
+                "processing_method": "mcp_direct",
+                "data_quality": {
+                    "is_valid": len(processed_data) > 0,
+                    "completeness": 1.0 if processed_data else 0.0,
+                    "consistency": 1.0
+                }
+            }
+        else:
+            logger.error(f"MCP SQL execution failed: {result.get('error')}")
+            return {
+                "success": False,
+                "error": result.get('error', 'Unknown MCP error'),
+                "processed_data": [],
+                "columns": [],
+                "row_count": 0
+            }
+        
+    except Exception as e:
+        logger.error(f"Direct SQL execution via MCP failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "processed_data": [],
+            "columns": [],
+            "row_count": 0
+        }
+
+
+# NOTE: This function is deprecated - proper workflow should generate SQL through NLP agent
+async def generate_mock_data_result(query_context: dict, query_id: str) -> dict:
+    """
+    DEPRECATED: Generate mock data when no SQL query is available
+    This function is kept for backward compatibility but should not be used in the main workflow.
+    The proper workflow should always generate SQL through the NLP agent.
+    """
+    logger.warning("DEPRECATED: Mock data generation indicates workflow failure. NLP agent should generate SQL.")
+    try:
+        intent = query_context.get("intent", {})
+        metric_type = intent.get("metric_type", "revenue")
+        
+        # Generate appropriate mock data based on metric type
+        if metric_type == "revenue":
+            mock_data = [
+                {"period": "2025-01", "revenue": 1200000},
+                {"period": "2025-02", "revenue": 1350000},
+                {"period": "2025-03", "revenue": 1180000},
+                {"period": "2025-04", "revenue": 1420000},
+                {"period": "2025-05", "revenue": 1380000}
+            ]
+            columns = ["period", "revenue"]
+        elif metric_type == "cash_flow":
+            mock_data = [
+                {"period": "2025-01", "cash_flow": 450000},
+                {"period": "2025-02", "cash_flow": 520000},
+                {"period": "2025-03", "cash_flow": 480000}
+            ]
+            columns = ["period", "cash_flow"]
+        else:
+            mock_data = [
+                {"category": "Sample Data", "value": 100},
+                {"category": "Demo Results", "value": 150}
+            ]
+            columns = ["category", "value"]
+        
+        return {
+            "success": True,
+            "processed_data": mock_data,
+            "columns": columns,
+            "row_count": len(mock_data),
+            "processing_time_ms": 50,
+            "processing_method": "mock_fallback",
+            "data_quality": {
+                "is_valid": True,
+                "completeness": 1.0,
+                "consistency": 1.0
+            },
+            "warning": "Using sample data - no SQL query generated"
+        }
+        
+    except Exception as e:
+        logger.error(f"Mock data generation failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "processed_data": [],
+            "columns": [],
+            "row_count": 0
+        }
+
+
+# NOTE: This function should only be used as fallback when viz agent is unavailable
+def generate_visualization_config(data: list, query_context: dict) -> dict:
+    """
+    FALLBACK ONLY: Generate visualization configuration, replacing viz-agent
+    This function should only be used as a fallback when the viz agent is unavailable.
+    The proper workflow should route through send_to_viz_agent().
+    """
+    try:
+        intent = query_context.get("intent", {})
+        metric_type = intent.get("metric_type", "unknown")
+        columns = [key for key in data[0].keys()] if data and len(data) > 0 else []
+        
+        # Determine appropriate chart type based on data structure
+        chart_type = "table"  # default
+        chart_title = "Query Results"
+        
+        if len(columns) == 2:
+            # Two columns - likely time series or category data
+            if any(col.lower() in ["period", "date", "time", "month", "year"] for col in columns):
+                chart_type = "line_chart"
+                chart_title = f"{metric_type.replace('_', ' ').title()} Trends"
+            else:
+                chart_type = "bar_chart"
+                chart_title = f"{metric_type.replace('_', ' ').title()} by Category"
+        elif len(columns) > 2:
+            # Multiple columns - use table
+            chart_type = "table"
+            chart_title = f"{metric_type.replace('_', ' ').title()} Details"
+        
+        # Override with hint from intent if available
+        visualization_hint = intent.get("visualization_hint")
+        if visualization_hint and visualization_hint in ["line_chart", "bar_chart", "pie_chart", "table"]:
+            chart_type = visualization_hint
+        
+        return {
+            "success": True,
+            "chart_config": {
+                "chart_type": chart_type,
+                "title": chart_title,
+                "config": {
+                    "responsive": True,
+                    "maintainAspectRatio": False,
+                    "data_columns": columns
+                }
+            },
+            "processing_time_ms": 10,
+            "processing_method": "direct_generation"
+        }
+        
+    except Exception as e:
+        logger.error(f"Visualization config generation failed: {e}")
+        return {
+            "success": True,  # Don't fail the entire query for viz issues
+            "chart_config": {
+                "chart_type": "table",
+                "title": "Results",
+                "config": {"responsive": True}
+            },
+            "processing_time_ms": 5,
+            "processing_method": "fallback"
+        }
+
+# Agent Health Check Functions
+async def check_agent_health(agent_url: str, agent_name: str) -> bool:
+    """Check if an agent is healthy and responding"""
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)  # Short timeout for health checks
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{agent_url}/health") as response:
+                if response.status == 200:
+                    health_data = await response.json()
+                    logger.debug(f"{agent_name} health check passed: {health_data.get('status', 'unknown')}")
+                    return True
+                else:
+                    logger.warning(f"{agent_name} health check failed: HTTP {response.status}")
+                    return False
+    except Exception as e:
+        logger.warning(f"{agent_name} health check failed: {e}")
+        return False
+
+async def check_all_agents_health() -> dict:
+    """Check health of all agents before workflow execution"""
+    nlp_agent_url = os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
+    data_agent_url = os.getenv("DATA_AGENT_URL", "http://data-agent:8002")  
+    viz_agent_url = os.getenv("VIZ_AGENT_URL", "http://viz-agent:8003")
+    
+    # Check all agents concurrently
+    nlp_healthy, data_healthy, viz_healthy = await asyncio.gather(
+        check_agent_health(nlp_agent_url, "NLP Agent"),
+        check_agent_health(data_agent_url, "Data Agent"),
+        check_agent_health(viz_agent_url, "Viz Agent"),
+        return_exceptions=True
+    )
+    
+    # Handle any exceptions from health checks
+    nlp_healthy = nlp_healthy if isinstance(nlp_healthy, bool) else False
+    data_healthy = data_healthy if isinstance(data_healthy, bool) else False  
+    viz_healthy = viz_healthy if isinstance(viz_healthy, bool) else False
+    
+    return {
+        "nlp_agent": nlp_healthy,
+        "data_agent": data_healthy,
+        "viz_agent": viz_healthy,
+        "all_healthy": nlp_healthy and data_healthy and viz_healthy
+    }
+
 
 # Agent Communication Functions
 async def send_to_nlp_agent(query: str, query_id: str, session_id: Optional[str] = None) -> dict:
     """Send query to NLP Agent for processing"""
     try:
-        # For now, we'll make HTTP requests to the agent services
-        # In production, this would use MCP/A2A protocols
-        
         nlp_agent_url = os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
         
         # Get database context if session_id is provided
@@ -1646,16 +3329,24 @@ async def send_to_nlp_agent(query: str, query_id: str, session_id: Optional[str]
             async with session.post(f"{nlp_agent_url}/process", json=payload) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"NLP Agent processed query {query_id} successfully")
-                    return result
+                    
+                    # Validate and standardize the response
+                    validated_response = validate_nlp_response(result)
+                    if validated_response:
+                        logger.info(f"NLP Agent processed query {query_id} successfully (validated)")
+                        # Convert back to dict for backward compatibility
+                        return validated_response.dict()
+                    else:
+                        logger.error(f"NLP Agent response validation failed for query {query_id}")
+                        return {"error": "Invalid response format from NLP Agent"}
                 else:
                     error_text = await response.text()
                     logger.error(f"NLP Agent error {response.status}: {error_text}")
-                    return {"success": False, "error": f"NLP Agent returned {response.status}: {error_text}"}
+                    return {"error": f"NLP Agent returned {response.status}: {error_text}"}
                     
     except asyncio.TimeoutError:
         logger.error(f"NLP Agent timeout for query {query_id}")
-        return {"success": False, "error": "NLP Agent timeout"}
+        return {"error": "NLP Agent timeout"}
     except Exception as e:
         logger.error(f"NLP Agent communication failed: {e}")
         # Fallback to simple query processing
@@ -1693,8 +3384,16 @@ async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str,
             async with session.post(f"{data_agent_url}/execute", json=payload) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"Data Agent processed query {query_id} successfully")
-                    return result
+                    
+                    # Validate and standardize the response
+                    validated_response = validate_data_response(result)
+                    if validated_response:
+                        logger.info(f"Data Agent processed query {query_id} successfully (validated)")
+                        # Convert back to dict for backward compatibility
+                        return validated_response.dict()
+                    else:
+                        logger.error(f"Data Agent response validation failed for query {query_id}")
+                        return {"success": False, "error": "Invalid response format from Data Agent"}
                 else:
                     error_text = await response.text()
                     logger.error(f"Data Agent error {response.status}: {error_text}")
@@ -1705,7 +3404,7 @@ async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str,
         return {"success": False, "error": "Data Agent timeout"}
     except Exception as e:
         logger.error(f"Data Agent communication failed: {e}")
-        # Fallback to direct database query
+        # Fallback to direct database query via MCP if data agent is unavailable
         return await fallback_data_processing(sql_query, query_context, query_id)
 
 
@@ -1740,8 +3439,16 @@ async def send_to_viz_agent(data: list, query_context: dict, query_id: str, sess
             async with session.post(f"{viz_agent_url}/visualize", json=payload) as response:
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"Viz Agent processed query {query_id} successfully")
-                    return result
+                    
+                    # Validate and standardize the response
+                    validated_response = validate_viz_response(result)
+                    if validated_response:
+                        logger.info(f"Viz Agent processed query {query_id} successfully (validated)")
+                        # Convert back to dict for backward compatibility
+                        return validated_response.dict()
+                    else:
+                        logger.error(f"Viz Agent response validation failed for query {query_id}")
+                        return {"success": False, "error": "Invalid response format from Viz Agent"}
                 else:
                     error_text = await response.text()
                     logger.error(f"Viz Agent error {response.status}: {error_text}")
@@ -1752,7 +3459,251 @@ async def send_to_viz_agent(data: list, query_context: dict, query_id: str, sess
         return {"success": False, "error": "Viz Agent timeout"}
     except Exception as e:
         logger.error(f"Viz Agent communication failed: {e}")
+        # Don't fail the entire query for visualization issues, but return failure status
         return {"success": False, "error": f"Viz Agent communication failed: {str(e)}"}
+
+
+# Enhanced Agent Communication Functions with WebSocket Support (Phase 1)
+async def send_to_agent_enhanced(
+    agent_type: AgentType, 
+    message: Dict[str, Any], 
+    timeout: float = 30.0
+) -> Dict[str, Any]:
+    """
+    Enhanced agent communication using WebSocket manager with HTTP fallback
+    
+    Args:
+        agent_type: Target agent type (NLP, DATA, VIZ)
+        message: Message payload to send
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Agent response dictionary
+    """
+    try:
+        # Add metadata
+        message.update({
+            "timestamp": datetime.utcnow().isoformat(),
+            "request_id": f"{agent_type.value}_{int(datetime.utcnow().timestamp() * 1000)}",
+            "source": "backend_enhanced"
+        })
+        
+        # Use WebSocket manager for communication
+        response = await websocket_agent_manager.send_message(
+            agent_type=agent_type,
+            message=message,
+            timeout=timeout
+        )
+        
+        logger.info(f"Enhanced communication with {agent_type.value} agent successful")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Enhanced communication with {agent_type.value} agent failed: {e}")
+        # Return structured error response
+        return {
+            "success": False,
+            "error": {
+                "type": "communication_error",
+                "message": str(e),
+                "agent": agent_type.value,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        }
+
+
+async def send_to_nlp_agent_enhanced(query: str, query_id: str, context: Optional[Dict] = None) -> Dict[str, Any]:
+    """Enhanced NLP agent communication with WebSocket support"""
+    
+    message = {
+        "type": "nlp_query",
+        "query": query,
+        "query_id": query_id,
+        "context": context or {}
+    }
+    
+    return await send_to_agent_enhanced(AgentType.NLP, message)
+
+
+async def send_to_data_agent_enhanced(
+    sql_query: str, 
+    query_context: Dict, 
+    query_id: str
+) -> Dict[str, Any]:
+    """Enhanced Data agent communication with WebSocket support"""
+    
+    message = {
+        "type": "data_query",
+        "sql_query": sql_query,
+        "query_context": query_context,
+        "query_id": query_id
+    }
+    
+    return await send_to_agent_enhanced(AgentType.DATA, message)
+
+
+async def send_to_viz_agent_enhanced(
+    data: List[Dict], 
+    query_context: Dict, 
+    query_id: str
+) -> Dict[str, Any]:
+    """Enhanced Viz agent communication with WebSocket support"""
+    
+    message = {
+        "type": "visualization_request",
+        "data": data,
+        "query_context": query_context,
+        "query_id": query_id
+    }
+    
+    return await send_to_agent_enhanced(AgentType.VIZ, message)
+
+
+# Phase 2 Migration Functions
+async def migrate_agent_to_websocket(agent_type: AgentType) -> Dict[str, Any]:
+    """Enable WebSocket for specific agent (Phase 2 migration)"""
+    try:
+        websocket_agent_manager.enable_websocket_for_agent(agent_type)
+        
+        # Wait a moment for connection to establish
+        await asyncio.sleep(2)
+        
+        # Test the connection
+        test_message = {
+            "type": "health_check",
+            "test": True
+        }
+        
+        response = await websocket_agent_manager.send_message(
+            agent_type=agent_type,
+            message=test_message,
+            timeout=5.0
+        )
+        
+        logger.info(f"Successfully migrated {agent_type.value} agent to WebSocket")
+        
+        return {
+            "success": True,
+            "agent": agent_type.value,
+            "status": "migrated_to_websocket",
+            "connection_test": response
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to migrate {agent_type.value} agent to WebSocket: {e}")
+        
+        # Rollback on failure
+        websocket_agent_manager.disable_websocket_for_agent(agent_type)
+        
+        return {
+            "success": False,
+            "agent": agent_type.value,
+            "error": str(e),
+            "status": "migration_failed"
+        }
+
+
+async def rollback_agent_to_http(agent_type: AgentType) -> Dict[str, Any]:
+    """Rollback agent from WebSocket to HTTP"""
+    try:
+        websocket_agent_manager.disable_websocket_for_agent(agent_type)
+        
+        logger.info(f"Successfully rolled back {agent_type.value} agent to HTTP")
+        
+        return {
+            "success": True,
+            "agent": agent_type.value,
+            "status": "rolled_back_to_http"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to rollback {agent_type.value} agent to HTTP: {e}")
+        
+        return {
+            "success": False,
+            "agent": agent_type.value,
+            "error": str(e),
+            "status": "rollback_failed"
+        }
+
+
+# Agent Management Endpoints for Phase 2
+@app.get("/api/agent/stats")
+@limiter.limit("30/minute")
+async def get_agent_stats(request: Request):
+    """Get WebSocket connection statistics for all agents"""
+    try:
+        stats = websocket_agent_manager.get_agent_stats()
+        
+        return {
+            "success": True,
+            "stats": stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get agent stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/{agent_name}/migrate-websocket")
+@limiter.limit("5/minute")
+async def migrate_agent_websocket(request: Request, agent_name: str):
+    """Migrate specific agent to WebSocket (Phase 2)"""
+    try:
+        # Map agent name to AgentType
+        agent_mapping = {
+            "nlp": AgentType.NLP,
+            "data": AgentType.DATA,
+            "viz": AgentType.VIZ
+        }
+        
+        if agent_name.lower() not in agent_mapping:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid agent name: {agent_name}"
+            )
+        
+        agent_type = agent_mapping[agent_name.lower()]
+        result = await migrate_agent_to_websocket(agent_type)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to migrate agent {agent_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/agent/{agent_name}/rollback-http")
+@limiter.limit("5/minute")
+async def rollback_agent_http(request: Request, agent_name: str):
+    """Rollback specific agent from WebSocket to HTTP"""
+    try:
+        # Map agent name to AgentType
+        agent_mapping = {
+            "nlp": AgentType.NLP,
+            "data": AgentType.DATA,
+            "viz": AgentType.VIZ
+        }
+        
+        if agent_name.lower() not in agent_mapping:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid agent name: {agent_name}"
+            )
+        
+        agent_type = agent_mapping[agent_name.lower()]
+        result = await rollback_agent_to_http(agent_type)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to rollback agent {agent_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Fallback Functions for Agent Communication Failures

@@ -49,7 +49,12 @@ function DashboardContent() {
   const handleDatabaseSelected = (databaseName: string) => {
     console.log("Database selected:", databaseName);
     setSelectedDatabase(databaseName);
-    // Optionally refresh dashboard data after database selection
+    // Store selected database in session storage for persistence
+    sessionStorage.setItem('selected_database', databaseName);
+    // Clear any cached dashboard data to force refresh with new database context
+    const cacheKey = `dashboard_initial_data_${databaseName}`;
+    sessionStorage.removeItem(cacheKey);
+    // Refresh dashboard data after database selection and schema initialization
     refreshDashboard();
     setShowDatabaseModal(false);
   };

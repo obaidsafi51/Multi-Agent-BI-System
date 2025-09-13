@@ -1,0 +1,77 @@
+graph TB
+    subgraph "Frontend Layer"
+        UI[React Dashboard]
+        WSM[WebSocket Manager]
+    end
+    
+    subgraph "Backend Layer"
+        API[HTTP API Gateway]
+        WSO[WebSocket Orchestrator]
+        CB[Circuit Breakers]
+    end
+    
+    subgraph "Agent Layer"
+        NLP[NLP Agent<br/>WebSocket Server<br/>+ KIMI Client]
+        DATA[Data Agent<br/>WebSocket Server] 
+        VIZ[Viz Agent<br/>WebSocket Server<br/>+ KIMI Client]
+    end
+    
+    subgraph "LLM Layer"
+        KIMI[Kimi API<br/>Moonshot AI<br/>External Service]
+        LLM_CACHE[LLM Response Cache<br/>Redis<br/>Semantic Caching]
+    end
+    
+    subgraph "Data Layer"
+        MCP[MCP Server<br/>HTTP + WebSocket<br/>+ LLM Tools]
+        DB[(TiDB Database)]
+        SCHEMA_CACHE[Schema Cache<br/>Redis]
+    end
+    
+    %% WebSocket Connections (Primary)
+    UI -.->|Real-time Updates| WSM
+    WSM -.->|Persistent Connection| WSO
+    WSO -.->|Connection Pool| NLP
+    WSO -.->|Connection Pool| DATA
+    WSO -.->|Connection Pool| VIZ
+    
+    NLP -.->|Persistent Connection| MCP
+    DATA -.->|Persistent Connection| MCP
+    VIZ -.->|Persistent Connection| MCP
+    
+    %% HTTP Connections (Strategic)
+    UI -->|API Calls| API
+    API -->|Database Operations| MCP
+    MCP -->|SQL Queries| DB
+    
+    %% LLM Integration (HTTP with Rate Limiting)
+    NLP -->|Intent Extraction<br/>Entity Recognition<br/>Query Processing| KIMI
+    MCP -->|Schema Intelligence<br/>SQL Generation<br/>Data Analysis<br/>Result Explanation| KIMI
+    VIZ -->|Chart Descriptions<br/>Insight Generation| KIMI
+    
+    %% Caching Layer (Redis)
+    NLP -.->|Semantic Cache<br/>Check/Store| LLM_CACHE
+    MCP -.->|Response Cache<br/>Check/Store| LLM_CACHE
+    VIZ -.->|Chart Cache<br/>Check/Store| LLM_CACHE
+    MCP -.->|Schema Cache| SCHEMA_CACHE
+    
+    %% Health & Monitoring (HTTP)
+    CB -->|Health Checks| NLP
+    CB -->|Health Checks| DATA
+    CB -->|Health Checks| VIZ
+    CB -->|API Health<br/>Rate Limit Status| KIMI
+    
+    %% LLM Operations Detail
+    KIMI -.->|50 req/hour<br/>200 req/day<br/>Rate Limited| LLM_CACHE
+    
+    %% Data Flow Indicators
+    classDef websocket fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+    classDef http fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef llm fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef cache fill:#e8f5e8,stroke:#2e7d32,stroke-width:2px
+    classDef agent fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    
+    class WSM,WSO websocket
+    class UI,API,CB,DB http
+    class KIMI llm
+    class LLM_CACHE,SCHEMA_CACHE cache
+    class NLP,DATA,VIZ,MCP agent

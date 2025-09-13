@@ -17,10 +17,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-import structlog
 from src.agent import get_data_agent, close_data_agent
 from src.mcp_agent import get_mcp_data_agent, close_mcp_data_agent
+
+# Import standardized models from local shared package
+from shared.models.workflow import DataQueryResponse, QueryResult, AgentMetadata, ValidationResult, ErrorResponse
 
 # Load environment variables
 load_dotenv()
@@ -31,30 +32,11 @@ USE_MCP = os.getenv('USE_MCP_CLIENT', 'true').lower() == 'true'
 # Load environment variables
 load_dotenv()
 
-# Configure structured logging
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stdout
-)
-
-# Configure structlog
-structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,16 +48,6 @@ class QueryExecuteRequest(BaseModel):
     query_id: str
     execution_config: Optional[Dict[str, Any]] = None
     database_context: Optional[Dict[str, Any]] = None
-
-class QueryExecuteResponse(BaseModel):
-    success: bool
-    query_id: str
-    processed_data: list
-    columns: list
-    row_count: int
-    processing_time_ms: int
-    error: Optional[str] = None
-    data_quality: Optional[Dict[str, Any]] = None
 
 # Global references
 data_agent = None
@@ -122,8 +94,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/execute", response_model=QueryExecuteResponse)
-async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
+@app.post("/execute", response_model=DataQueryResponse)
+async def execute_query(request: QueryExecuteRequest) -> DataQueryResponse:
     """Execute SQL query and return processed data"""
     if not data_agent:
         raise HTTPException(status_code=503, detail="Data Agent not initialized")
@@ -156,42 +128,109 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
         })
         
         if not result.get("success", False):
-            return QueryExecuteResponse(
-                success=False,
-                query_id=request.query_id,
-                processed_data=[],
-                columns=[],
-                row_count=0,
+            # Create error response using standardized format
+            operation_id = f"data_op_{int(datetime.now().timestamp() * 1000)}"
+            agent_metadata = AgentMetadata(
+                agent_name="data-agent",
+                agent_version="1.0.0",
                 processing_time_ms=int((datetime.now() - start_time).total_seconds() * 1000),
-                error=result.get("error", {}).get("message", "Unknown error")
+                operation_id=operation_id,
+                status="error"
+            )
+            
+            error_response = ErrorResponse(
+                error_type="data_query_error",
+                message=result.get("error", {}).get("message", "Unknown error"),
+                recovery_action="retry",
+                suggestions=[
+                    "Check SQL query syntax",
+                    "Verify database connectivity",
+                    "Check data availability"
+                ]
+            )
+            
+            return DataQueryResponse(
+                success=False,
+                agent_metadata=agent_metadata,
+                error=error_response
             )
         
-        # Build response
-        response = QueryExecuteResponse(
-            success=True,
-            query_id=request.query_id,
-            processed_data=result.get("data", []),
-            columns=result.get("columns", []),
-            row_count=result.get("row_count", 0),
-            processing_time_ms=result.get("metadata", {}).get("processing_time_ms", 0),
-            data_quality=result.get("metadata", {}).get("data_quality", {})
+        # Build standardized response
+        operation_id = f"data_op_{int(datetime.now().timestamp() * 1000)}"
+        processing_time_ms = result.get("metadata", {}).get("processing_time_ms", 0)
+        if not processing_time_ms:
+            # Calculate processing time if not provided
+            processing_time_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+        
+        agent_metadata = AgentMetadata(
+            agent_name="data-agent",
+            agent_version="1.0.0",
+            processing_time_ms=processing_time_ms,
+            operation_id=operation_id,
+            status="success"
         )
         
-        logger.info(f"Successfully executed query {request.query_id} in {response.processing_time_ms}ms")
+        # Create query result with proper data format
+        processed_data = result.get("data", result.get("processed_data", []))
+        columns = result.get("columns", [])
+        
+        query_result = QueryResult(
+            data=processed_data,
+            columns=columns,
+            row_count=len(processed_data) if processed_data else result.get("row_count", 0),
+            processing_time_ms=processing_time_ms
+        )
+        
+        # Create validation result if available
+        data_quality = result.get("metadata", {}).get("data_quality", result.get("data_quality", {}))
+        validation = ValidationResult(
+            is_valid=data_quality.get("is_valid", True),
+            quality_score=data_quality.get("quality_score", 1.0),
+            issues=data_quality.get("issues", []),
+            warnings=data_quality.get("warnings", [])
+        )
+        
+        response = DataQueryResponse(
+            success=True,
+            agent_metadata=agent_metadata,
+            result=query_result,
+            validation=validation,
+            query_optimization=result.get("metadata", {}).get("optimization", {}),
+            cache_metadata={"cache_hit": False}  # Default for now
+        )
+        
+        logger.info(f"Successfully executed query {request.query_id} in {response.agent_metadata.processing_time_ms}ms")
         return response
         
     except Exception as e:
         processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
         logger.error(f"Query execution failed for {request.query_id}: {e}")
         
-        return QueryExecuteResponse(
-            success=False,
-            query_id=request.query_id,
-            processed_data=[],
-            columns=[],
-            row_count=0,
+        # Create error response using standardized format
+        operation_id = f"data_op_{int(datetime.now().timestamp() * 1000)}"
+        agent_metadata = AgentMetadata(
+            agent_name="data-agent",
+            agent_version="1.0.0",
             processing_time_ms=processing_time,
-            error=str(e)
+            operation_id=operation_id,
+            status="error"
+        )
+        
+        error_response = ErrorResponse(
+            error_type="data_execution_error",
+            message=str(e),
+            recovery_action="retry",
+            suggestions=[
+                "Check database connectivity",
+                "Verify query parameters",
+                "Try again in a few moments"
+            ]
+        )
+        
+        return DataQueryResponse(
+            success=False,
+            agent_metadata=agent_metadata,
+            error=error_response
         )
 
 @app.get("/health")
@@ -230,10 +269,69 @@ async def get_metrics():
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8002,
-        reload=False,
-        log_level="info"
-    )
+    import signal
+    
+    # Check if WebSocket server should be enabled
+    enable_websockets = os.getenv('ENABLE_WEBSOCKETS', 'true').lower() == 'true'
+    websocket_port = int(os.getenv('WEBSOCKET_PORT', '8012'))
+    http_port = int(os.getenv('PORT', '8002'))
+    
+    async def start_servers():
+        """Start both HTTP and WebSocket servers"""
+        logger.info(f"Starting Enhanced Data Agent v2.2.0 with HTTP server (:8002)")
+        
+        # Start HTTP server
+        config = uvicorn.Config(
+            "main:app",
+            host="0.0.0.0", 
+            port=http_port,
+            reload=False,
+            log_level="info"
+        )
+        http_server = uvicorn.Server(config)
+        http_task = asyncio.create_task(http_server.serve())
+        
+        tasks = [http_task]
+        
+        # Start WebSocket server if enabled
+        if enable_websockets:
+            logger.info(f"WebSocket support enabled - starting WebSocket server on port {websocket_port}")
+            from websocket_server import start_websocket_server
+            
+            websocket_task = asyncio.create_task(start_websocket_server())
+            tasks.append(websocket_task)
+            
+            logger.info(f"Starting Enhanced Data Agent v2.2.0 with both HTTP (:{http_port}) and WebSocket (:{websocket_port}) servers")
+            logger.info("Features: WebSocket reliability, performance optimization, enhanced monitoring")
+        else:
+            logger.info("WebSocket support disabled - HTTP only mode")
+        
+        # Wait for all tasks
+        try:
+            await asyncio.gather(*tasks)
+        except KeyboardInterrupt:
+            logger.info("Shutting down servers...")
+            
+            # Stop WebSocket server if running
+            if enable_websockets:
+                try:
+                    from websocket_server import stop_websocket_server
+                    await stop_websocket_server()
+                except Exception as e:
+                    logger.error(f"Error stopping WebSocket server: {e}")
+            
+            # Stop HTTP server
+            try:
+                http_server.should_exit = True
+                await http_task
+            except Exception as e:
+                logger.error(f"Error stopping HTTP server: {e}")
+    
+    # Run the servers
+    try:
+        asyncio.run(start_servers())
+    except KeyboardInterrupt:
+        logger.info("Data Agent shutdown complete")
+    except Exception as e:
+        logger.error(f"Error starting Data Agent: {e}")
+        sys.exit(1)

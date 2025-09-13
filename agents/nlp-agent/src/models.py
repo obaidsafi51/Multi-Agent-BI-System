@@ -1,4 +1,8 @@
-"""Data models for NLP Agent"""
+"""Data models for NLP Agent
+
+This module now imports standardized models from local shared.models
+and defines only NLP-specific models not covered by shared models.
+"""
 
 from datetime import datetime
 from enum import Enum
@@ -6,16 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-
-class QueryIntent(BaseModel):
-    """Structured representation of user query intent"""
-    metric_type: str = Field(..., description="Type of financial metric requested")
-    time_period: str = Field(..., description="Time period for the query")
-    aggregation_level: str = Field(default="monthly", description="Data aggregation level")
-    filters: Dict[str, Any] = Field(default_factory=dict, description="Additional filters")
-    comparison_periods: List[str] = Field(default_factory=list, description="Periods for comparison")
-    visualization_hint: Optional[str] = Field(None, description="Suggested visualization type")
-    confidence_score: float = Field(default=0.0, description="Confidence in intent extraction")
+# Import standardized shared models from local package
+from shared.models.workflow import QueryIntent, NLPResponse, AgentResponse
+from shared.models.agents import AgentRequest, AgentError
 
 
 class FinancialEntity(BaseModel):

@@ -1,4 +1,4 @@
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -35,10 +35,13 @@ RUN uv pip install --system \
     reportlab==4.2.5 \
     openpyxl==3.1.5 \
     psutil==6.1.0 \
-    kaleido==0.2.1
+    kaleido==0.2.1 \
+    websockets==12.0
 
-# Copy source code
-COPY --chown=appuser:appuser . .
+# Copy source code and shared models
+COPY --chown=appuser:appuser src/ ./src/
+COPY --chown=appuser:appuser shared/ ./shared/
+COPY --chown=appuser:appuser main.py main_fixed.py standardized_response_template.py websocket_server.py ./
 
 # Switch to non-root user
 USER appuser
