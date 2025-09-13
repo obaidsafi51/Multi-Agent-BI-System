@@ -181,7 +181,7 @@ async def shutdown_event():
 
 
 # Pydantic models for API requests/responses
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class QueryRequest(BaseModel):
     query: str
@@ -196,6 +196,14 @@ class QueryResponse(BaseModel):
     visualization: Optional[Dict[str, Any]] = None
     error: Optional[ErrorResponse] = None
     agent_performance: Optional[Dict[str, Any]] = None
+
+class DatabaseContextError(BaseModel):
+    error_type: str = Field(..., description="Specific database context error type")
+    message: str = Field(..., description="Human-readable error message")
+    recovery_action: str = Field(..., description="Recommended recovery action")
+    suggestions: List[str] = Field(default_factory=list, description="Suggested solutions")
+    database_required: bool = Field(default=True, description="Whether database selection is required")
+    session_id: Optional[str] = Field(None, description="Session ID if applicable")
 
 class FeedbackRequest(BaseModel):
     query_id: str
@@ -283,27 +291,50 @@ async def process_query(
     """Process natural language query through multi-agent workflow"""
     try:
         query_id = f"q_{datetime.utcnow().timestamp()}"
+        user_id = query_request.user_id or "anonymous"
+        session_id = query_request.session_id or f"session_{query_id}"
+        
         logger.info(f"Starting multi-agent workflow for query: {query_request.query}")
+        
+        # Validate database context if session_id is provided
+        database_context = None
+        if query_request.session_id:
+            database_context = await get_database_context(session_id)
+            if not database_context:
+                logger.warning(f"No database context found for session {session_id}")
+                # Return error suggesting database selection
+                return QueryResponse(
+                    query_id=query_id,
+                    intent=QueryIntent(metric_type="unknown", time_period="unknown"),
+                    error=ErrorResponse(
+                        error_type="database_context_missing",
+                        message="Please select a database first before running queries.",
+                        recovery_action="select_database",
+                        suggestions=[
+                            "Use the database selector to choose a database",
+                            "Ensure you have selected a database from the available options",
+                            "Check if your session has expired"
+                        ]
+                    )
+                )
         
         # Step 1: Send query to NLP Agent with dynamic schema context
         if dynamic_schema_manager:
             # Use enhanced version with dynamic schema context
-            user_id = query_request.user_id or "anonymous"
-            session_id = query_request.session_id or f"session_{query_id}"
             nlp_result = await send_to_nlp_agent_with_dynamic_context(
                 query_request.query, 
                 user_id, 
                 session_id
             )
         else:
-            # Fallback to original version
-            nlp_result = await send_to_nlp_agent(query_request.query, query_id)
+            # Fallback to original version with session_id
+            nlp_result = await send_to_nlp_agent(query_request.query, query_id, session_id)
             
         if not nlp_result.get("success", False):
             raise HTTPException(status_code=400, detail=f"NLP processing failed: {nlp_result.get('error', 'Unknown error')}")
         
-        # Step 2: Send SQL context to Data Agent
-        data_result = await send_to_data_agent(nlp_result["sql_query"], nlp_result["query_context"], query_id)
+        # Step 2: Send SQL context to Data Agent with session_id
+        data_result = await send_to_data_agent(nlp_result["sql_query"], nlp_result["query_context"], query_id, session_id)
         if not data_result.get("success", False):
             # If data agent fails, try fallback processing
             logger.warning(f"Data Agent failed, trying fallback processing for query {query_id}")
@@ -325,8 +356,8 @@ async def process_query(
                     )
                 )
         
-        # Step 3: Send data and context to Viz Agent
-        viz_result = await send_to_viz_agent(data_result["processed_data"], nlp_result["query_context"], query_id)
+        # Step 3: Send data and context to Viz Agent with session_id
+        viz_result = await send_to_viz_agent(data_result["processed_data"], nlp_result["query_context"], query_id, session_id)
         if not viz_result.get("success", False):
             logger.warning(f"Visualization failed, using default: {viz_result.get('error')}")
             # Continue with basic visualization
@@ -490,6 +521,8 @@ async def select_database_and_fetch_schema(request: Request, body: dict):
     """Select a database and fetch its schema information"""
     try:
         database_name = body.get("database_name")
+        session_id = body.get("session_id", f"session_{datetime.utcnow().timestamp()}")
+        
         if not database_name:
             raise HTTPException(
                 status_code=400,
@@ -509,6 +542,19 @@ async def select_database_and_fetch_schema(request: Request, body: dict):
             if response.status_code == 200:
                 tables = response.json()
                 
+                # Create database context for session storage
+                database_context = {
+                    "database_name": database_name,
+                    "schema_initialized": True,
+                    "total_tables": len(tables),
+                    "table_names": [table.get("name", "") for table in tables],
+                    "selected_at": datetime.utcnow().isoformat(),
+                    "session_id": session_id
+                }
+                
+                # Store database context in Redis session
+                context_stored = await set_database_context(session_id, database_context)
+                
                 # If we have dynamic schema manager available, trigger schema refresh
                 if DYNAMIC_SCHEMA_AVAILABLE:
                     try:
@@ -522,9 +568,11 @@ async def select_database_and_fetch_schema(request: Request, body: dict):
                 return {
                     "success": True,
                     "database_name": database_name,
+                    "session_id": session_id,
                     "tables": tables,
                     "total_tables": len(tables),
-                    "schema_initialized": True
+                    "schema_initialized": True,
+                    "context_stored": context_stored
                 }
             else:
                 raise HTTPException(
@@ -539,6 +587,137 @@ async def select_database_and_fetch_schema(request: Request, body: dict):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to select database: {str(e)}"
+        )
+
+
+@app.get("/api/database/context/{session_id}")
+@limiter.limit("30/minute")
+async def get_database_context_status(request: Request, session_id: str):
+    """Get current database context for a session"""
+    try:
+        database_context = await get_database_context(session_id)
+        
+        if database_context:
+            return {
+                "success": True,
+                "session_id": session_id,
+                "database_context": database_context,
+                "context_available": True
+            }
+        else:
+            return {
+                "success": True,
+                "session_id": session_id,
+                "database_context": None,
+                "context_available": False,
+                "message": "No database context found for this session"
+            }
+            
+    except Exception as e:
+        logger.error(f"Failed to retrieve database context for session {session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve database context: {str(e)}"
+        )
+
+
+@app.post("/api/database/validate")
+@limiter.limit("30/minute")
+async def validate_database_context(request: Request, body: dict):
+    """Validate database context for a session before query processing"""
+    try:
+        session_id = body.get("session_id")
+        if not session_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Session ID is required for database context validation"
+            )
+        
+        database_context = await get_database_context(session_id)
+        
+        if not database_context:
+            return {
+                "valid": False,
+                "error": DatabaseContextError(
+                    error_type="database_context_missing",
+                    message="No database has been selected for this session.",
+                    recovery_action="select_database",
+                    suggestions=[
+                        "Use the database selector to choose a database",
+                        "Ensure you have access to at least one database",
+                        "Check if your session has expired and refresh if needed"
+                    ],
+                    database_required=True,
+                    session_id=session_id
+                ).dict(),
+                "session_id": session_id
+            }
+        
+        # Validate database accessibility
+        try:
+            # Quick validation query
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "http://tidb-mcp-server:8000/tools/execute_query_tool",
+                    json={
+                        "database": database_context.get("database_name"),
+                        "query": "SELECT 1 as test"
+                    },
+                    timeout=10.0
+                )
+                
+                if response.status_code != 200:
+                    return {
+                        "valid": False,
+                        "error": DatabaseContextError(
+                            error_type="database_connection_error",
+                            message=f"Cannot connect to database '{database_context.get('database_name')}'",
+                            recovery_action="retry_or_select_different",
+                            suggestions=[
+                                "Try selecting the database again",
+                                "Check if the database server is running",
+                                "Select a different database if this one is unavailable"
+                            ],
+                            database_required=True,
+                            session_id=session_id
+                        ).dict(),
+                        "session_id": session_id
+                    }
+        except Exception as validation_error:
+            logger.warning(f"Database validation failed for session {session_id}: {validation_error}")
+            return {
+                "valid": False,
+                "error": DatabaseContextError(
+                    error_type="database_validation_failed",
+                    message="Unable to validate database connection",
+                    recovery_action="retry",
+                    suggestions=[
+                        "Check your network connection",
+                        "Try selecting the database again",
+                        "Contact support if the issue persists"
+                    ],
+                    database_required=True,
+                    session_id=session_id
+                ).dict(),
+                "session_id": session_id
+            }
+        
+        # Valid database context
+        return {
+            "valid": True,
+            "database_context": database_context,
+            "session_id": session_id,
+            "message": f"Database context is valid for '{database_context.get('database_name')}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database context validation error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to validate database context: {str(e)}"
         )
 
 
@@ -1387,8 +1566,54 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
 
 # Helper functions for query processing
+# Helper functions for database context management
+async def get_database_context(session_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve database context from Redis session"""
+    if not redis_client:
+        logger.warning("Redis not available, database context unavailable")
+        return None
+    
+    try:
+        context_key = f"database_context:{session_id}"
+        context_data = await redis_client.get(context_key)
+        
+        if context_data:
+            database_context = json.loads(context_data)
+            logger.info(f"Retrieved database context for session {session_id}: {database_context.get('database_name', 'unknown')}")
+            return database_context
+        else:
+            logger.info(f"No database context found for session {session_id}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to retrieve database context for session {session_id}: {e}")
+        return None
+
+
+async def set_database_context(session_id: str, database_context: Dict[str, Any]) -> bool:
+    """Store database context in Redis session"""
+    if not redis_client:
+        logger.warning("Redis not available, cannot store database context")
+        return False
+    
+    try:
+        context_key = f"database_context:{session_id}"
+        # Set with 1 hour expiration
+        await redis_client.setex(
+            context_key,
+            3600,
+            json.dumps(database_context, default=str)
+        )
+        logger.info(f"Stored database context for session {session_id}: {database_context.get('database_name', 'unknown')}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to store database context for session {session_id}: {e}")
+        return False
+
+
 # Agent Communication Functions
-async def send_to_nlp_agent(query: str, query_id: str) -> dict:
+async def send_to_nlp_agent(query: str, query_id: str, session_id: Optional[str] = None) -> dict:
     """Send query to NLP Agent for processing"""
     try:
         # For now, we'll make HTTP requests to the agent services
@@ -1396,16 +1621,25 @@ async def send_to_nlp_agent(query: str, query_id: str) -> dict:
         
         nlp_agent_url = os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001")
         
+        # Get database context if session_id is provided
+        database_context = None
+        if session_id:
+            database_context = await get_database_context(session_id)
+        
         payload = {
             "query": query,
             "query_id": query_id,
             "user_id": "anonymous",
-            "session_id": f"session_{query_id}",
+            "session_id": session_id or f"session_{query_id}",
             "context": {
                 "timestamp": datetime.utcnow().isoformat(),
                 "source": "backend_api"
             }
         }
+        
+        # Add database context if available
+        if database_context:
+            payload["database_context"] = database_context
         
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1428,10 +1662,15 @@ async def send_to_nlp_agent(query: str, query_id: str) -> dict:
         return await fallback_nlp_processing(query, query_id)
 
 
-async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str) -> dict:
+async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str, session_id: Optional[str] = None) -> dict:
     """Send SQL query to Data Agent for execution"""
     try:
         data_agent_url = os.getenv("DATA_AGENT_URL", "http://data-agent:8002")
+        
+        # Get database context if session_id is provided
+        database_context = None
+        if session_id:
+            database_context = await get_database_context(session_id)
         
         payload = {
             "sql_query": sql_query,
@@ -1443,6 +1682,10 @@ async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str)
                 "optimize_query": True
             }
         }
+        
+        # Add database context if available
+        if database_context:
+            payload["database_context"] = database_context
         
         # Increase timeout to handle database connection issues
         timeout = aiohttp.ClientTimeout(total=120)  # Increased from 60 to 120 seconds
@@ -1466,10 +1709,15 @@ async def send_to_data_agent(sql_query: str, query_context: dict, query_id: str)
         return await fallback_data_processing(sql_query, query_context, query_id)
 
 
-async def send_to_viz_agent(data: list, query_context: dict, query_id: str) -> dict:
+async def send_to_viz_agent(data: list, query_context: dict, query_id: str, session_id: Optional[str] = None) -> dict:
     """Send data to Visualization Agent for chart generation"""
     try:
         viz_agent_url = os.getenv("VIZ_AGENT_URL", "http://viz-agent:8003")
+        
+        # Get database context if session_id is provided
+        database_context = None
+        if session_id:
+            database_context = await get_database_context(session_id)
         
         payload = {
             "data": data,
@@ -1482,6 +1730,10 @@ async def send_to_viz_agent(data: list, query_context: dict, query_id: str) -> d
                 "responsive": True
             }
         }
+        
+        # Add database context if available
+        if database_context:
+            payload["database_context"] = database_context
         
         timeout = aiohttp.ClientTimeout(total=45)
         async with aiohttp.ClientSession(timeout=timeout) as session:

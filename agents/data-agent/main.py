@@ -65,6 +65,7 @@ class QueryExecuteRequest(BaseModel):
     query_context: Dict[str, Any]
     query_id: str
     execution_config: Optional[Dict[str, Any]] = None
+    database_context: Optional[Dict[str, Any]] = None
 
 class QueryExecuteResponse(BaseModel):
     success: bool
@@ -131,6 +132,13 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
     
     try:
         logger.info(f"Executing query {request.query_id}")
+        
+        # Log database context if present
+        if request.database_context:
+            logger.info(f"Using database context: {request.database_context.get('database_name', 'unknown')}")
+            # Basic validation of database context
+            if 'database_name' not in request.database_context:
+                logger.warning("Database context missing required 'database_name' field")
         
         # Convert query context to intent format expected by data agent
         query_intent = {

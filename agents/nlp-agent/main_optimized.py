@@ -221,6 +221,14 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
         try:
             logger.info(f"Processing query: {request.query[:100]}...")
             
+            # Log database context if present
+            database_context = getattr(request, 'database_context', None)
+            if database_context:
+                logger.info(f"Using database context: {database_context.get('database_name', 'unknown')}")
+                # Basic validation of database context
+                if 'database_name' not in database_context:
+                    logger.warning("Database context missing required 'database_name' field")
+            
             # Classify query complexity unless forced comprehensive
             if request.force_comprehensive:
                 complexity = QueryComplexity.COMPREHENSIVE

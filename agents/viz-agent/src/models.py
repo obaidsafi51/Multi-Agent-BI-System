@@ -105,6 +105,7 @@ class VisualizationRequest(BaseModel):
     data: List[Dict[str, Any]] = Field(..., description="Raw data to visualize")
     preferences: Dict[str, Any] = Field(default_factory=dict, description="User preferences")
     export_config: Optional[ExportConfig] = Field(None, description="Export configuration")
+    database_context: Optional[Dict[str, Any]] = Field(None, description="Database context information")
 
 
 class VisualizationResponse(BaseModel):
