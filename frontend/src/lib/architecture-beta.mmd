@@ -1,0 +1,34 @@
+architecture-beta
+    group frontend_layer(internet)[Frontend Layer]
+    group backend_layer(server)[Backend Layer]  
+    group agent_layer(cloud)[Agent Layer]
+    group data_layer(database)[Data Layer]
+    group messaging_layer(server)[Messaging Layer]
+    
+    service frontend(internet)[Frontend] in frontend_layer
+    service backend(server)[Backend] in backend_layer
+    
+    service nlp_agent(cloud)[NLP Agent] in agent_layer
+    service data_agent(cloud)[Data Agent] in agent_layer
+    service viz_agent(cloud)[Viz Agent] in agent_layer
+    
+    service tidb_mcp(database)[TiDB MCP] in data_layer
+    service redis(database)[Redis] in data_layer
+    
+    service rabbitmq(server)[RabbitMQ] in messaging_layer
+    
+    frontend:B --> T:backend
+    backend:B --> T:nlp_agent
+    backend:B --> T:data_agent
+    backend:B --> T:viz_agent
+    backend:R --> L:tidb_mcp
+    
+    nlp_agent:R --> L:redis
+    data_agent:R --> L:redis
+    viz_agent:R --> L:redis
+    
+    nlp_agent:B --> T:rabbitmq
+    data_agent:B --> T:rabbitmq
+    viz_agent:B --> T:rabbitmq
+    
+    tidb_mcp:R --> L:redis
