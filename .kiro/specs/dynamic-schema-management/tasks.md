@@ -326,7 +326,7 @@ class AISemanticMapper:
                 'temperature': 0.1
             }
 
-            async with session.post('https://api.moonshot.cn/v1/chat/completions',
+            async with session.post('https://api.moonshot.ai/v1/chat/completions',
                                   headers=headers, json=payload) as response:
                 if response.status == 200:
                     result = await response.json()

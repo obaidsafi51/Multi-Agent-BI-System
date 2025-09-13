@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional, List
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from src.visualization_agent import VisualizationAgent
@@ -65,6 +65,7 @@ class VisualizeRequest(BaseModel):
     query_context: Dict[str, Any]
     query_id: str
     visualization_config: Optional[Dict[str, Any]] = None
+    database_context: Optional[Dict[str, Any]] = Field(None, description="Database context information")
 
 # Global references
 viz_agent: Optional[VisualizationAgent] = None
@@ -90,13 +91,21 @@ async def create_visualization(request: VisualizeRequest) -> VisualizationRespon
     try:
         logger.info(f"Creating visualization for query {request.query_id}")
         
+        # Log database context if present
+        if request.database_context:
+            logger.info(f"Using database context: {request.database_context.get('database_name', 'unknown')}")
+            # Basic validation of database context
+            if 'database_name' not in request.database_context:
+                logger.warning("Database context missing required 'database_name' field")
+        
         # Create visualization request
         viz_request = VisualizationRequest(
             request_id=request.query_id,
             user_id="anonymous",
             query_intent=request.query_context.get("query_intent", {}),
             data=request.data,
-            preferences=request.visualization_config or {}
+            preferences=request.visualization_config or {},
+            database_context=request.database_context
         )
         
         # Process visualization through the agent

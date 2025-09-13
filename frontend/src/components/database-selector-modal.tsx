@@ -2,18 +2,12 @@
 
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-
-interface Database {
-  name: string;
-  charset: string;
-  collation: string;
-  accessible: boolean;
-}
+import { useDatabaseContext } from "@/contexts/DatabaseContext";
 
 interface DatabaseSelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onDatabaseSelect: (databaseName: string) => void;
+  onDatabaseSelect?: (databaseName: string) => void;
 }
 
 export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
@@ -21,15 +15,21 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
   onClose,
   onDatabaseSelect
 }) => {
-  const [databases, setDatabases] = useState<Database[]>([]);
-  const [selectedDatabase, setSelectedDatabase] = useState<string>("");
-  const [fetchingDatabases, setFetchingDatabases] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selectingDatabase, setSelectingDatabase] = useState(false);
+  const {
+    availableDatabases,
+    isLoadingDatabases,
+    isSelectingDatabase,
+    error,
+    fetchDatabases,
+    selectDatabase,
+    selectedDatabase
+  } = useDatabaseContext();
+
+  const [localSelectedDatabase, setLocalSelectedDatabase] = useState<string>("");
 
   // Fetch databases when modal opens
   useEffect(() => {
-    if (isOpen && databases.length === 0) {
+    if (isOpen && availableDatabases.length === 0) {
       // Add debounce to prevent rapid calls
       const timeoutId = setTimeout(() => {
         fetchDatabases();
@@ -37,8 +37,12 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
       
       return () => clearTimeout(timeoutId);
     }
-  }, [isOpen, databases.length]);
+  }, [isOpen, availableDatabases.length, fetchDatabases]);
 
+  // Set initial selection to current database
+  useEffect(() => {
+    if (selectedDatabase && !localSelectedDatabase) {
+      setLocalSelectedDatabase(selectedDatabase.name);
   const fetchDatabases = async () => {
     setFetchingDatabases(true);
     setError(null);
@@ -62,16 +66,15 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
       setError(err instanceof Error ? err.message : "Failed to fetch databases");
     } finally {
       setFetchingDatabases(false);
+
     }
-  };
+  }, [selectedDatabase, localSelectedDatabase]);
 
   const handleDatabaseSelect = async () => {
-    if (!selectedDatabase) return;
-    
-    setSelectingDatabase(true);
-    setError(null);
+    if (!localSelectedDatabase) return;
     
     try {
+      await selectDatabase(localSelectedDatabase);
       const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const response = await fetch(`${API_BASE_URL}/api/database/select`, {
         method: "POST",
@@ -83,33 +86,24 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
         }),
       });
       
-      if (!response.ok) {
-        throw new Error(`Failed to select database: ${response.statusText}`);
+      // Call the optional callback
+      if (onDatabaseSelect) {
+        onDatabaseSelect(localSelectedDatabase);
       }
       
-      const data = await response.json();
-      
-      if (data.success) {
-        onDatabaseSelect(selectedDatabase);
-        onClose();
-      } else {
-        throw new Error("Failed to initialize database schema");
-      }
+      onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to select database");
-    } finally {
-      setSelectingDatabase(false);
+      // Error is handled by the context
+      console.error('Database selection failed:', err);
     }
   };
 
   const handleRetry = () => {
-    setDatabases([]);
-    setError(null);
     fetchDatabases();
   };
 
   const handleClose = () => {
-    if (!selectingDatabase && !fetchingDatabases) {
+    if (!isSelectingDatabase && !isLoadingDatabases) {
       onClose();
     }
   };
@@ -146,7 +140,7 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                       Choose a database to initialize the schema
                     </p>
                   </div>
-                  {!selectingDatabase && !fetchingDatabases && (
+                  {!isSelectingDatabase && !isLoadingDatabases && (
                     <button
                       onClick={handleClose}
                       className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -162,7 +156,7 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
               {/* Content */}
               <div className="p-6 flex-1 overflow-y-auto min-h-0">
                 {/* Loading State */}
-                {fetchingDatabases && (
+                {isLoadingDatabases && (
                   <div className="flex items-center justify-center py-8">
                     <div className="text-center">
                       <div className="w-8 h-8 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
@@ -189,7 +183,7 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                       <button
                         onClick={handleRetry}
                         className="corporate-button-secondary text-sm"
-                        disabled={fetchingDatabases}
+                        disabled={isLoadingDatabases}
                       >
                         Try Again
                       </button>
@@ -198,21 +192,21 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                 )}
 
                 {/* Database List */}
-                {!fetchingDatabases && !error && databases.length > 0 && (
+                {!isLoadingDatabases && !error && availableDatabases.length > 0 && (
                   <div className="space-y-3">
                     <label className="corporate-body-sm font-medium text-gray-700">
                       Available Databases
                     </label>
                     
                     <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {databases.map((database) => (
+                      {availableDatabases.map((database) => (
                         <motion.label
                           key={database.name}
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
                           className={`
                             flex items-center p-3 rounded-lg border cursor-pointer transition-all
-                            ${selectedDatabase === database.name
+                            ${localSelectedDatabase === database.name
                               ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
                               : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                             }
@@ -222,8 +216,8 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                             type="radio"
                             name="database"
                             value={database.name}
-                            checked={selectedDatabase === database.name}
-                            onChange={(e) => setSelectedDatabase(e.target.value)}
+                            checked={localSelectedDatabase === database.name}
+                            onChange={(e) => setLocalSelectedDatabase(e.target.value)}
                             className="sr-only"
                           />
                           
@@ -244,7 +238,7 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                             </div>
                           </div>
                           
-                          {selectedDatabase === database.name && (
+                          {localSelectedDatabase === database.name && (
                             <svg className="w-5 h-5 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
                               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                             </svg>
@@ -256,7 +250,7 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
                 )}
 
                 {/* Empty State */}
-                {!fetchingDatabases && !error && databases.length === 0 && (
+                {!isLoadingDatabases && !error && availableDatabases.length === 0 && (
                   <div className="text-center py-8">
                     <svg className="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
@@ -267,24 +261,24 @@ export const DatabaseSelectorModal: React.FC<DatabaseSelectorModalProps> = ({
               </div>
 
               {/* Footer */}
-              {!fetchingDatabases && !error && databases.length > 0 && (
+              {!isLoadingDatabases && !error && availableDatabases.length > 0 && (
                 <div className="border-t border-gray-200 p-6 flex justify-end space-x-3 flex-shrink-0">
                   <button
                     onClick={handleClose}
                     className="corporate-button-secondary"
-                    disabled={selectingDatabase}
+                    disabled={isSelectingDatabase}
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleDatabaseSelect}
-                    disabled={!selectedDatabase || selectingDatabase}
+                    disabled={!localSelectedDatabase || isSelectingDatabase}
                     className={`
                       corporate-button-primary flex items-center gap-2
-                      ${(!selectedDatabase || selectingDatabase) ? 'opacity-50 cursor-not-allowed' : ''}
+                      ${(!localSelectedDatabase || isSelectingDatabase) ? 'opacity-50 cursor-not-allowed' : ''}
                     `}
                   >
-                    {selectingDatabase ? (
+                    {isSelectingDatabase ? (
                       <>
                         <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                         Initializing...
