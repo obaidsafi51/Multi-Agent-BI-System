@@ -1,0 +1,61 @@
+{
+  "agent_nlp-agent": {
+    "agent": "nlp-agent",
+    "connection_established": true,
+    "heartbeat_working": false,
+    "message_handling": true,
+    "error": null
+  },
+  "agent_data-agent": {
+    "agent": "data-agent",
+    "connection_established": true,
+    "heartbeat_working": false,
+    "message_handling": true,
+    "error": null
+  },
+  "agent_viz-agent": {
+    "agent": "viz-agent",
+    "connection_established": true,
+    "heartbeat_working": false,
+    "message_handling": true,
+    "error": null
+  },
+  "agent_tidb-mcp-server": {
+    "agent": "tidb-mcp-server",
+    "connection_established": false,
+    "heartbeat_working": false,
+    "message_handling": false,
+    "error": "timed out during opening handshake"
+  },
+  "backend": {
+    "backend_accessible": false,
+    "agent_connections": {},
+    "error": "timed out during opening handshake"
+  },
+  "heartbeat": {
+    "consistent_heartbeat": false,
+    "agents_with_heartbeat": [],
+    "agents_without_heartbeat": [
+      "nlp-agent",
+      "data-agent",
+      "viz-agent",
+      "tidb-mcp-server"
+    ],
+    "error": null
+  },
+  "format": {
+    "format_consistent": false,
+    "agents_tested": [
+      "nlp-agent",
+      "data-agent",
+      "viz-agent"
+    ],
+    "format_issues": [
+      {
+        "agent": "tidb-mcp-server",
+        "error": "timed out during opening handshake"
+      }
+    ],
+    "error": null
+  }
+}
