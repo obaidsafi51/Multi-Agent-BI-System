@@ -52,7 +52,7 @@ class WebSocketDataServer:
             logger.info("Initializing Enhanced Data Agent components for WebSocket server...")
             
             # Initialize cache manager
-            self.cache_manager = get_cache_manager()
+            self.cache_manager = await get_cache_manager()
             
             # Initialize query optimizer
             self.query_optimizer = get_query_optimizer()

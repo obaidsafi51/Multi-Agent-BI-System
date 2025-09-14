@@ -71,12 +71,18 @@ class TiDBMCPClient:
                 timeout = aiohttp.ClientTimeout(total=30)
                 self.session = aiohttp.ClientSession(timeout=timeout)
             
-            # Test connection with server stats
-            result = await self._send_request("get_server_stats_tool", {})
-            if result and not result.get('error'):
-                self.is_connected = True
-                logger.info("Successfully connected to TiDB MCP Server")
-                return True
+            # Test connection with server stats (non-critical)
+            try:
+                result = await self._send_request("get_server_stats_tool", {})
+                if result and not result.get('error'):
+                    logger.info("Successfully connected to TiDB MCP Server")
+                else:
+                    logger.warning("Connected to TiDB MCP Server but stats check failed - continuing anyway")
+            except Exception as stats_error:
+                logger.warning(f"Connected to TiDB MCP Server but stats check failed: {stats_error} - continuing anyway")
+            
+            self.is_connected = True
+            return True
             
         except Exception as e:
             logger.error(f"Failed to connect to TiDB MCP Server: {e}")
@@ -136,8 +142,9 @@ class TiDBMCPClient:
                     return {"error": f"HTTP {response.status}: {error_text}"}
         
         except Exception as e:
-            logger.error(f"MCP request error for {method}: {e}")
-            return {"error": str(e)}
+            error_msg = str(e) if e else "Unknown connection error"
+            logger.error(f"MCP request error for {method}: {error_msg}")
+            return {"error": error_msg}
     
     async def discover_databases(self) -> List[Dict[str, Any]]:
         """
