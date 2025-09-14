@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from src.optimized_nlp_agent import OptimizedNLPAgent
 from src.enhanced_websocket_client import EnhancedWebSocketMCPClient
+from src.hybrid_mcp_operations_adapter import HybridMCPOperationsAdapter
 from src.performance_optimizer import PerformanceOptimizer
 from src.enhanced_monitoring import EnhancedMonitoringSystem, AlertLevel
 # Query classifier removed - using unified processing approach
@@ -50,6 +51,7 @@ app.add_middleware(
 # Global agent instances
 nlp_agent: OptimizedNLPAgent = None
 websocket_client: EnhancedWebSocketMCPClient = None
+hybrid_mcp_client: HybridMCPOperationsAdapter = None
 # query_classifier removed - using unified processing approach
 performance_optimizer: PerformanceOptimizer = None
 monitoring_system: EnhancedMonitoringSystem = None
@@ -127,30 +129,27 @@ async def startup_event():
         # Initialize query classifier
         # QueryClassifier removed - using unified processing approach
         
-        # Initialize enhanced WebSocket client
+        # Initialize MCP communication
         kimi_api_key = os.getenv("KIMI_API_KEY")
         if not kimi_api_key:
             raise ValueError("KIMI_API_KEY environment variable is required")
             
-        mcp_server_url = os.getenv("MCP_SERVER_WS_URL", "ws://tidb-mcp-server:8000/ws")
+        mcp_server_ws_url = os.getenv("MCP_SERVER_WS_URL", "ws://tidb-mcp-server:8000/ws")
+        mcp_server_http_url = os.getenv("MCP_SERVER_HTTP_URL", "http://tidb-mcp-server:8000")
         
-        # Initialize enhanced WebSocket client with configuration
-        websocket_config = perf_config["websocket"]
-        websocket_client = EnhancedWebSocketMCPClient(
-            ws_url=mcp_server_url,
+        # Initialize hybrid MCP client (WebSocket-first with HTTP fallback)
+        hybrid_mcp_client = HybridMCPOperationsAdapter(
+            ws_url=mcp_server_ws_url,
+            http_url=mcp_server_http_url,
             agent_id="nlp-agent-001",
-            initial_reconnect_delay=websocket_config["initial_reconnect_delay"],
-            max_reconnect_delay=websocket_config["max_reconnect_delay"],
-            max_reconnect_attempts=-1,        # Unlimited reconnections
-            connection_timeout=websocket_config["connection_timeout"],
-            request_timeout=websocket_config["request_timeout"],
-            heartbeat_interval=websocket_config["heartbeat_interval"],
-            health_check_interval=websocket_config["health_check_interval"],
-            ping_timeout=websocket_config["ping_timeout"],
-            enable_request_batching=websocket_config["enable_request_batching"],
-            batch_size=websocket_config["batch_size"],
-            batch_timeout=websocket_config["batch_timeout"]
+            ws_failure_threshold=3,
+            ws_retry_cooldown=60.0,
+            prefer_websocket=True
         )
+        
+        # Also initialize the legacy WebSocket client for backward compatibility
+        websocket_config = perf_config["websocket"]
+        websocket_client = hybrid_mcp_client.websocket_client
         
         # Register connection event handler
         async def connection_event_handler(event_type, stats):
@@ -162,24 +161,24 @@ async def startup_event():
         
         websocket_client.register_connection_event_handler(connection_event_handler)
         
-        # Initialize optimized NLP agent with shared WebSocket client
+        # Initialize optimized NLP agent with hybrid MCP client
         nlp_agent = OptimizedNLPAgent(
             kimi_api_key=kimi_api_key,
-            mcp_ws_url=mcp_server_url,
+            mcp_ws_url=mcp_server_ws_url,
             agent_id="nlp-agent-001",
             enable_optimizations=True,
             enable_semantic_caching=True,
             enable_request_batching=True,
-            websocket_client=websocket_client  # Pass the shared client
+            websocket_client=websocket_client  # Use the WebSocket client
         )
         
         # Start all services
-        await websocket_client.connect()
+        await hybrid_mcp_client.start()
         await nlp_agent.start()
         
         logger.info("Enhanced NLP Agent v2.2.0 started successfully!")
-        logger.info(f"WebSocket connected to: {mcp_server_url}")
-        logger.info("Features enabled: performance optimization, enhanced monitoring, reliability improvements")
+        logger.info(f"MCP communication: WebSocket={mcp_server_ws_url}, HTTP={mcp_server_http_url}")
+        logger.info("Features enabled: performance optimization, enhanced monitoring, reliability improvements, HTTP fallback")
         
         # Perform initial health check
         health_status = monitoring_system.get_health_status()
@@ -192,7 +191,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    global nlp_agent, websocket_client, performance_optimizer, monitoring_system
+    global nlp_agent, websocket_client, hybrid_mcp_client, performance_optimizer, monitoring_system
     
     logger.info("Shutting down Enhanced NLP Agent...")
     
@@ -206,7 +205,9 @@ async def shutdown_event():
     if nlp_agent:
         await nlp_agent.stop()
     
-    if websocket_client:
+    if hybrid_mcp_client:
+        await hybrid_mcp_client.stop()
+    elif websocket_client:
         await websocket_client.disconnect()
     
     logger.info("Enhanced NLP Agent shutdown complete")

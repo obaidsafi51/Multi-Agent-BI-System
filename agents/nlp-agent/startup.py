@@ -40,7 +40,8 @@ class NLPAgentLauncher:
         # Configuration from environment
         self.http_host = os.getenv("HOST", "0.0.0.0")
         self.http_port = int(os.getenv("PORT", "8001"))
-        self.websocket_enabled = os.getenv("ENABLE_WEBSOCKETS", "true").lower() == "true"
+        # Disable standalone WebSocket server - NLP agent connects as client to MCP server
+        self.websocket_enabled = False  # os.getenv("ENABLE_WEBSOCKETS", "true").lower() == "true"
         self.websocket_host = os.getenv("WEBSOCKET_HOST", "0.0.0.0")
         self.websocket_port = int(os.getenv("WEBSOCKET_PORT", "8011"))
         
@@ -74,28 +75,9 @@ class NLPAgentLauncher:
             raise
     
     async def start_websocket_server(self):
-        """Start the WebSocket server"""
-        try:
-            logger.info("Starting WebSocket server...")
-            
-            # Import here to avoid circular imports
-            from websocket_server import NLPWebSocketServer
-            
-            # Create and start WebSocket server
-            ws_server = NLPWebSocketServer(
-                host=self.websocket_host,
-                port=self.websocket_port
-            )
-            
-            await ws_server.start_server()
-            
-            # Keep server running until shutdown
-            await ws_server.server.wait_closed()
-            
-        except Exception as e:
-            logger.error(f"WebSocket server failed: {e}")
-            self.shutdown_event.set()
-            raise
+        """WebSocket server disabled - NLP agent acts as client only"""
+        logger.info("WebSocket server disabled - NLP agent connects as client to MCP server")
+        return
     
     async def run(self):
         """Run both servers concurrently"""

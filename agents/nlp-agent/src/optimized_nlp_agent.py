@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from .optimized_kimi_client import OptimizedKimiClient, KimiAPIError
-from .websocket_mcp_client import WebSocketMCPClient, MCPOperations
+from .hybrid_mcp_operations_adapter import HybridMCPOperationsAdapter
 # Query classifier removed - using unified processing approach
 from .cache_manager import AdvancedCacheManager, CacheLevel
 from .context_builder import ContextBuilder
@@ -74,33 +74,21 @@ class OptimizedNLPAgent:
             max_connections=10  # Connection pooling
         )
         
-        # Use external WebSocket client if provided, otherwise create internal one
-        logger.info(f"WebSocket client parameter: {websocket_client}")
-        logger.info(f"WebSocket client type: {type(websocket_client)}")
-        if websocket_client:
-            self.mcp_client = websocket_client
-            self.owns_websocket_client = False
-            logger.info(f"✅ Using external WebSocket client: {type(websocket_client)}")
-        else:
-            # Fallback: create internal WebSocket client
-            self.mcp_client = WebSocketMCPClient(
-                ws_url=mcp_ws_url,
-                agent_id=self.agent_id,
-                enable_batching=enable_request_batching,
-                batch_size=5,
-                batch_timeout=0.1
-            )
-            self.owns_websocket_client = True
-            logger.info("❌ Created internal WebSocket client")
+        # Initialize MCP operations with hybrid WebSocket/HTTP adapter
+        logger.info("Initializing Hybrid MCP Operations Adapter (WebSocket-first with HTTP fallback)")
+        self.mcp_ops = HybridMCPOperationsAdapter(
+            ws_url=mcp_ws_url,
+            http_url="http://tidb-mcp-server:8000",
+            agent_id=agent_id,
+            prefer_websocket=True,
+            ws_failure_threshold=2,  # Switch to HTTP after 2 failures
+            ws_retry_cooldown=30.0   # Retry WebSocket after 30s
+        )
         
-        # Initialize MCP operations helper  
-        # Note: MCPOperations expects WebSocketMCPClient, need to adapt for EnhancedWebSocketMCPClient
-        if hasattr(self.mcp_client, 'send_request'):
-            # Enhanced WebSocket client - create adapter
-            self.mcp_ops = self._create_enhanced_mcp_ops()
-        else:
-            # Standard WebSocket client
-            self.mcp_ops = MCPOperations(self.mcp_client)
+        # Store reference to the WebSocket client for backward compatibility
+        self.mcp_client = self.mcp_ops.websocket_client
+        self.owns_websocket_client = True
+        logger.info(f"✅ Using Hybrid MCP Adapter with WebSocket client: {type(self.mcp_client)}")
         
         # Query classifier removed - using unified processing path
         
@@ -135,50 +123,8 @@ class OptimizedNLPAgent:
         logger.info(f"Semantic caching: {enable_semantic_caching}")
         logger.info(f"Request batching: {enable_request_batching}")
     
-    def _create_enhanced_mcp_ops(self):
-        """Create MCP operations adapter for EnhancedWebSocketMCPClient"""
-        class EnhancedMCPOperationsAdapter:
-            def __init__(self, client):
-                self.client = client
-                self.websocket_client = client  # Fix: Make websocket_client available
-            
-            async def get_schema_context(self, databases=None):
-                return await self.client.send_request(
-                    "build_schema_context",
-                    {"databases": databases} if databases else {}
-                )
-            
-            async def generate_sql(self, natural_language_query, schema_info=None, examples=None):
-                return await self.websocket_client.send_request(
-                    "llm_generate_sql_tool",
-                    {
-                        "natural_language_query": natural_language_query,
-                        "schema_info": schema_info,
-                        "examples": examples
-                    }
-                )
-            
-            async def validate_query(self, query):
-                return await self.client.send_request("validate_query_tool", {"query": query})
-            
-            async def execute_query(self, query, timeout=None, use_cache=True):
-                params = {"query": query, "use_cache": use_cache}
-                if timeout:
-                    params["timeout"] = timeout
-                return await self.client.send_request("execute_query_tool", params)
-            
-            async def analyze_data(self, data, analysis_type="financial", context=None):
-                return await self.client.send_request(
-                    "llm_analyze_data_tool",
-                    {
-                        "data": data,
-                        "analysis_type": analysis_type,
-                        "context": context
-                    }
-                )
-        
-        return EnhancedMCPOperationsAdapter(self.mcp_client)
-    
+
+
     def _setup_event_handlers(self):
         """Setup event handlers for real-time updates"""
         self.mcp_client.register_event_handler("schema_update", self._handle_schema_update)
@@ -295,9 +241,11 @@ class OptimizedNLPAgent:
         query_id: str
     ) -> ProcessingResult:
         """
-        Unified processing path that combines the best practices from all paths.
-        Simple, reliable, and optimized approach for all query types.
+        Unified processing path combining all query types.
+        Uses single KIMI call + MCP operations for comprehensive processing.
         """
+        logger.info(f"Starting unified path processing for query: {query}")
+        logger.info(f"MCP ops type: {type(self.mcp_ops)}")
         try:
             logger.debug(f"Processing {query_id} via unified path")
             
@@ -309,12 +257,18 @@ class OptimizedNLPAgent:
             intent = self._create_query_intent(intent_data)
             
             # Step 3: Generate SQL via MCP WebSocket
+            logger.info(f"Calling MCP generate_sql for query: {query}")
             sql_result = await self.mcp_ops.generate_sql(
                 natural_language_query=query,
                 schema_info=self._format_schema_for_llm(schema_context)
             )
+            logger.info(f"MCP SQL result: {sql_result}")
             
-            # Step 4: Build comprehensive context
+            # Step 4: Extract SQL from MCP response
+            sql_query = self._extract_sql_from_mcp_response(sql_result)
+            logger.info(f"Extracted SQL query: {sql_query}")
+            
+            # Step 5: Build comprehensive context
             query_context = self.context_builder.build_query_context(
                 query=query,
                 intent=intent,
@@ -326,7 +280,7 @@ class OptimizedNLPAgent:
                 query_id=query_id,
                 success=True,
                 intent=intent,
-                sql_query=sql_result.get("sql", ""),
+                sql_query=sql_query,
                 query_context=query_context,
                 processing_path="unified"
             )
@@ -373,7 +327,7 @@ class OptimizedNLPAgent:
                 query_id=query_id,
                 success=True,
                 intent=intent,
-                sql_query=sql_result.get("sql", ""),
+                sql_query=self._extract_sql_from_mcp_response(sql_result),
                 query_context=minimal_context,
                 processing_path="fast_path"
             )
@@ -435,7 +389,7 @@ class OptimizedNLPAgent:
                 query_id=query_id,
                 success=True,
                 intent=intent,
-                sql_query=sql_result.get("sql", ""),
+                sql_query=self._extract_sql_from_mcp_response(sql_result),
                 query_context=comprehensive_context,
                 processing_path="standard_path"
             )
@@ -522,7 +476,7 @@ class OptimizedNLPAgent:
                 query_id=query_id,
                 success=True,
                 intent=intent,
-                sql_query=sql_result.get("sql", ""),
+                sql_query=self._extract_sql_from_mcp_response(sql_result),
                 query_context=comprehensive_context,
                 processing_path="comprehensive_path"
             )
@@ -590,6 +544,59 @@ class OptimizedNLPAgent:
         except Exception as e:
             logger.error(f"Error formatting schema for LLM: {e}")
             return "Schema information unavailable"
+    
+    def _extract_sql_from_mcp_response(self, mcp_response: Dict[str, Any]) -> str:
+        """Extract SQL query from MCP server response"""
+        try:
+            # The MCP server returns SQL in different formats
+            # Check common response fields
+            
+            # First, check if it's directly in 'sql' field
+            if "sql" in mcp_response:
+                return str(mcp_response["sql"]).strip()
+            
+            # Check if it's in 'generated_text' field (LLM tool response)
+            if "generated_text" in mcp_response:
+                generated_text = str(mcp_response["generated_text"])
+                
+                # Extract SQL from markdown code blocks (re already imported at top)
+                sql_match = re.search(r'```sql\s*(.*?)\s*```', generated_text, re.DOTALL | re.IGNORECASE)
+                if sql_match:
+                    sql_query = sql_match.group(1).strip()
+                    # Remove comments and extract just the SQL
+                    lines = sql_query.split('\n')
+                    sql_lines = [line for line in lines if line.strip() and not line.strip().startswith('--')]
+                    return '\n'.join(sql_lines).strip()
+                
+                # If no code block, try to extract SQL directly
+                # Look for SELECT, INSERT, UPDATE, DELETE statements
+                sql_keywords = r'\b(SELECT|INSERT|UPDATE|DELETE|WITH)\b'
+                if re.search(sql_keywords, generated_text, re.IGNORECASE):
+                    # Clean up and return the text
+                    return generated_text.strip()
+            
+            # Check if it's in 'query' field
+            if "query" in mcp_response:
+                return str(mcp_response["query"]).strip()
+            
+            # Check if it's in 'result' field
+            if "result" in mcp_response:
+                result = mcp_response["result"]
+                if isinstance(result, str):
+                    return result.strip()  
+                elif isinstance(result, dict):
+                    return self._extract_sql_from_mcp_response(result)
+            
+            # Log the response structure for debugging
+            logger.warning(f"Could not extract SQL from MCP response. Response keys: {list(mcp_response.keys())}")
+            logger.debug(f"MCP response: {mcp_response}")
+            
+            return ""
+            
+        except Exception as e:
+            logger.error(f"Error extracting SQL from MCP response: {e}")
+            logger.debug(f"MCP response was: {mcp_response}")
+            return ""
     
     def _build_minimal_context(
         self,
