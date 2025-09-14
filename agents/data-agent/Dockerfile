@@ -15,7 +15,7 @@ RUN useradd -m appuser && chown appuser:appuser /app
 # Copy source code and shared models
 COPY --chown=appuser:appuser src/ ./src/
 COPY --chown=appuser:appuser shared/ ./shared/
-COPY --chown=appuser:appuser main.py websocket_server.py ./
+COPY --chown=appuser:appuser main.py websocket_server.py startup.py ./
 
 # Install only essential dependencies directly to system Python
 RUN uv pip install --system \
@@ -33,4 +33,5 @@ RUN uv pip install --system \
 
 USER appuser
 
-CMD ["python", "-u", "main.py"]
+# Use startup script to run both HTTP and WebSocket servers
+CMD ["python", "-u", "startup.py"]

@@ -385,6 +385,113 @@ class MCPDataAgent:
         
         return metrics
     
+    async def execute_sql(
+        self,
+        sql_query: str,
+        query_context: Optional[Dict[str, Any]] = None,
+        query_id: Optional[str] = None,
+        execution_config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute raw SQL query via MCP protocol for WebSocket requests.
+        
+        Args:
+            sql_query: Raw SQL query to execute
+            query_context: Query context information
+            query_id: Unique query identifier
+            execution_config: Execution configuration
+            
+        Returns:
+            Dictionary containing query results and metadata
+        """
+        if not self.is_initialized:
+            raise RuntimeError("MCP Data Agent not initialized")
+        
+        start_time = time.time()
+        query_id = query_id or f"sql_query_{int(time.time() * 1000)}"
+        
+        try:
+            logger.info(f"Executing SQL query via MCP: {query_id}")
+            
+            # Ensure MCP connection
+            if not self.mcp_client.is_connected:
+                connected = await self.mcp_client.connect()
+                if not connected:
+                    raise RuntimeError("Failed to connect to TiDB MCP Server")
+            
+            # Execute raw SQL query through MCP
+            mcp_result = await self.mcp_client.execute_query(
+                sql_query,
+                database=query_context.get('database') if query_context else self.default_database
+            )
+            
+            self.metrics['queries_processed'] += 1
+            self.metrics['mcp_requests'] += 1
+            
+            if not mcp_result or not mcp_result.get('success'):
+                error_msg = mcp_result.get('error', 'Unknown MCP error') if mcp_result else 'No response from MCP server'
+                raise RuntimeError(f"MCP query execution failed: {error_msg}")
+            
+            # Extract data from MCP response
+            data = mcp_result.get('data', [])
+            columns = mcp_result.get('columns', [])
+            row_count = len(data)
+            
+            processing_time = (time.time() - start_time) * 1000
+            
+            # Build response
+            response = {
+                'success': True,
+                'query_id': query_id,
+                'data': data,
+                'columns': columns,
+                'row_count': row_count,
+                'processing_time_ms': int(processing_time),
+                'metadata': {
+                    'query_id': query_id,
+                    'processing_time_ms': int(processing_time),
+                    'database_time_ms': mcp_result.get('execution_time_ms', 0),
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'data_source': 'mcp_server',
+                    'cache_hit': False
+                }
+            }
+            
+            # Update metrics
+            self._update_metrics(processing_time / 1000, success=True)
+            
+            logger.info(f"SQL query executed successfully: {query_id} in {processing_time:.2f}ms")
+            
+            return response
+            
+        except Exception as e:
+            processing_time = (time.time() - start_time) * 1000
+            self._update_metrics(processing_time / 1000, success=False)
+            
+            logger.error(f"SQL query execution failed: {query_id}, error: {e}")
+            
+            return {
+                'success': False,
+                'query_id': query_id,
+                'error': {
+                    'type': 'sql_execution_error',
+                    'message': str(e),
+                    'code': 'MCP_SQL_ERROR'
+                },
+                'data': [],
+                'columns': [],
+                'row_count': 0,
+                'processing_time_ms': int(processing_time),
+                'metadata': {
+                    'query_id': query_id,
+                    'processing_time_ms': int(processing_time),
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'data_source': 'mcp_server',
+                    'cache_hit': False,
+                    'error': True
+                }
+            }
+    
     async def close(self) -> None:
         """Close all MCP Data Agent components and cleanup resources."""
         try:
