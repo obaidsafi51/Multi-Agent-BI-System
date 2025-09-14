@@ -46,9 +46,18 @@ class ExportManager:
     def _configure_plotly_export(self):
         """Configure Plotly for static image export"""
         try:
-            # Use new non-deprecated Plotly defaults (post Sept 2025)
-            pio.defaults.default_format = "png"
-            # Note: default_engine is no longer needed as Kaleido is the only engine
+            # Plotly configuration - modern approach
+            # Kaleido is the default engine since v5.0
+            pio.kaleido.scope.default_format = "png"
+            logger.info("Plotly export engine configured successfully")
+        except AttributeError:
+            try:
+                # Alternative configuration for older versions
+                pio.orca.config.default_format = "png"
+                logger.info("Plotly export engine configured with Orca")
+            except AttributeError:
+                # If neither work, just log a warning but don't fail
+                logger.warning("Could not configure Plotly export engine - using default settings")
         except Exception as e:
             logger.warning(f"Could not configure Plotly export engine: {e}")
     

@@ -41,10 +41,10 @@ RUN uv pip install --system \
 # Copy source code and shared models
 COPY --chown=appuser:appuser src/ ./src/
 COPY --chown=appuser:appuser shared/ ./shared/
-COPY --chown=appuser:appuser main.py main_fixed.py standardized_response_template.py websocket_server.py ./
+COPY --chown=appuser:appuser main.py main_fixed.py standardized_response_template.py websocket_server.py startup.py ./
 
 # Switch to non-root user
 USER appuser
 
-# Start the Visualization agent using system python
-CMD ["python", "main.py"]
+# Start both HTTP and WebSocket servers using startup script
+CMD ["python", "startup.py"]
