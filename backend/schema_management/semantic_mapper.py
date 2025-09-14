@@ -25,9 +25,9 @@ try:
     from nltk.corpus import stopwords
     from nltk.tokenize import word_tokenize
     from nltk.stem import WordNetLemmatizer
-    NLTP_AVAILABLE = True
+    NLTK_AVAILABLE = True
 except ImportError:
-    NLTP_AVAILABLE = False
+    NLTK_AVAILABLE = False
     import warnings
     warnings.warn("Advanced NLP dependencies not available. Using fallback fuzzy matching.")
 
@@ -169,7 +169,7 @@ class SemanticSchemaMapper:
         self.stop_words = set()
         self.vectorizer = None
         
-        if NLTP_AVAILABLE:
+        if NLTK_AVAILABLE:
             self._initialize_nlp_components()
         
         # Schema and business term storage
@@ -520,7 +520,7 @@ class SemanticSchemaMapper:
     
     async def _update_similarity_models(self):
         """Update TF-IDF models with current schema elements."""
-        if not self.config.enable_semantic_similarity or not NLTP_AVAILABLE:
+        if not self.config.enable_semantic_similarity or not NLTK_AVAILABLE:
             return
         
         try:
@@ -560,7 +560,7 @@ class SemanticSchemaMapper:
         Returns:
             Preprocessed text
         """
-        if not NLTP_AVAILABLE or not self.lemmatizer:
+        if not NLTK_AVAILABLE or not self.lemmatizer:
             # Fallback preprocessing
             return re.sub(r'[^a-zA-Z0-9\s_]', ' ', text.lower())
         
@@ -804,7 +804,7 @@ class SemanticSchemaMapper:
         Returns:
             Semantic similarity score (0.0 to 1.0)
         """
-        if not NLTP_AVAILABLE or self.tfidf_matrix is None:
+        if not NLTK_AVAILABLE or self.tfidf_matrix is None:
             return 0.0
         
         try:

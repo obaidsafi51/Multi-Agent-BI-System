@@ -81,8 +81,8 @@ class DynamicSchemaManager:
         self.cache = cache
         self.config = config or self._get_default_config()
         
-        # Initialize schema manager
-        self.schema_manager = MCPSchemaManager()
+        # Initialize schema manager with change detection disabled to prevent log flooding
+        self.schema_manager = MCPSchemaManager(enable_change_detection=False)
         
         # Initialize business term mappings (basic implementation)
         self._init_business_mappings()
@@ -234,81 +234,45 @@ class DynamicSchemaManager:
             return self._get_fallback_schema()
 
     async def _perform_fast_schema_discovery(self) -> SchemaInfo:
-        """Perform fast schema discovery focusing on primary database only."""
+        """Perform fast schema discovery - table lists only, no detailed schemas."""
         try:
             # Use the schema manager for discovery
             databases = await self.schema_manager.discover_databases()
             
-            # Filter out system databases and prioritize primary databases
+            # Filter out system databases
             system_databases = {'INFORMATION_SCHEMA', 'PERFORMANCE_SCHEMA', 'mysql', 'sys'}
-            priority_databases = ['Agentic_BI', 'agentic_bi']  # Primary business databases
+            filtered_databases = [db for db in databases if db.name not in system_databases]
             
-            # Find priority database first
-            primary_db = None
-            for db in databases:
-                if db.name in priority_databases and db.name not in system_databases:
-                    primary_db = db
-                    break
-            
-            # If no priority database found, use first non-system database
-            if not primary_db:
-                for db in databases:
-                    if db.name not in system_databases:
-                        primary_db = db
-                        break
-            
-            if not primary_db:
-                logger.warning("No suitable database found for fast discovery")
+            if not filtered_databases:
+                logger.warning("No suitable databases found for fast discovery")
                 return self._get_fallback_schema()
             
-            logger.info(f"Fast discovery focusing on database: {primary_db.name}")
+            logger.info(f"Fast discovery: found {len(filtered_databases)} databases, fetching table lists only")
             
-            schema_info = SchemaInfo(databases=[], tables=[], version="fast")
-            
-            # Fast approach: Get table list only, skip detailed schema for speed
-            tables = await self.schema_manager.get_tables(primary_db.name)
-            
-            # Convert TableInfo to basic schema representation for fast response
-            for table in tables:
-                # Get essential column information for NLP context (but skip complex details)
-                columns = []
+            # Create lightweight table info without detailed schemas
+            all_tables = []
+            for db in filtered_databases:
                 try:
-                    # Get basic column info with timeout to keep it fast
-                    table_schema = await asyncio.wait_for(
-                        self.schema_manager.get_table_schema(primary_db.name, table.name),
-                        timeout=5.0  # 5 second timeout per table
-                    )
-                    if table_schema and table_schema.columns:
-                        # Extract essential column info (name, type, nullable)
-                        columns = [
-                            {
-                                'name': col.name,
-                                'type': str(col.type) if hasattr(col, 'type') else 'unknown',
-                                'nullable': getattr(col, 'nullable', True),
-                                'primary_key': getattr(col, 'primary_key', False)
-                            }
-                            for col in table_schema.columns[:15]  # Limit to first 15 columns for speed
-                        ]
-                        logger.debug(f"Retrieved {len(columns)} columns for {table.name}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"Column discovery timeout for {table.name}, using empty columns")
-                    columns = []
+                    # Get table list only (no schemas)
+                    tables = await self.schema_manager.get_tables(db.name)
+                    for table in tables:
+                        # Create minimal table info without column details
+                        table_info = TableInfo(
+                            name=table.name,
+                            database=db.name,
+                            columns=[],  # Empty - will be fetched on-demand
+                            schema_fetched=False
+                        )
+                        all_tables.append(table_info)
+                    logger.info(f"Fast discovery: {db.name} has {len(tables)} tables")
                 except Exception as e:
-                    logger.warning(f"Column discovery failed for {table.name}: {e}")
-                    columns = []
-                
-                # Create a basic table representation with essential column info
-                basic_table = type('BasicTable', (), {
-                    'name': table.name,
-                    'database': primary_db.name,
-                    'type': table.type,
-                    'rows': table.rows,
-                    'size_mb': table.size_mb,
-                    'columns': columns  # Include basic column info for NLP context
-                })()
-                schema_info.tables.append(basic_table)
+                    logger.warning(f"Failed to get table list for {db.name}: {e}")
+                    continue
             
-            logger.info(f"Fast schema discovery completed: {len(tables)} tables from {primary_db.name} (basic info only)")
+            schema_info = SchemaInfo(databases=filtered_databases, tables=all_tables, version="fast_no_schemas")
+            schema_info.discovery_timestamp = datetime.now()
+            
+            logger.info(f"Fast schema discovery completed: {len(all_tables)} tables from {len(filtered_databases)} databases (metadata only)")
             return schema_info
             
         except Exception as e:

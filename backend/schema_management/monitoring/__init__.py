@@ -15,7 +15,7 @@ try:
         ErrorMetrics,
         get_metrics_collector
     )
-    from .health_monitor import MCPHealthMonitor, HealthStatus
+    from .health_monitor import MCPHealthMonitor, HealthStatus, SystemHealthReport
     from .alerting import MCPAlertManager, AlertLevel, Alert
     from .performance_tracker import MCPPerformanceTracker
     
@@ -31,6 +31,7 @@ try:
         'get_metrics_collector',
         'MCPHealthMonitor',
         'HealthStatus',
+        'SystemHealthReport',
         'MCPAlertManager',
         'AlertLevel',
         'Alert',

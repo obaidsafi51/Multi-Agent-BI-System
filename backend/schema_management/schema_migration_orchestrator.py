@@ -324,8 +324,8 @@ class SchemaMigrationOrchestrator:
         }
         
         try:
-            # Test schema manager
-            test_schema = await self.schema_manager.discover_schema()
+            # Test schema manager with fast mode to avoid excessive database calls
+            test_schema = await self.schema_manager.discover_schema(fast_mode=True)
             health_results["schema_manager_health"] = len(test_schema.tables) > 0
             
             # Test cache

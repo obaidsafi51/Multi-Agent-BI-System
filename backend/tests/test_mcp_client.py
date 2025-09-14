@@ -349,11 +349,11 @@ class TestEnhancedMCPClient:
                 result = await enhanced_client.get_table_schema_detailed("test_db", "test_table")
                 
                 assert isinstance(result, DetailedTableSchema)
-                assert result.schema.database == "test_db"
-                assert result.schema.table == "test_table"
-                assert len(result.schema.columns) == 2
-                assert result.schema.columns[0].name == "id"
-                assert result.schema.columns[0].is_primary_key is True
+                assert result.table_schema.database == "test_db"
+                assert result.table_schema.table == "test_table"
+                assert len(result.table_schema.columns) == 2
+                assert result.table_schema.columns[0].name == "id"
+                assert result.table_schema.columns[0].is_primary_key is True
                 assert result.sample_data is not None
                 assert len(result.sample_data) == 2
                 assert result.discovery_time_ms > 0
@@ -371,7 +371,7 @@ class TestEnhancedMCPClient:
             result = await enhanced_client.get_table_schema_detailed("test_db", "test_table")
             
             assert isinstance(result, DetailedTableSchema)
-            assert result.schema.database == "test_db"
+            assert result.table_schema.database == "test_db"
             assert result.sample_data is None  # Should handle gracefully
     
     @pytest.mark.asyncio

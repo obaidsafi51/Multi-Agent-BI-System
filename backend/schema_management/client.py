@@ -381,7 +381,7 @@ class EnhancedMCPClient(BackendMCPClient):
             discovery_time = int((datetime.now() - start_time).total_seconds() * 1000)
             
             return DetailedTableSchema(
-                schema=table_schema,
+                table_schema=table_schema,
                 sample_data=sample_data,
                 statistics=schema_result.get('statistics'),
                 relationships=schema_result.get('relationships'),
