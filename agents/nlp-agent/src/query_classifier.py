@@ -44,13 +44,23 @@ class QueryClassifier:
     """
     
     def __init__(self):
-        # Simple query patterns (can use fast path)
+        # Simple query patterns (can use fast path) - ONLY for queries that don't need database access
+        # These should be informational queries about definitions, general info, etc.
         self.simple_patterns = [
-            r'\b(show|display|get)\s+(revenue|profit|sales)\b',
-            r'\b(what\s+is|how\s+much)\s+(revenue|profit|sales)\b',
-            r'\b(last|this)\s+(month|quarter|year)\s+(revenue|profit|sales)\b',
-            r'\b(revenue|profit|sales)\s+(last|this)\s+(month|quarter|year)\b',
-            r'\b(total|sum)\s+(revenue|profit|sales)\b'
+            r'\b(what\s+is|define|explain)\s+(revenue|profit|margin|roi)\s*$',  # Definitions only
+            r'\b(how\s+to\s+calculate|formula\s+for)\s+(revenue|profit|margin)\b',  # Formula questions
+            r'\b(types\s+of|categories\s+of)\s+(financial|accounting)\b'  # General info questions
+        ]
+        
+        # Data retrieval patterns - these ALWAYS need database access (standard/comprehensive path)
+        # Be specific to avoid matching definition queries
+        self.data_retrieval_patterns = [
+            r'\b(show|display|get)\s+.*(revenue|profit|sales|cashflow|cash\s+flow|expense|cost|balance|asset|liability)\b',
+            r'\b(what\s+is|how\s+much)\s+.*\b(revenue|profit|sales|cashflow|cash\s+flow|expense|cost|balance|asset|liability)\s+.*(of|in|for|last|this)\s+(month|quarter|year|\d{4})\b',
+            r'\b(revenue|profit|sales|cashflow|cash\s+flow|expense|cost|balance|asset|liability)\s+.*(last|this|of|in|for)\s+(month|quarter|year|\d{4})\b',
+            r'\b(total|sum|amount)\s+.*(revenue|profit|sales|cashflow|cash\s+flow|expense|cost)\b',
+            r'\b.*(revenue|profit|sales|cashflow|cash\s+flow|expense|cost)\s+(last|this|of|in|for)\s+(month|quarter|year|\d{4})\b',
+            r'\b(last|this)\s+(month|quarter|year)\s+.*(revenue|profit|sales|cashflow|cash\s+flow|expense|cost)\b'
         ]
         
         # Complex query indicators
@@ -115,34 +125,41 @@ class QueryClassifier:
             complexity_score += 2
             reasoning.append("Long query length")
         
-        # 2. Check for simple patterns
-        simple_pattern_match = self._check_simple_patterns(query_lower)
-        if simple_pattern_match:
-            complexity_score -= 1
-            reasoning.append(f"Matches simple pattern: {simple_pattern_match}")
-            optimizations.append("Can use cached schema context")
+        # 2. Check for data retrieval patterns first (these override simple patterns)
+        data_retrieval_match = self._check_data_retrieval_patterns(query_lower)
+        if data_retrieval_match:
+            complexity_score += 2  # Force standard/comprehensive path
+            reasoning.append(f"Requires database access: {data_retrieval_match}")
+            optimizations.append("Must use database query execution")
+        else:
+            # 3. Check for simple patterns only if no data retrieval needed
+            simple_pattern_match = self._check_simple_patterns(query_lower)
+            if simple_pattern_match:
+                complexity_score -= 1
+                reasoning.append(f"Matches simple pattern: {simple_pattern_match}")
+                optimizations.append("Can use cached schema context")
         
-        # 3. Check for complex indicators
+        # 4. Check for complex indicators
         complex_score, complex_reasons = self._analyze_complexity_indicators(query_lower)
         complexity_score += complex_score
         reasoning.extend(complex_reasons)
         
-        # 4. Analyze metrics complexity
+        # 5. Analyze metrics complexity
         metrics_score, metrics_reasons = self._analyze_metrics_complexity(query_lower)
         complexity_score += metrics_score
         reasoning.extend(metrics_reasons)
         
-        # 5. Analyze time period complexity
+        # 6. Analyze time period complexity
         time_score, time_reasons = self._analyze_time_complexity(query_lower)
         complexity_score += time_score
         reasoning.extend(time_reasons)
         
-        # 6. Check for abbreviations and technical terms
+        # 7. Check for abbreviations and technical terms
         abbrev_score, abbrev_reasons = self._analyze_abbreviations(query_lower)
         complexity_score += abbrev_score
         reasoning.extend(abbrev_reasons)
         
-        # 7. Context analysis
+        # 8. Context analysis
         if context:
             context_score, context_reasons = self._analyze_context_complexity(context)
             complexity_score += context_score
@@ -191,8 +208,15 @@ class QueryClassifier:
         return classification
     
     def _check_simple_patterns(self, query: str) -> Optional[str]:
-        """Check if query matches simple patterns"""
+        """Check if query matches simple patterns (definitions, formulas, etc.)"""
         for pattern in self.simple_patterns:
+            if re.search(pattern, query, re.IGNORECASE):
+                return pattern
+        return None
+    
+    def _check_data_retrieval_patterns(self, query: str) -> Optional[str]:
+        """Check if query requires database access for data retrieval"""
+        for pattern in self.data_retrieval_patterns:
             if re.search(pattern, query, re.IGNORECASE):
                 return pattern
         return None
@@ -321,19 +345,21 @@ class QueryClassifier:
     
     def _determine_processing_path(self, complexity_score: float) -> Tuple[QueryComplexity, ProcessingPath, float]:
         """Determine complexity level and processing path based on score"""
-        if complexity_score <= 1.0:
+        # Fast path ONLY for truly simple informational queries (definitions, formulas)
+        # Any data retrieval should use at least standard path
+        if complexity_score <= 0.0:  # Only pure informational queries
             return (
                 QueryComplexity.SIMPLE,
                 ProcessingPath.FAST_PATH,
                 0.5  # 500ms estimated
             )
-        elif complexity_score <= 3.0:
+        elif complexity_score <= 3.0:  # Data retrieval queries go here
             return (
                 QueryComplexity.MEDIUM,
                 ProcessingPath.STANDARD_PATH,
                 1.2  # 1.2s estimated
             )
-        else:
+        else:  # Complex analytical queries
             return (
                 QueryComplexity.COMPLEX,
                 ProcessingPath.COMPREHENSIVE_PATH,

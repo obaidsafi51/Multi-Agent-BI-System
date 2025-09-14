@@ -30,6 +30,7 @@ COPY main_optimized.py ./main.py
 COPY config_optimized.py ./config.py
 COPY performance_config.py ./performance_config.py
 COPY websocket_server.py ./websocket_server.py
+COPY startup.py ./startup.py
 
 # Create directories and non-root user
 RUN mkdir -p logs cache && \
@@ -51,5 +52,5 @@ EXPOSE 8001 8011
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-# Start the optimized NLP agent directly with system Python
-CMD ["python", "main.py"]
+# Start both HTTP and WebSocket servers using startup script
+CMD ["python", "startup.py"]
