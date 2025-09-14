@@ -139,7 +139,7 @@ class SchemaInspector:
             return cached_result
         
         try:
-            logger.info(f"Querying tables for database '{database}' from INFORMATION_SCHEMA.TABLES")
+            logger.debug(f"Querying tables for database '{database}' from INFORMATION_SCHEMA.TABLES")
             
             # Query INFORMATION_SCHEMA.TABLES for table information
             query = """
@@ -172,7 +172,7 @@ class SchemaInspector:
             # Cache the results
             self.cache_manager.set(cache_key, tables)
             
-            logger.info(f"Retrieved {len(tables)} tables for database '{database}'")
+            logger.debug(f"Retrieved {len(tables)} tables for database '{database}'")
             return tables
             
         except Exception as e:
@@ -205,7 +205,7 @@ class SchemaInspector:
             return cached_result
         
         try:
-            logger.info(f"Querying schema for table '{database}.{table}'")
+            logger.debug(f"Querying schema for table '{database}.{table}'")
             
             # Get column information
             columns = self._get_column_info(database, table)
@@ -234,7 +234,7 @@ class SchemaInspector:
             # Cache the results
             self.cache_manager.set(cache_key, table_schema)
             
-            logger.info(f"Retrieved schema for table '{database}.{table}' with {len(columns)} columns, {len(indexes)} indexes")
+            logger.debug(f"Retrieved schema for table '{database}.{table}' with {len(columns)} columns, {len(indexes)} indexes")
             return table_schema
             
         except Exception as e:

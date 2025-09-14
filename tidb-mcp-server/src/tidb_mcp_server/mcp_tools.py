@@ -127,7 +127,7 @@ def discover_databases() -> list[dict[str, Any]]:
     _ensure_initialized()
 
     try:
-        logger.info("Discovering databases via MCP tool")
+        logger.debug("Discovering databases via MCP tool")
 
         databases = _schema_inspector.get_databases()
 
@@ -142,7 +142,7 @@ def discover_databases() -> list[dict[str, Any]]:
             }
             result.append(db_info)
 
-        logger.info(f"Discovered {len(result)} databases ({sum(1 for db in result if db['accessible'])} accessible)")
+        logger.debug(f"Discovered {len(result)} databases ({sum(1 for db in result if db['accessible'])} accessible)")
         return result
 
     except Exception as e:
@@ -172,7 +172,7 @@ def discover_tables(database: str) -> list[dict[str, Any]]:
         raise ValueError("Database name is required and cannot be empty")
 
     try:
-        logger.info(f"Discovering tables in database '{database}' via MCP tool")
+        logger.debug(f"Discovering tables in database '{database}' via MCP tool")
 
         tables = _schema_inspector.get_tables(database)
 
@@ -189,7 +189,7 @@ def discover_tables(database: str) -> list[dict[str, Any]]:
             }
             result.append(table_info)
 
-        logger.info(f"Discovered {len(result)} tables in database '{database}'")
+        logger.debug(f"Discovered {len(result)} tables in database '{database}'")
         return result
 
     except Exception as e:
@@ -223,7 +223,7 @@ def get_table_schema(database: str, table: str) -> dict[str, Any]:
         raise ValueError("Table name is required and cannot be empty")
 
     try:
-        logger.info(f"Getting schema for table '{database}.{table}' via MCP tool")
+        logger.debug(f"Getting schema for table '{database}.{table}' via MCP tool")
 
         schema = _schema_inspector.get_table_schema(database, table)
 
@@ -260,7 +260,7 @@ def get_table_schema(database: str, table: str) -> dict[str, Any]:
             }
             result["indexes"].append(index_info)
 
-        logger.info(f"Retrieved schema for table '{database}.{table}' with "
+        logger.debug(f"Retrieved schema for table '{database}.{table}' with "
                    f"{len(result['columns'])} columns, {len(result['indexes'])} indexes")
         return result
 
