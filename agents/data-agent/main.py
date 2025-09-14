@@ -25,6 +25,40 @@ from src.mcp_agent import get_mcp_data_agent, close_mcp_data_agent
 # Load environment variables
 load_dotenv()
 
+def validate_database_context(database_context: Dict[str, Any]) -> bool:
+    """
+    Validate database context for data agent processing.
+    
+    Args:
+        database_context: Database context to validate
+        
+    Returns:
+        bool: True if valid, False otherwise
+    """
+    if not isinstance(database_context, dict):
+        logger.error("Database context must be a dictionary")
+        return False
+    
+    # Check for required fields
+    required_fields = ['database_name']
+    for field in required_fields:
+        if field not in database_context:
+            logger.error(f"Missing required field '{field}' in database context")
+            return False
+        
+        if not database_context[field]:
+            logger.error(f"Empty value for required field '{field}' in database context")
+            return False
+    
+    # Validate database name format
+    database_name = database_context['database_name']
+    if not isinstance(database_name, str) or len(database_name) == 0:
+        logger.error(f"Invalid database name: {database_name}")
+        return False
+    
+    logger.debug(f"Database context validation passed for data agent: {database_context}")
+    return True
+
 # Check if MCP mode is enabled
 USE_MCP = os.getenv('USE_MCP_CLIENT', 'true').lower() == 'true'
 
@@ -136,12 +170,14 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
     try:
         logger.info(f"Executing query {request.query_id}")
         
-        # Log database context if present
+        # Log and validate database context if present
         if request.database_context:
             logger.info(f"Using database context: {request.database_context.get('database_name', 'unknown')}")
-            # Basic validation of database context
-            if 'database_name' not in request.database_context:
-                logger.warning("Database context missing required 'database_name' field")
+            if not validate_database_context(request.database_context):
+                logger.warning(f"Invalid database context for query {request.query_id}: {request.database_context}")
+                # Continue processing but log the issue
+        else:
+            logger.info(f"No database context provided for query {request.query_id}")
         
         # Convert query context to intent format expected by data agent
         query_intent = {

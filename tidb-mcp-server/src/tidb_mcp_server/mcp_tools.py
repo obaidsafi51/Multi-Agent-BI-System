@@ -92,7 +92,12 @@ def _ensure_initialized() -> None:
             from .cache_manager import CacheManager
             
             # Create instances directly (without MCP server dependency for now)
-            _query_executor = QueryExecutor()
+            # Load configuration to get proper timeout settings
+            from .config import load_config
+            config = load_config()
+            security_config = config.get_security_config()
+            
+            _query_executor = QueryExecutor(max_timeout=security_config.max_query_timeout)
             _schema_inspector = SchemaInspector()
             _cache_manager = CacheManager()
             _mcp_server = None  # Will be set when properly initialized

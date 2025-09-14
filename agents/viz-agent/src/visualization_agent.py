@@ -54,6 +54,40 @@ class VisualizationAgent:
         else:
             return obj
     
+    def _validate_database_context(self, database_context: Dict[str, Any]) -> bool:
+        """
+        Validate database context for visualization agent processing.
+        
+        Args:
+            database_context: Database context to validate
+            
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not isinstance(database_context, dict):
+            logger.error("Database context must be a dictionary")
+            return False
+        
+        # Check for required fields
+        required_fields = ['database_name']
+        for field in required_fields:
+            if field not in database_context:
+                logger.error(f"Missing required field '{field}' in database context")
+                return False
+            
+            if not database_context[field]:
+                logger.error(f"Empty value for required field '{field}' in database context")
+                return False
+        
+        # Validate database name format
+        database_name = database_context['database_name']
+        if not isinstance(database_name, str) or len(database_name) == 0:
+            logger.error(f"Invalid database name: {database_name}")
+            return False
+        
+        logger.debug(f"Database context validation passed for viz agent: {database_context}")
+        return True
+    
     async def process_visualization_request(self, request: VisualizationRequest) -> VisualizationResponse:
         """Process a visualization request and generate chart"""
         start_time = time.time()
@@ -61,7 +95,16 @@ class VisualizationAgent:
         try:
             logger.info(f"Processing visualization request {request.request_id} for user {request.user_id}")
             
-            # Check cache first
+            # Database context logging and validation
+            if request.database_context:
+                logger.info(f"Using database context for visualization {request.request_id}: {request.database_context.get('database_name', 'unknown')}")
+                if not self._validate_database_context(request.database_context):
+                    logger.warning(f"Invalid database context for visualization {request.request_id}: {request.database_context}")
+                    # Continue processing but log the issue
+            else:
+                logger.info(f"No database context provided for visualization {request.request_id}")
+            
+            # Check cache first (database-context aware)
             cache_key = self._generate_cache_key(request)
             cached_response = self._get_cached_response(cache_key)
             if cached_response:
@@ -204,7 +247,7 @@ class VisualizationAgent:
         )
     
     def _generate_cache_key(self, request: VisualizationRequest) -> str:
-        """Generate cache key for the request"""
+        """Generate cache key for the request (database context aware)"""
         # Create a hash of the request data for caching
         import hashlib
         
@@ -212,7 +255,8 @@ class VisualizationAgent:
             "user_id": request.user_id,
             "query_intent": request.query_intent,
             "data_hash": hashlib.md5(json.dumps(request.data, sort_keys=True).encode()).hexdigest(),
-            "preferences": request.preferences
+            "preferences": request.preferences,
+            "database_context": request.database_context.get('database_name', 'default') if request.database_context else 'default'
         }
         
         cache_string = json.dumps(cache_data, sort_keys=True)

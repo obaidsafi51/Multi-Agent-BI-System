@@ -723,7 +723,7 @@ class WebSocketMCPServerManager:
         """Background heartbeat task"""
         while True:
             try:
-                await asyncio.sleep(60)  # Heartbeat every minute
+                await asyncio.sleep(30)  # Heartbeat every 30 seconds (more frequent for better connection health)
                 await self._send_heartbeat()
             except Exception as e:
                 logger.error(f"Heartbeat loop error: {e}")
