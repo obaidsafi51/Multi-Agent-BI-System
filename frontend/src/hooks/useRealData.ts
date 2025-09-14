@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { BentoGridCard, ChatMessage, QuerySuggestion } from "@/types/dashboard";
 import { apiService, QueryRequest, QueryResponse } from "@/lib/api";
+import { useDatabaseContext } from "@/contexts/DatabaseContext";
 
 interface UseRealDataReturn {
   // State
@@ -19,6 +20,9 @@ interface UseRealDataReturn {
 }
 
 export function useRealData(): UseRealDataReturn {
+  // Get database context
+  const { sessionId } = useDatabaseContext();
+  
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [bentoCards, setBentoCards] = useState<BentoGridCard[]>([]);
   const [suggestions, setSuggestions] = useState<QuerySuggestion[]>([]);
@@ -53,10 +57,16 @@ export function useRealData(): UseRealDataReturn {
 
   const loadInitialDashboard = useCallback(async () => {
     try {
-      // Check if we have a selected database first
+      // Check if we have a selected database and session ID first
       const selectedDatabase = sessionStorage.getItem('selected_database');
       if (!selectedDatabase) {
         console.log("No database selected - skipping initial dashboard load");
+        setBentoCards([]);
+        return;
+      }
+
+      if (!sessionId) {
+        console.log("No session ID available - skipping initial dashboard load");
         setBentoCards([]);
         return;
       }
@@ -87,6 +97,7 @@ export function useRealData(): UseRealDataReturn {
         // Query real revenue data
         const revenueResponse = await apiService.processQuery({
           query: "Show me total revenue for the last 6 months",
+          session_id: sessionId || undefined,
           context: { user_id: "dashboard_init" }
         });
         
@@ -108,6 +119,7 @@ export function useRealData(): UseRealDataReturn {
         // Query real profit data
         const profitResponse = await apiService.processQuery({
           query: "Show me net profit for the current period",
+          session_id: sessionId || undefined,
           context: { user_id: "dashboard_init" }
         });
         
@@ -129,6 +141,7 @@ export function useRealData(): UseRealDataReturn {
         // Query real expenses data
         const expensesResponse = await apiService.processQuery({
           query: "Show me operating expenses for the current period",
+          session_id: sessionId || undefined,
           context: { user_id: "dashboard_init" }
         });
         
@@ -150,6 +163,7 @@ export function useRealData(): UseRealDataReturn {
         // Query real investments data
         const investmentsResponse = await apiService.processQuery({
           query: "Show me top 5 investments by ROI",
+          session_id: sessionId || undefined,
           context: { user_id: "dashboard_init" }
         });
         
@@ -169,6 +183,7 @@ export function useRealData(): UseRealDataReturn {
       try {
         const chartResponse = await apiService.processQuery({
           query: "Show me monthly revenue trend for the last 6 months",
+          session_id: sessionId || undefined,
           context: { user_id: "dashboard_init" }
         });
         
@@ -203,7 +218,7 @@ export function useRealData(): UseRealDataReturn {
       // Show empty dashboard instead of fallback data
       setBentoCards([]);
     }
-  }, []);
+  }, [sessionId]);
 
   const initializeData = useCallback(async () => {
     try {
@@ -308,7 +323,12 @@ export function useRealData(): UseRealDataReturn {
       // Process query through API FIRST
       const queryRequest: QueryRequest = {
         query: content,
-        context: { user_id: "anonymous" }
+        user_id: "anonymous",
+        session_id: sessionId || undefined,
+        context: { 
+          user_id: "anonymous",
+          source: "chat_interface"
+        }
       };
 
       const response = await apiService.processQuery(queryRequest);
@@ -351,7 +371,7 @@ export function useRealData(): UseRealDataReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [updateDashboardFromQuery]);
+  }, [sessionId, updateDashboardFromQuery]);
 
   const generateResponseMessage = (response: QueryResponse): string => {
     if (response.error) {

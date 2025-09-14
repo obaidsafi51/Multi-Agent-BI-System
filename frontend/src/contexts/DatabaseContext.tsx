@@ -44,7 +44,7 @@ interface DatabaseContextState {
 }
 
 // Create context
-const DatabaseContextProvider = createContext<DatabaseContextState | undefined>(undefined);
+const DatabaseContext = createContext<DatabaseContextState | undefined>(undefined);
 
 // Provider component props
 interface DatabaseContextProviderProps {
@@ -75,7 +75,7 @@ export const DatabaseContextProvider: React.FC<DatabaseContextProviderProps> = (
 
   // Initialize session on mount
   useEffect(() => {
-    const currentSessionId = initializeSession();
+    initializeSession();
     
     // Try to load existing database context from sessionStorage
     const storedContext = sessionStorage.getItem('ai_cfo_database_context');
@@ -159,7 +159,7 @@ export const DatabaseContextProvider: React.FC<DatabaseContextProviderProps> = (
           database_name: databaseName,
           schema_initialized: data.schema_initialized,
           total_tables: data.total_tables,
-          table_names: data.tables?.map((table: any) => table.name || table.table_name) || [],
+          table_names: data.tables?.map((table: { name?: string; table_name?: string }) => table.name || table.table_name) || [],
           selected_at: new Date().toISOString(),
           session_id: data.session_id || sessionId,
         };
@@ -266,15 +266,15 @@ export const DatabaseContextProvider: React.FC<DatabaseContextProviderProps> = (
   };
 
   return (
-    <DatabaseContextProvider.Provider value={contextValue}>
+    <DatabaseContext.Provider value={contextValue}>
       {children}
-    </DatabaseContextProvider.Provider>
+    </DatabaseContext.Provider>
   );
 };
 
 // Custom hook to use database context
 export const useDatabaseContext = () => {
-  const context = useContext(DatabaseContextProvider);
+  const context = useContext(DatabaseContext);
   
   if (context === undefined) {
     throw new Error('useDatabaseContext must be used within a DatabaseContextProvider');
