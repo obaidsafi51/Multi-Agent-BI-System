@@ -69,7 +69,7 @@ class EnhancedWebSocketMCPClient:
     
     def __init__(
         self,
-        ws_url: str = "ws://tidb-mcp-server:8001/ws",
+        ws_url: str = "ws://tidb-mcp-server:8000/ws",
         agent_id: str = "nlp-agent",
         # Connection settings
         initial_reconnect_delay: float = 1.0,

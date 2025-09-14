@@ -12,11 +12,11 @@ class PerformanceConfig:
     WEBSOCKET_CONFIG = {
         "initial_reconnect_delay": 0.5,      # Fast initial reconnection
         "max_reconnect_delay": 30.0,         # Reasonable max delay
-        "connection_timeout": 6.0,           # Quick connection timeout detection
-        "request_timeout": 15.0,             # Reasonable request timeout
+        "connection_timeout": 15.0,          # Increased connection timeout
+        "request_timeout": 30.0,             # Increased request timeout
         "heartbeat_interval": 20.0,          # Frequent heartbeats for quick detection
         "health_check_interval": 45.0,       # Regular health checks
-        "ping_timeout": 5.0,                 # Quick ping timeout
+        "ping_timeout": 8.0,                 # Increased ping timeout
         "enable_request_batching": True,
         "batch_size": 5,
         "batch_timeout": 0.1

@@ -18,11 +18,8 @@ from src.optimized_nlp_agent import OptimizedNLPAgent
 from src.enhanced_websocket_client import EnhancedWebSocketMCPClient
 from src.performance_optimizer import PerformanceOptimizer
 from src.enhanced_monitoring import EnhancedMonitoringSystem, AlertLevel
-from src.query_classifier import QueryClassifier, QueryComplexity
+# Query classifier removed - using unified processing approach
 from performance_config import PerformanceConfig
-
-# Import standardized models from local shared package
-from shared.models.workflow import NLPResponse, QueryIntent, AgentMetadata, ErrorResponse
 
 # Load environment variables
 load_dotenv()
@@ -53,19 +50,33 @@ app.add_middleware(
 # Global agent instances
 nlp_agent: OptimizedNLPAgent = None
 websocket_client: EnhancedWebSocketMCPClient = None
-query_classifier: QueryClassifier = None
+# query_classifier removed - using unified processing approach
 performance_optimizer: PerformanceOptimizer = None
 monitoring_system: EnhancedMonitoringSystem = None
 
 # Request/Response models
 class ProcessRequest(BaseModel):
     query: str = Field(..., description="Natural language query to process")
+    query_id: str = Field(..., description="Unique query identifier")
+    user_id: str = Field(..., description="User identifier")
+    session_id: str = Field(..., description="Session identifier")
     context: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
+    database_context: Optional[Dict[str, Any]] = Field(None, description="Database context for query processing")
     force_comprehensive: bool = Field(False, description="Force comprehensive processing path")
     use_cache: bool = Field(True, description="Enable semantic caching")
     timeout: int = Field(30, description="Request timeout in seconds")
-    user_id: Optional[str] = Field("anonymous", description="User identifier")
-    session_id: Optional[str] = Field(None, description="Session identifier")
+
+class ProcessResponse(BaseModel):
+    query: str
+    intent: Dict[str, Any]
+    entities: Dict[str, Any]
+    sql_query: str
+    explanation: str
+    complexity: str
+    processing_path: str
+    execution_time: float
+    cache_hit: bool
+    timestamp: str
 
 class HealthResponse(BaseModel):
     status: str
@@ -78,7 +89,7 @@ class HealthResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the enhanced NLP agent with all optimization features"""
-    global nlp_agent, websocket_client, query_classifier, performance_optimizer, monitoring_system
+    global nlp_agent, websocket_client, performance_optimizer, monitoring_system
     
     try:
         logger.info("Starting Enhanced NLP Agent v2.2.0...")
@@ -114,14 +125,14 @@ async def startup_event():
         performance_optimizer.start()
         
         # Initialize query classifier
-        query_classifier = QueryClassifier()
+        # QueryClassifier removed - using unified processing approach
         
         # Initialize enhanced WebSocket client
         kimi_api_key = os.getenv("KIMI_API_KEY")
         if not kimi_api_key:
             raise ValueError("KIMI_API_KEY environment variable is required")
             
-        mcp_server_url = os.getenv("MCP_SERVER_WS_URL", "ws://tidb-mcp-server:8001/ws")
+        mcp_server_url = os.getenv("MCP_SERVER_WS_URL", "ws://tidb-mcp-server:8000/ws")
         
         # Initialize enhanced WebSocket client with configuration
         websocket_config = perf_config["websocket"]
@@ -151,14 +162,15 @@ async def startup_event():
         
         websocket_client.register_connection_event_handler(connection_event_handler)
         
-        # Initialize optimized NLP agent with all enhancements
+        # Initialize optimized NLP agent with shared WebSocket client
         nlp_agent = OptimizedNLPAgent(
             kimi_api_key=kimi_api_key,
             mcp_ws_url=mcp_server_url,
             agent_id="nlp-agent-001",
             enable_optimizations=True,
             enable_semantic_caching=True,
-            enable_request_batching=True
+            enable_request_batching=True,
+            websocket_client=websocket_client  # Pass the shared client
         )
         
         # Start all services
@@ -199,7 +211,7 @@ async def shutdown_event():
     
     logger.info("Enhanced NLP Agent shutdown complete")
 
-@app.post("/process", response_model=NLPResponse)
+@app.post("/process", response_model=ProcessResponse)
 async def process_query(request: ProcessRequest, background_tasks: BackgroundTasks):
     """
     Process natural language query with enhanced performance and reliability
@@ -222,16 +234,8 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
                 if 'database_name' not in database_context:
                     logger.warning("Database context missing required 'database_name' field")
             
-            # Classify query complexity unless forced comprehensive
-            if request.force_comprehensive:
-                complexity = QueryComplexity.COMPREHENSIVE
-                processing_path = "comprehensive"
-            else:
-                classification = query_classifier.classify_query(request.query, request.context)
-                complexity = classification.complexity
-                processing_path = classification.processing_path
-            
-            logger.info(f"Query classified as: {complexity.value} -> {processing_path} path")
+            # Use unified processing approach
+            logger.info("Using unified processing path for all queries")
             
             # Use performance optimizer for query processing
             async def process_with_nlp_agent():
@@ -269,53 +273,23 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
                 cpu_usage_percent=cpu_percent
             )
             
-            # Create standardized agent metadata
-            operation_id = f"nlp_op_{int(datetime.now().timestamp() * 1000)}"
-            agent_metadata = AgentMetadata(
-                agent_name="nlp-agent",
-                agent_version="2.2.0",
-                processing_time_ms=int(execution_time * 1000),
-                operation_id=operation_id,
-                status="success"
-            )
-            
-            # Extract or create query intent
-            intent = None
-            if hasattr(result, 'intent') and result.intent:
-                intent = QueryIntent(
-                    metric_type=result.intent.metric_type or "unknown",
-                    time_period=result.intent.time_period or "unknown",
-                    aggregation_level=getattr(result.intent, 'aggregation_level', 'monthly'),
-                    confidence_score=getattr(result.intent, 'confidence_score', 0.0),
-                    visualization_hint=getattr(result.intent, 'visualization_hint', 'table')
-                )
-            elif hasattr(result, 'query_intent') and result.query_intent:
-                # Handle different response format
-                intent_data = result.query_intent
-                intent = QueryIntent(
-                    metric_type=intent_data.get('metric_type', 'unknown'),
-                    time_period=intent_data.get('time_period', 'unknown'),
-                    aggregation_level=intent_data.get('aggregation_level', 'monthly'),
-                    confidence_score=intent_data.get('confidence_score', getattr(result, 'confidence_score', 0.0)),
-                    visualization_hint=intent_data.get('visualization_hint', 'table')
-                )
-            
-            # Create standardized response
-            response = NLPResponse(
-                success=True,
-                agent_metadata=agent_metadata,
-                intent=intent,
+            response = ProcessResponse(
+                query=request.query,
+                intent=result.intent.dict() if result.intent else {},
+                entities={},  # Not directly available in ProcessingResult
                 sql_query=result.sql_query or "",
-                entities_recognized=[],  # Extract from result if available
-                confidence_score=getattr(result, 'confidence_score', 0.0),
-                processing_path=processing_path
+                explanation="",  # Not directly available in ProcessingResult
+                complexity="unified",
+                processing_path="unified_path",
+                execution_time=execution_time,
+                cache_hit=optimization_stats.get("cache_hits", 0) > 0,
+                timestamp=datetime.now().isoformat()
             )
             
             # Log performance metrics with optimization details
-            cache_hit = optimization_stats.get("cache_hits", 0) > 0
             logger.info(
                 f"Query processed in {execution_time:.3f}s "
-                f"({processing_path} path, cache_hit={cache_hit}) "
+                f"(unified_path, cache_hit={response.cache_hit}) "
                 f"Optimizations: {', '.join(optimization_stats.get('optimization_methods', []))}"
             )
             
@@ -323,9 +297,9 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
             background_tasks.add_task(
                 log_query_analytics,
                 request.query,
-                complexity.value,
+                "unified",
                 execution_time,
-                optimization_stats.get("cache_hits", 0) > 0,
+                response.cache_hit,
                 optimization_stats
             )
             
@@ -338,32 +312,7 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
             # Record error metrics
             monitoring_system.record_metric("request_errors", 1)
             
-            # Create error response using standardized format
-            operation_id = f"nlp_op_{int(datetime.now().timestamp() * 1000)}"
-            agent_metadata = AgentMetadata(
-                agent_name="nlp-agent",
-                agent_version="2.2.0",
-                processing_time_ms=int(execution_time * 1000),
-                operation_id=operation_id,
-                status="error"
-            )
-            
-            error_response = ErrorResponse(
-                error_type="nlp_processing_error",
-                message=str(e),
-                recovery_action="retry",
-                suggestions=[
-                    "Try rephrasing your query",
-                    "Check if the query is too complex",
-                    "Verify database connectivity"
-                ]
-            )
-            
-            return NLPResponse(
-                success=False,
-                agent_metadata=agent_metadata,
-                error=error_response
-            )
+            raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -420,7 +369,7 @@ async def health_check():
 @app.get("/status")
 async def get_status():
     """Get detailed agent status and metrics"""
-    global nlp_agent, query_classifier
+    global nlp_agent
     
     try:
         status = {
@@ -440,11 +389,8 @@ async def get_status():
             else:
                 status["websocket_connected"] = False
         
-        if query_classifier:
-            if hasattr(query_classifier, 'get_stats'):
-                status["classifier_stats"] = query_classifier.get_stats()
-            else:
-                status["classifier_stats"] = {"classifier_type": "QueryClassifier", "status": "active"}
+        # Query classifier removed - using unified processing approach
+        status["processing_approach"] = "unified"
         
         return status
         
@@ -454,25 +400,18 @@ async def get_status():
 
 @app.post("/classify")
 async def classify_query(request: ProcessRequest):
-    """Classify query complexity without processing"""
+    """Query classification endpoint - now returns unified approach info"""
     try:
-        if not query_classifier:
-            raise HTTPException(status_code=503, detail="Query classifier not initialized")
-        
-        classification = query_classifier.classify_query(request.query, request.context)
-        
         return {
             "query": request.query,
-            "complexity": classification.complexity.value,
-            "processing_path": classification.processing_path,
-            "confidence": classification.confidence_score,
-            "features": classification.reasoning,
+            "processing_approach": "unified",
+            "message": "All queries now use unified processing path for optimal performance",
             "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        logger.error(f"Classification error: {e}")
-        raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")
+        logger.error(f"Classification endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Classification endpoint failed: {str(e)}")
 
 @app.post("/cache/clear")
 async def clear_cache():
@@ -789,7 +728,7 @@ async def get_diagnostics():
             "service_status": {
                 "nlp_agent": nlp_agent is not None,
                 "websocket_client": websocket_client is not None and websocket_client.is_connected,
-                "query_classifier": query_classifier is not None,
+                "processing_approach": "unified",
                 "performance_optimizer": performance_optimizer is not None,
                 "monitoring_system": monitoring_system is not None
             }
@@ -869,73 +808,18 @@ async def log_query_analytics(
         logger.error(f"Analytics logging error: {e}")
 
 if __name__ == "__main__":
-    # Check if WebSocket server should be enabled
-    enable_websocket = os.getenv("ENABLE_WEBSOCKETS", "true").lower() == "true"
-    
+    # Run the enhanced server
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8001"))
     
-    if enable_websocket:
-        # Import and start WebSocket server alongside HTTP
-        from websocket_server import start_websocket_server, stop_websocket_server
-        
-        async def run_both_servers():
-            """Run both HTTP and WebSocket servers"""
-            logger.info(f"Starting Enhanced NLP Agent v2.2.0 with both HTTP (:{port}) and WebSocket (:8011) servers")
-            logger.info("Features: WebSocket reliability, performance optimization, enhanced monitoring")
-            
-            # Start HTTP server with proper async handling
-            config = uvicorn.Config(
-                app,
-                host=host,
-                port=port,
-                reload=False,
-                log_level="info",
-                access_log=True
-            )
-            http_server = uvicorn.Server(config)
-            http_task = asyncio.create_task(http_server.serve())
-            
-            tasks = [http_task]
-            
-            # Start WebSocket server
-            logger.info("WebSocket server starting...")
-            websocket_task = asyncio.create_task(start_websocket_server())
-            tasks.append(websocket_task)
-            
-            logger.info("Both servers started successfully")
-            
-            # Wait for all tasks
-            try:
-                await asyncio.gather(*tasks)
-            except KeyboardInterrupt:
-                logger.info("Shutting down servers...")
-            finally:
-                try:
-                    await stop_websocket_server()
-                    logger.info("WebSocket server stopped")
-                except Exception as e:
-                    logger.error(f"Error stopping WebSocket server: {e}")
-                    
-                try:
-                    http_server.should_exit = True
-                    logger.info("HTTP server stopped")
-                except Exception as e:
-                    logger.error(f"Error stopping HTTP server: {e}")
-        
-        # Run both servers
-        asyncio.run(run_both_servers())
-        
-    else:
-        # HTTP only mode (fallback)
-        logger.info(f"Starting Enhanced NLP Agent v2.2.0 on {host}:{port} (HTTP only)")
-        logger.info("Features: Performance optimization, enhanced monitoring")
-        
-        uvicorn.run(
-            app,
-            host=host,
-            port=port,
-            reload=False,
-            log_level="info",
-            access_log=True
-        )
+    logger.info(f"Starting Enhanced NLP Agent v2.2.0 on {host}:{port}")
+    logger.info("Features: WebSocket reliability, performance optimization, enhanced monitoring")
+    
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        reload=False,
+        log_level="info",
+        access_log=True
+    )

@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,7 +15,7 @@ from datetime import datetime
 
 from .optimized_kimi_client import OptimizedKimiClient, KimiAPIError
 from .websocket_mcp_client import WebSocketMCPClient, MCPOperations
-from .query_classifier import QueryClassifier, QueryComplexity, ProcessingPath
+# Query classifier removed - using unified processing approach
 from .cache_manager import AdvancedCacheManager, CacheLevel
 from .context_builder import ContextBuilder
 from .models import ProcessingResult, QueryContext, QueryIntent, FinancialEntity
@@ -35,13 +36,13 @@ class OptimizedNLPAgent:
     
     def __init__(
         self,
-        kimi_api_key: Optional[str] = None,
-        mcp_ws_url: str = "ws://tidb-mcp-server:8001/ws",
-        agent_id: str = None,
+        kimi_api_key: str,
+        mcp_ws_url: str = "ws://tidb-mcp-server:8000/ws",
+        agent_id: str = "nlp-agent-001",
         enable_optimizations: bool = True,
         enable_semantic_caching: bool = True,
         enable_request_batching: bool = True,
-        cache_config: Optional[Dict[str, Any]] = None
+        websocket_client=None  # Optional external WebSocket client
     ):
         """
         Initialize optimized NLP agent.
@@ -73,20 +74,35 @@ class OptimizedNLPAgent:
             max_connections=10  # Connection pooling
         )
         
-        # Initialize WebSocket MCP client
-        self.mcp_client = WebSocketMCPClient(
-            ws_url=mcp_ws_url,
-            agent_id=self.agent_id,
-            enable_batching=enable_request_batching,
-            batch_size=5,
-            batch_timeout=0.1
-        )
+        # Use external WebSocket client if provided, otherwise create internal one
+        logger.info(f"WebSocket client parameter: {websocket_client}")
+        logger.info(f"WebSocket client type: {type(websocket_client)}")
+        if websocket_client:
+            self.mcp_client = websocket_client
+            self.owns_websocket_client = False
+            logger.info(f"✅ Using external WebSocket client: {type(websocket_client)}")
+        else:
+            # Fallback: create internal WebSocket client
+            self.mcp_client = WebSocketMCPClient(
+                ws_url=mcp_ws_url,
+                agent_id=self.agent_id,
+                enable_batching=enable_request_batching,
+                batch_size=5,
+                batch_timeout=0.1
+            )
+            self.owns_websocket_client = True
+            logger.info("❌ Created internal WebSocket client")
         
-        # Initialize MCP operations helper
-        self.mcp_ops = MCPOperations(self.mcp_client)
+        # Initialize MCP operations helper  
+        # Note: MCPOperations expects WebSocketMCPClient, need to adapt for EnhancedWebSocketMCPClient
+        if hasattr(self.mcp_client, 'send_request'):
+            # Enhanced WebSocket client - create adapter
+            self.mcp_ops = self._create_enhanced_mcp_ops()
+        else:
+            # Standard WebSocket client
+            self.mcp_ops = MCPOperations(self.mcp_client)
         
-        # Initialize query classifier for intelligent routing
-        self.query_classifier = QueryClassifier()
+        # Query classifier removed - using unified processing path
         
         # Initialize context builder
         self.context_builder = ContextBuilder()
@@ -100,17 +116,15 @@ class OptimizedNLPAgent:
         self.schema_cache_ttl = 600  # 10 minutes
         self.last_schema_update = 0
         
-        # Performance metrics
+        # Performance metrics (simplified)
         self.metrics = {
             "total_queries": 0,
-            "fast_path_queries": 0,
-            "standard_path_queries": 0,
-            "comprehensive_path_queries": 0,
-            "parallel_kimi_calls": 0,
+            "unified_path_queries": 0,
+            "mcp_llm_calls": 0,
             "cache_hits": 0,
             "websocket_requests": 0,
             "total_latency": 0.0,
-            "optimization_savings": 0.0
+            "average_latency": 0.0
         }
         
         # Event handlers
@@ -120,6 +134,50 @@ class OptimizedNLPAgent:
         logger.info(f"Optimizations enabled: {enable_optimizations}")
         logger.info(f"Semantic caching: {enable_semantic_caching}")
         logger.info(f"Request batching: {enable_request_batching}")
+    
+    def _create_enhanced_mcp_ops(self):
+        """Create MCP operations adapter for EnhancedWebSocketMCPClient"""
+        class EnhancedMCPOperationsAdapter:
+            def __init__(self, client):
+                self.client = client
+                self.websocket_client = client  # Fix: Make websocket_client available
+            
+            async def get_schema_context(self, databases=None):
+                return await self.client.send_request(
+                    "build_schema_context",
+                    {"databases": databases} if databases else {}
+                )
+            
+            async def generate_sql(self, natural_language_query, schema_info=None, examples=None):
+                return await self.websocket_client.send_request(
+                    "llm_generate_sql_tool",
+                    {
+                        "natural_language_query": natural_language_query,
+                        "schema_info": schema_info,
+                        "examples": examples
+                    }
+                )
+            
+            async def validate_query(self, query):
+                return await self.client.send_request("validate_query_tool", {"query": query})
+            
+            async def execute_query(self, query, timeout=None, use_cache=True):
+                params = {"query": query, "use_cache": use_cache}
+                if timeout:
+                    params["timeout"] = timeout
+                return await self.client.send_request("execute_query_tool", params)
+            
+            async def analyze_data(self, data, analysis_type="financial", context=None):
+                return await self.client.send_request(
+                    "llm_analyze_data_tool",
+                    {
+                        "data": data,
+                        "analysis_type": analysis_type,
+                        "context": context
+                    }
+                )
+        
+        return EnhancedMCPOperationsAdapter(self.mcp_client)
     
     def _setup_event_handlers(self):
         """Setup event handlers for real-time updates"""
@@ -136,11 +194,14 @@ class OptimizedNLPAgent:
             await self.cache_manager.initialize()
             logger.info("Cache manager initialized successfully")
             
-            # Connect to MCP server via WebSocket
-            if not await self.mcp_client.connect():
-                logger.warning("MCP WebSocket connection failed - will use fallback mode")
+            # Connect to MCP server via WebSocket (only if we own the client)
+            if self.owns_websocket_client:
+                if not await self.mcp_client.connect():
+                    logger.warning("MCP WebSocket connection failed - will use fallback mode")
+                else:
+                    logger.info("Successfully connected to MCP server via WebSocket")
             else:
-                logger.info("Successfully connected to MCP server via WebSocket")
+                logger.info("Using external WebSocket client - connection managed externally")
             
             # Verify KIMI API connectivity
             if not await self.kimi_client.health_check():
@@ -164,8 +225,9 @@ class OptimizedNLPAgent:
         
         self.is_running = False
         
-        # Close connections
-        await self.mcp_client.disconnect()
+        # Close connections (only if we own the WebSocket client)
+        if self.owns_websocket_client:
+            await self.mcp_client.disconnect()
         await self.kimi_client.close()
         
         logger.info("Optimized NLP agent stopped")
@@ -178,14 +240,14 @@ class OptimizedNLPAgent:
         context: Optional[Dict[str, Any]] = None
     ) -> ProcessingResult:
         """
-        Process query with full optimization pipeline.
-        This is the main entry point that uses all optimizations.
+        Simplified unified query processing.
+        Uses single optimized path for all queries - no complex routing.
         """
         start_time = time.time()
         query_id = f"q_{uuid.uuid4().hex[:8]}"
         
         try:
-            logger.info(f"Processing optimized query {query_id}: {query}")
+            logger.info(f"Processing query {query_id}: {query}")
             self.metrics["total_queries"] += 1
             
             # Step 1: Check semantic cache first
@@ -196,42 +258,25 @@ class OptimizedNLPAgent:
                     logger.info(f"Query {query_id} served from semantic cache")
                     return self._create_cached_result(query_id, cached_result, start_time)
             
-            # Step 2: Classify query to determine processing path
-            classification = self.query_classifier.classify_query(query, context)
+            # Step 2: Use unified processing (combines best of all paths)
+            result = await self._process_unified_path(query, user_id, session_id, context, query_id)
             
-            # Step 3: Route to appropriate processing path
-            if classification.processing_path == ProcessingPath.FAST_PATH:
-                result = await self._process_fast_path(query, user_id, session_id, context, query_id)
-                self.metrics["fast_path_queries"] += 1
-            elif classification.processing_path == ProcessingPath.STANDARD_PATH:
-                result = await self._process_standard_path(query, user_id, session_id, context, query_id)
-                self.metrics["standard_path_queries"] += 1
-            else:
-                result = await self._process_comprehensive_path(query, user_id, session_id, context, query_id)
-                self.metrics["comprehensive_path_queries"] += 1
-            
-            # Step 4: Cache result if successful
+            # Step 3: Cache result if successful
             if result.success and self.enable_semantic_caching:
                 await self._cache_semantic_result(query, result)
             
-            # Step 5: Update metrics
+            # Step 4: Update metrics
             processing_time = time.time() - start_time
             result.processing_time_ms = int(processing_time * 1000)
             self.metrics["total_latency"] += processing_time
             
-            # Calculate optimization savings
-            estimated_original_time = classification.estimated_processing_time
-            savings = max(0, estimated_original_time - processing_time)
-            self.metrics["optimization_savings"] += savings
-            
-            logger.info(f"Query {query_id} processed via {classification.processing_path.value} "
-                       f"in {processing_time:.2f}s (estimated savings: {savings:.2f}s)")
+            logger.info(f"Query {query_id} processed via unified_path in {processing_time:.2f}s")
             
             return result
             
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"Optimized query processing failed for {query_id}: {e}")
+            logger.error(f"Query processing failed for {query_id}: {e}")
             
             return ProcessingResult(
                 query_id=query_id,
@@ -241,6 +286,55 @@ class OptimizedNLPAgent:
                 processing_path="error"
             )
     
+    async def _process_unified_path(
+        self,
+        query: str,
+        user_id: str,
+        session_id: str,
+        context: Optional[Dict[str, Any]],
+        query_id: str
+    ) -> ProcessingResult:
+        """
+        Unified processing path that combines the best practices from all paths.
+        Simple, reliable, and optimized approach for all query types.
+        """
+        try:
+            logger.debug(f"Processing {query_id} via unified path")
+            
+            # Step 1: Get schema context (cached for performance)
+            schema_context = await self._get_cached_schema_context()
+            
+            # Step 2: Extract intent via MCP (with fallback)
+            intent_data = await self._extract_intent_via_mcp(query, context)
+            intent = self._create_query_intent(intent_data)
+            
+            # Step 3: Generate SQL via MCP WebSocket
+            sql_result = await self.mcp_ops.generate_sql(
+                natural_language_query=query,
+                schema_info=self._format_schema_for_llm(schema_context)
+            )
+            
+            # Step 4: Build comprehensive context
+            query_context = self.context_builder.build_query_context(
+                query=query,
+                intent=intent,
+                user_context=context,
+                schema_context=schema_context
+            )
+            
+            return ProcessingResult(
+                query_id=query_id,
+                success=True,
+                intent=intent,
+                sql_query=sql_result.get("sql", ""),
+                query_context=query_context,
+                processing_path="unified"
+            )
+            
+        except Exception as e:
+            logger.error(f"Unified path processing failed for {query_id}: {e}")
+            raise
+
     async def _process_fast_path(
         self,
         query: str,
@@ -262,8 +356,8 @@ class OptimizedNLPAgent:
             # Get cached schema context (avoid repeated fetching)
             schema_context = await self._get_cached_schema_context()
             
-            # Single KIMI call for intent extraction only
-            intent_data = await self.kimi_client._extract_financial_intent_internal(query, context)
+            # Use MCP server's LLM tool instead of direct KIMI API calls
+            intent_data = await self._extract_intent_via_mcp(query, context)
             intent = self._create_query_intent(intent_data)
             
             # Generate SQL via WebSocket (faster than HTTP)
@@ -308,10 +402,10 @@ class OptimizedNLPAgent:
             # Get schema context
             schema_context = await self._get_cached_schema_context()
             
-            # Parallel KIMI calls for intent and entities (skip ambiguities)
+            # Parallel MCP LLM calls for intent and entities (skip ambiguities)
             intent_data, entities_data = await asyncio.gather(
-                self.kimi_client._extract_financial_intent_internal(query, context),
-                self.kimi_client._extract_financial_entities_internal(query, context)
+                self._extract_intent_via_mcp(query, context),
+                self._extract_entities_via_mcp(query, context)
             )
             self.metrics["parallel_kimi_calls"] += 1
             
@@ -371,23 +465,25 @@ class OptimizedNLPAgent:
             # Get fresh schema context for complex queries
             schema_context = await self.mcp_ops.get_schema_context()
             
-            # Try KIMI API for enhanced extraction, fallback to basic extraction
+            # Try MCP LLM tools for enhanced extraction, fallback to basic extraction
             try:
-                # Full parallel KIMI pipeline (all 3 calls in parallel)
-                intent_data, entities_data, ambiguities_data = await self.kimi_client.extract_all_financial_data_parallel(
-                    query, context
+                # Full parallel MCP LLM pipeline (all 3 calls in parallel)
+                intent_data, entities_data, ambiguities_data = await asyncio.gather(
+                    self._extract_intent_via_mcp(query, context),
+                    self._extract_entities_via_mcp(query, context),
+                    self._extract_ambiguities_via_mcp(query, context)
                 )
                 self.metrics["parallel_kimi_calls"] += 1
                 
-                # Process KIMI results
+                # Process MCP LLM results
                 intent = self._create_query_intent(intent_data)
                 entities = self._process_entities(entities_data)
                 ambiguities = self._process_ambiguities(ambiguities_data)
                 
                 logger.debug(f"Enhanced extraction successful for {query_id}")
                 
-            except Exception as kimi_error:
-                logger.warning(f"KIMI API unavailable for {query_id}, using fallback extraction: {kimi_error}")
+            except Exception as mcp_error:
+                logger.warning(f"MCP LLM tools unavailable for {query_id}, using fallback extraction: {mcp_error}")
                 
                 # Fallback: Basic intent and entity extraction
                 intent = self._create_basic_query_intent(query)
@@ -588,14 +684,18 @@ class OptimizedNLPAgent:
             ]
             
             for query in common_queries:
-                classification = self.query_classifier.classify_query(query)
-                # Cache the classification
-                await self.cache_manager.set(
-                    "classification",
-                    query,
-                    classification,
-                    ttl=7200  # 2 hours
-                )
+                # Pre-process common queries with unified approach
+                try:
+                    result = await self._process_unified_path(
+                        query=query,
+                        user_id="warmup_user",
+                        session_id="warmup_session",
+                        context={}
+                    )
+                    logger.debug(f"Warmed up cache for query: {query}")
+                except Exception as warmup_error:
+                    logger.debug(f"Cache warmup failed for query '{query}': {warmup_error}")
+                    continue
             
             logger.info("Cache warmup completed")
             
@@ -797,3 +897,193 @@ class OptimizedNLPAgent:
                 ))
         
         return entities
+
+    async def _extract_intent_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Extract financial intent using MCP server's LLM tools instead of direct API calls"""
+        try:
+            # Create a system prompt for intent extraction
+            system_prompt = """You are a financial data analyst AI. Extract the intent from financial queries.
+            
+Return a JSON object with these fields:
+- metric_type: The financial metric requested (revenue, profit, expense, cash_flow, balance_sheet, etc.)
+- time_period: The time period (current, yearly, quarterly, monthly, specific year/date)
+- aggregation_level: How to aggregate data (daily, weekly, monthly, quarterly, yearly)
+- filters: Any filters or conditions mentioned
+- comparison_periods: Any comparison time periods
+- visualization_hint: Suggested visualization type
+- confidence_score: Confidence in the extraction (0.0-1.0)
+
+Example query: "What is the revenue for 2024?"
+Example response: {
+    "metric_type": "revenue",
+    "time_period": "2024",
+    "aggregation_level": "yearly",
+    "filters": {"year": "2024"},
+    "comparison_periods": [],
+    "visualization_hint": "bar_chart",
+    "confidence_score": 0.9
+}"""
+
+            # Use MCP server's llm_generate_text_tool via WebSocket
+            result = await self.mcp_client.send_request(
+                "llm_generate_text_tool",
+                {
+                    "prompt": f"Extract financial intent from this query: {query}",
+                    "system_prompt": system_prompt,
+                    "max_tokens": 500,
+                    "temperature": 0.1
+                }
+            )
+            
+            # Parse the generated text as JSON
+            generated_text = result.get("text", "{}")
+            try:
+                intent_data = json.loads(generated_text)
+                logger.debug(f"Intent extracted via MCP: {intent_data}")
+                return intent_data
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse LLM response as JSON: {generated_text}")
+                # Fallback to basic intent extraction
+                return self._extract_basic_intent(query)
+                
+        except Exception as e:
+            logger.warning(f"Intent extraction via MCP failed: {e}, using fallback")
+            return self._extract_basic_intent(query)
+    
+    def _extract_basic_intent(self, query: str) -> Dict[str, Any]:
+        """Fallback intent extraction without LLM"""
+        query_lower = query.lower()
+        
+        # Basic intent patterns
+        intent_data = {
+            "metric_type": "general",
+            "time_period": "current",
+            "aggregation_level": "monthly",
+            "filters": {},
+            "comparison_periods": [],
+            "visualization_hint": "table",
+            "confidence_score": 0.6
+        }
+        
+        # Detect metric type
+        if any(word in query_lower for word in ["revenue", "sales", "income"]):
+            intent_data["metric_type"] = "revenue"
+        elif any(word in query_lower for word in ["cost", "expense", "spending"]):
+            intent_data["metric_type"] = "expense"
+        elif any(word in query_lower for word in ["profit", "margin", "earnings"]):
+            intent_data["metric_type"] = "profit"
+        elif any(word in query_lower for word in ["cash", "flow", "cashflow"]):
+            intent_data["metric_type"] = "cash_flow"
+        elif any(word in query_lower for word in ["balance", "asset", "liability"]):
+            intent_data["metric_type"] = "balance_sheet"
+        
+        # Detect time period
+        if any(word in query_lower for word in ["2024", "2023", "2022"]):
+            year_match = re.search(r'\b(20\d{2})\b', query)
+            if year_match:
+                intent_data["time_period"] = year_match.group(1)
+                intent_data["aggregation_level"] = "yearly"
+                intent_data["filters"]["year"] = year_match.group(1)
+        elif any(word in query_lower for word in ["quarter", "quarterly", "q1", "q2", "q3", "q4"]):
+            intent_data["time_period"] = "quarterly"
+            intent_data["aggregation_level"] = "quarterly"
+        elif any(word in query_lower for word in ["month", "monthly"]):
+            intent_data["time_period"] = "monthly"
+            intent_data["aggregation_level"] = "monthly"
+        
+        return intent_data
+    
+    async def _extract_entities_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Extract financial entities using MCP server's LLM tools"""
+        try:
+            system_prompt = """You are a financial data analyst AI. Extract financial entities from queries.
+            
+Return a JSON array of entities with these fields for each:
+- entity_type: Type of entity (metric, time_period, filter, etc.)
+- entity_value: The actual value/text
+- confidence_score: Confidence in extraction (0.0-1.0)
+- original_text: Original text from query
+- synonyms: List of synonyms
+
+Example query: "Show revenue for Q1 2024"
+Example response: [
+    {
+        "entity_type": "metric",
+        "entity_value": "revenue",
+        "confidence_score": 0.9,
+        "original_text": "revenue",
+        "synonyms": ["sales", "income"]
+    },
+    {
+        "entity_type": "time_period",
+        "entity_value": "Q1 2024",
+        "confidence_score": 0.95,
+        "original_text": "Q1 2024",
+        "synonyms": ["first quarter 2024"]
+    }
+]"""
+
+            result = await self.mcp_client.send_request(
+                "llm_generate_text_tool",
+                {
+                    "prompt": f"Extract financial entities from this query: {query}",
+                    "system_prompt": system_prompt,
+                    "max_tokens": 800,
+                    "temperature": 0.1
+                }
+            )
+            
+            generated_text = result.get("text", "[]")
+            try:
+                entities_data = json.loads(generated_text)
+                logger.debug(f"Entities extracted via MCP: {entities_data}")
+                return entities_data if isinstance(entities_data, list) else []
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse entities JSON: {generated_text}")
+                return []
+                
+        except Exception as e:
+            logger.warning(f"Entity extraction via MCP failed: {e}")
+            return []
+    
+    async def _extract_ambiguities_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Extract ambiguities using MCP server's LLM tools"""
+        try:
+            system_prompt = """You are a financial data analyst AI. Identify ambiguities in financial queries.
+            
+Return a JSON array of ambiguities with these fields:
+- description: Description of the ambiguity
+- suggestions: List of clarification suggestions
+- severity: Low, Medium, or High
+
+Example query: "Show profit last year"
+Example response: [
+    {
+        "description": "Year not specified - could be 2023 or 2024",
+        "suggestions": ["Specify exact year", "Use 'profit for 2024'"],
+        "severity": "Medium"
+    }
+]"""
+
+            result = await self.mcp_client.send_request(
+                "llm_generate_text_tool",
+                {
+                    "prompt": f"Identify ambiguities in this query: {query}",
+                    "system_prompt": system_prompt,
+                    "max_tokens": 500,
+                    "temperature": 0.2
+                }
+            )
+            
+            generated_text = result.get("text", "[]")
+            try:
+                ambiguities_data = json.loads(generated_text)
+                logger.debug(f"Ambiguities extracted via MCP: {ambiguities_data}")
+                return ambiguities_data if isinstance(ambiguities_data, list) else []
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse ambiguities JSON: {generated_text}")
+                return []
+                
+        except Exception as e:
+            logger.warning(f"Ambiguity extraction via MCP failed: {e}")
+            return []
