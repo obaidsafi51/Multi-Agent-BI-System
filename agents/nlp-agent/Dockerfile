@@ -29,7 +29,7 @@ COPY shared/ ./shared/
 COPY main_optimized.py ./main.py
 COPY config_optimized.py ./config.py
 COPY performance_config.py ./performance_config.py
-COPY websocket_server.py ./websocket_server.py
+# websocket_server.py removed - NLP agent acts as client only
 COPY startup.py ./startup.py
 
 # Create directories and non-root user
@@ -45,8 +45,8 @@ USER nlpagent
 ENV HOST=0.0.0.0
 ENV PORT=8001
 
-# Expose ports (main API and WebSocket)
-EXPOSE 8001 8011
+# Expose main API port only (no WebSocket server)
+EXPOSE 8001
 
 # Health check for optimized agent
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

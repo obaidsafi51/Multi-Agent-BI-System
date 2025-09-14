@@ -53,7 +53,6 @@ class MessageType(Enum):
     ERROR = "error"
     PING = "ping"
     PONG = "pong"
-    HEARTBEAT = "heartbeat"
 
 
 class EnhancedWebSocketMCPClient:
@@ -71,16 +70,16 @@ class EnhancedWebSocketMCPClient:
         self,
         ws_url: str = "ws://tidb-mcp-server:8000/ws",
         agent_id: str = "nlp-agent",
-        # Connection settings
-        initial_reconnect_delay: float = 1.0,
-        max_reconnect_delay: float = 60.0,
+        # Connection settings - optimized for Docker environments
+        initial_reconnect_delay: float = 2.0,  # Increased for Docker container startup
+        max_reconnect_delay: float = 30.0,  # Reduced for faster recovery
         max_reconnect_attempts: int = -1,  # Unlimited
-        connection_timeout: float = 10.0,
-        request_timeout: float = 30.0,
+        connection_timeout: float = 20.0,  # Increased for Docker network latency
+        request_timeout: float = 45.0,  # Increased for complex SQL operations
         # Health check settings
-        heartbeat_interval: float = 30.0,
-        health_check_interval: float = 60.0,
-        ping_timeout: float = 10.0,
+        heartbeat_interval: float = 45.0,  # Reduced frequency for Docker stability
+        health_check_interval: float = 90.0,  # Less frequent health checks
+        ping_timeout: float = 15.0,  # Increased for Docker network delays
         # Circuit breaker settings
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: float = 60.0,
@@ -153,34 +152,63 @@ class EnhancedWebSocketMCPClient:
     def _is_websocket_open(self) -> bool:
         """
         Check if WebSocket connection is open using multiple detection methods
-        for compatibility across different websockets library versions
+        with improved reliability and error handling
         """
         if self.websocket is None:
             return False
             
         try:
-            # Method 1: Check using state property (websockets 12.0+)
+            # Method 1: Check using state property (websockets 12.0+/15.0+)
             if hasattr(self.websocket, 'state'):
-                from websockets.protocol import State
-                return self.websocket.state == State.OPEN
-                
+                try:
+                    from websockets.protocol import State
+                    is_open = self.websocket.state == State.OPEN
+                    logger.debug(f"WebSocket state check: {self.websocket.state.name} -> {is_open}")
+                    return is_open
+                except (ImportError, AttributeError) as e:
+                    logger.debug(f"State check failed: {e}")
+                    
             # Method 2: Check using closed attribute (websockets 10.x/11.x)
             elif hasattr(self.websocket, 'closed'):
-                return not self.websocket.closed
+                is_open = not self.websocket.closed
+                logger.debug(f"WebSocket closed check: {self.websocket.closed} -> {is_open}")
+                return is_open
                 
             # Method 3: Check using close_code (fallback)
             elif hasattr(self.websocket, 'close_code'):
-                return self.websocket.close_code is None
+                is_open = self.websocket.close_code is None
+                logger.debug(f"WebSocket close_code check: {self.websocket.close_code} -> {is_open}")
+                return is_open
                 
             # Method 4: Try to access protocol state directly
             elif hasattr(self.websocket, 'protocol') and hasattr(self.websocket.protocol, 'state'):
-                from websockets.protocol import State
-                return self.websocket.protocol.state == State.OPEN
-                
-        except (AttributeError, ImportError):
-            pass
+                try:
+                    from websockets.protocol import State
+                    is_open = self.websocket.protocol.state == State.OPEN
+                    logger.debug(f"WebSocket protocol state check: {self.websocket.protocol.state.name} -> {is_open}")
+                    return is_open
+                except (ImportError, AttributeError) as e:
+                    logger.debug(f"Protocol state check failed: {e}")
             
-        # Final fallback: assume open if websocket exists and no exceptions
+            # Method 5: Test actual connection by attempting to send ping
+            # This is more reliable but slower - only use as last resort
+            try:
+                # Try to access websocket internal state
+                if hasattr(self.websocket, '_connection_lost'):
+                    is_open = not self.websocket._connection_lost
+                    logger.debug(f"WebSocket connection_lost check: {self.websocket._connection_lost} -> {is_open}")
+                    return is_open
+            except AttributeError:
+                pass
+                
+        except Exception as e:
+            logger.warning(f"WebSocket state check error: {e}")
+            return False
+            
+        # Final fallback: assume open if websocket exists but can't determine state
+        # This is conservative - if we can't determine state, assume it's open
+        # and let actual operations fail gracefully
+        logger.debug("WebSocket state unknown - assuming open for graceful degradation")
         return True
 
     @property
@@ -488,8 +516,6 @@ class EnhancedWebSocketMCPClient:
             await self._handle_error(data)
         elif message_type == MessageType.PONG.value:
             await self._handle_pong(data)
-        elif message_type == MessageType.HEARTBEAT.value:
-            await self._handle_heartbeat(data)
         else:
             logger.debug(f"Unknown message type: {message_type}")
     
@@ -532,6 +558,7 @@ class EnhancedWebSocketMCPClient:
             logger.info("Schema update received from server")
         elif event_name == "server_heartbeat":
             logger.debug("Server heartbeat received")
+            await self._handle_heartbeat_event(data)
     
     async def _handle_error(self, data: Dict[str, Any]):
         """Handle error message"""
@@ -553,16 +580,19 @@ class EnhancedWebSocketMCPClient:
         """Handle pong message"""
         logger.debug("Received pong from server")
     
-    async def _handle_heartbeat(self, data: Dict[str, Any]):
-        """Handle heartbeat message from server"""
-        logger.debug("Received heartbeat from server")
+    async def _handle_heartbeat_event(self, data: Dict[str, Any]):
+        """Handle heartbeat event from server"""
+        logger.debug("Received heartbeat event from server")
         
-        # Send heartbeat response
+        # Send heartbeat response as event
         heartbeat_response = {
-            "type": MessageType.HEARTBEAT.value,
-            "timestamp": datetime.now().isoformat(),
-            "agent_id": self.agent_id,
-            "stats": self.get_connection_stats()
+            "type": MessageType.EVENT.value,
+            "event_name": "heartbeat_response",
+            "payload": {
+                "timestamp": datetime.now().isoformat(),
+                "agent_id": self.agent_id,
+                "stats": self.get_connection_stats()
+            }
         }
         await self._send_raw_message(heartbeat_response)
     
