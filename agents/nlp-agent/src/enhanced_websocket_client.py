@@ -70,19 +70,19 @@ class EnhancedWebSocketMCPClient:
         self,
         ws_url: str = "ws://tidb-mcp-server:8000/ws",
         agent_id: str = "nlp-agent",
-        # Connection settings - optimized for Docker environments
-        initial_reconnect_delay: float = 2.0,  # Increased for Docker container startup
-        max_reconnect_delay: float = 30.0,  # Reduced for faster recovery
+        # Connection settings - optimized for KIMI API processing
+        initial_reconnect_delay: float = 3.0,  # Start with reasonable delay
+        max_reconnect_delay: float = 60.0,  # Longer max delay for stability
         max_reconnect_attempts: int = -1,  # Unlimited
-        connection_timeout: float = 20.0,  # Increased for Docker network latency
-        request_timeout: float = 45.0,  # Increased for complex SQL operations
-        # Health check settings
-        heartbeat_interval: float = 45.0,  # Reduced frequency for Docker stability
-        health_check_interval: float = 90.0,  # Less frequent health checks
-        ping_timeout: float = 15.0,  # Increased for Docker network delays
-        # Circuit breaker settings
-        circuit_breaker_threshold: int = 5,
-        circuit_breaker_timeout: float = 60.0,
+        connection_timeout: float = 30.0,  # Increased timeout for Docker + network latency
+        request_timeout: float = 180.0,  # 3 minutes for KIMI API processing
+        # Health check settings - optimized for KIMI API response times
+        heartbeat_interval: float = 45.0,  # Balanced heartbeat interval
+        health_check_interval: float = 120.0,  # Less frequent health checks
+        ping_timeout: float = 20.0,  # Increased ping timeout
+        # Circuit breaker settings - more tolerant for KIMI API variability
+        circuit_breaker_threshold: int = 8,  # More tolerant threshold
+        circuit_breaker_timeout: float = 120.0,  # Longer cooldown period
         # Performance settings
         max_concurrent_requests: int = 100,
         enable_request_batching: bool = True,
@@ -278,6 +278,9 @@ class EnhancedWebSocketMCPClient:
                 
                 # Start background tasks
                 await self._start_background_tasks()
+                
+                # Small delay to ensure WebSocket is fully established
+                await asyncio.sleep(0.1)
                 
                 # Send connection initialization
                 await self._send_connection_init()
@@ -634,14 +637,19 @@ class EnhancedWebSocketMCPClient:
                     logger.debug("Connection not available for health monitoring")
                     break
                 
-                # Perform health check
-                health_ok = await self._perform_health_check()
-                
-                if not health_ok:
-                    logger.warning("Health check failed - connection may be stale")
-                    # Trigger reconnection
-                    asyncio.create_task(self._reconnect())
-                    break
+                # Perform health check with error tolerance
+                try:
+                    health_ok = await self._perform_health_check()
+                    
+                    if not health_ok:
+                        logger.warning("Health check failed - connection may be stale, will retry on next cycle")
+                        # Don't immediately trigger reconnection - wait for next cycle
+                        # This prevents unnecessary reconnections during heavy processing
+                        continue
+                except Exception as health_error:
+                    logger.warning(f"Health check error (non-critical): {health_error}")
+                    # Continue monitoring - health check failures shouldn't break the connection
+                    continue
                 
                 # Update performance metrics
                 self._update_performance_metrics()
@@ -656,17 +664,34 @@ class EnhancedWebSocketMCPClient:
                     break
     
     async def _perform_health_check(self) -> bool:
-        """Perform connection health check with optimized timeout"""
+        """Perform lightweight connection health check"""
         try:
-            # Send health check request with reduced timeout for faster detection
-            result = await self.send_request(
-                "health_check",
-                timeout=5.0,  # Reduced from 10.0s to 5.0s
-                use_batching=False
-            )
-            return result.get("status") == "healthy"
+            # Use a simple approach - just check if the WebSocket is open and responsive
+            # This avoids queuing behind other requests and is much faster
+            if not self._is_websocket_open():
+                return False
+            
+            # Try a simple ping instead of a full health check request
+            # This is much lighter weight and won't interfere with KIMI API calls
+            try:
+                ping_message = {
+                    "type": "ping",  
+                    "timestamp": datetime.now().isoformat(),
+                    "agent_id": self.agent_id
+                }
+                await asyncio.wait_for(
+                    self._send_raw_message(ping_message),
+                    timeout=10.0  # Short timeout for simple ping
+                )
+                return True
+            except asyncio.TimeoutError:
+                logger.debug("Health check ping timeout - connection may be busy")
+                return True  # Assume healthy if just busy (not necessarily failed)
+            except Exception:
+                return False
+                
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            logger.debug(f"Health check failed: {e}")
             return False
     
     def _update_performance_metrics(self):

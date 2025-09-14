@@ -183,7 +183,8 @@ class OptimizedNLPAgent:
         query: str,
         user_id: str,
         session_id: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        database_context: Optional[Dict[str, Any]] = None
     ) -> ProcessingResult:
         """
         Simplified unified query processing.
@@ -194,6 +195,16 @@ class OptimizedNLPAgent:
         
         try:
             logger.info(f"Processing query {query_id}: {query}")
+            
+            # Database context logging and validation
+            if database_context:
+                logger.info(f"Using database context for query {query_id}: {database_context.get('database_name', 'unknown')}")
+                if not self._validate_database_context(database_context):
+                    logger.warning(f"Invalid database context for query {query_id}: {database_context}")
+                    # Continue processing but log the issue
+            else:
+                logger.info(f"No database context provided for query {query_id}")
+            
             self.metrics["total_queries"] += 1
             
             # Step 1: Check semantic cache first
@@ -205,7 +216,7 @@ class OptimizedNLPAgent:
                     return self._create_cached_result(query_id, cached_result, start_time)
             
             # Step 2: Use unified processing (combines best of all paths)
-            result = await self._process_unified_path(query, user_id, session_id, context, query_id)
+            result = await self._process_unified_path(query, user_id, session_id, context, query_id, database_context)
             
             # Step 3: Cache result if successful
             if result.success and self.enable_semantic_caching:
@@ -238,7 +249,8 @@ class OptimizedNLPAgent:
         user_id: str,
         session_id: str,
         context: Optional[Dict[str, Any]],
-        query_id: str
+        query_id: str,
+        database_context: Optional[Dict[str, Any]] = None
     ) -> ProcessingResult:
         """
         Unified processing path combining all query types.
@@ -249,19 +261,26 @@ class OptimizedNLPAgent:
         try:
             logger.debug(f"Processing {query_id} via unified path")
             
-            # Step 1: Get schema context (cached for performance)
-            schema_context = await self._get_cached_schema_context()
+            # Step 1: Get schema context (cached for performance, database-aware)
+            schema_context = await self._get_cached_schema_context(database_context)
             
             # Step 2: Extract intent via MCP (with fallback)
             intent_data = await self._extract_intent_via_mcp(query, context)
             intent = self._create_query_intent(intent_data)
             
-            # Step 3: Generate SQL via MCP WebSocket
+            # Step 3: Generate SQL via MCP WebSocket (database-context aware)
             logger.info(f"Calling MCP generate_sql for query: {query}")
-            sql_result = await self.mcp_ops.generate_sql(
-                natural_language_query=query,
-                schema_info=self._format_schema_for_llm(schema_context)
-            )
+            sql_params = {
+                "natural_language_query": query,
+                "schema_info": self._format_schema_for_llm(schema_context)
+            }
+            
+            # Include database context if available
+            if database_context and database_context.get('database_name'):
+                logger.info(f"Including database context in SQL generation: {database_context['database_name']}")
+                sql_params["database_name"] = database_context['database_name']
+            
+            sql_result = await self.mcp_ops.generate_sql(**sql_params)
             logger.info(f"MCP SQL result: {sql_result}")
             
             # Step 4: Extract SQL from MCP response
@@ -503,23 +522,39 @@ class OptimizedNLPAgent:
         cache_key = hashlib.md5(query.encode()).hexdigest()
         await self.cache_manager.set("semantic", cache_key, cache_data, ttl=3600)
     
-    async def _get_cached_schema_context(self) -> Dict[str, Any]:
-        """Get schema context with intelligent caching"""
+    async def _get_cached_schema_context(self, database_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Get schema context with intelligent caching and database context awareness"""
         current_time = time.time()
         
-        # Check if cached schema is still valid
+        # Create cache key based on database context
+        cache_key = "default"
+        if database_context and database_context.get('database_name'):
+            cache_key = database_context['database_name']
+            logger.debug(f"Using database-specific schema cache key: {cache_key}")
+        
+        # Check if cached schema is still valid for this database
         if (self.schema_cache and 
-            current_time - self.last_schema_update < self.schema_cache_ttl):
+            current_time - self.last_schema_update < self.schema_cache_ttl and
+            getattr(self, 'schema_cache_key', None) == cache_key):
+            logger.debug(f"Using cached schema context for database: {cache_key}")
             return self.schema_cache
         
         # Fetch fresh schema context
         try:
-            schema_context = await self.mcp_ops.get_schema_context()
+            schema_params = {}
+            if database_context and database_context.get('database_name'):
+                schema_params['database'] = database_context['database_name']
+                logger.info(f"Fetching schema context for database: {database_context['database_name']}")
+            
+            schema_context = await self.mcp_ops.get_schema_context(**schema_params)
             self.schema_cache = schema_context
             self.last_schema_update = current_time
+            self.schema_cache_key = cache_key
+            
+            logger.debug(f"Schema context refreshed for database: {cache_key}")
             return schema_context
         except Exception as e:
-            logger.warning(f"Failed to fetch schema context: {e}")
+            logger.warning(f"Failed to fetch schema context for database {cache_key}: {e}")
             return self.schema_cache or {}
     
     def _format_schema_for_llm(self, schema_context: Dict[str, Any]) -> str:
@@ -904,6 +939,40 @@ class OptimizedNLPAgent:
                 ))
         
         return entities
+
+    def _validate_database_context(self, database_context: Dict[str, Any]) -> bool:
+        """
+        Validate database context for NLP agent processing.
+        
+        Args:
+            database_context: Database context to validate
+            
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not isinstance(database_context, dict):
+            logger.error("Database context must be a dictionary")
+            return False
+        
+        # Check for required fields
+        required_fields = ['database_name']
+        for field in required_fields:
+            if field not in database_context:
+                logger.error(f"Missing required field '{field}' in database context")
+                return False
+            
+            if not database_context[field]:
+                logger.error(f"Empty value for required field '{field}' in database context")
+                return False
+        
+        # Validate database name format
+        database_name = database_context['database_name']
+        if not isinstance(database_name, str) or len(database_name) == 0:
+            logger.error(f"Invalid database name: {database_name}")
+            return False
+        
+        logger.debug(f"Database context validation passed: {database_context}")
+        return True
 
     async def _extract_intent_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Extract financial intent using MCP server's LLM tools instead of direct API calls"""

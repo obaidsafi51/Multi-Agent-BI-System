@@ -12,11 +12,11 @@ class PerformanceConfig:
     WEBSOCKET_CONFIG = {
         "initial_reconnect_delay": 0.5,      # Fast initial reconnection
         "max_reconnect_delay": 30.0,         # Reasonable max delay
-        "connection_timeout": 15.0,          # Increased connection timeout
-        "request_timeout": 30.0,             # Increased request timeout
-        "heartbeat_interval": 20.0,          # Frequent heartbeats for quick detection
-        "health_check_interval": 45.0,       # Regular health checks
-        "ping_timeout": 8.0,                 # Increased ping timeout
+        "connection_timeout": 30.0,          # Increased connection timeout for Docker
+        "request_timeout": 180.0,            # Extended timeout for KIMI API processing
+        "heartbeat_interval": 45.0,          # Balanced heartbeat interval
+        "health_check_interval": 300.0,      # Less frequent health checks (5 minutes)
+        "ping_timeout": 20.0,                # Increased ping timeout
         "enable_request_batching": True,
         "batch_size": 5,
         "batch_timeout": 0.1

@@ -27,9 +27,9 @@ class HybridMCPOperationsAdapter:
         # HTTP settings  
         http_url: str = "http://tidb-mcp-server:8000",
         agent_id: str = "nlp-agent",
-        # Fallback settings
-        ws_failure_threshold: int = 3,
-        ws_retry_cooldown: float = 60.0,
+        # Fallback settings - more aggressive WebSocket preference
+        ws_failure_threshold: int = 10,  # Increased threshold - prefer WebSocket longer
+        ws_retry_cooldown: float = 30.0,  # Reduced cooldown - retry WebSocket sooner
         prefer_websocket: bool = True
     ):
         self.agent_id = agent_id
@@ -41,17 +41,19 @@ class HybridMCPOperationsAdapter:
         self.websocket_client = EnhancedWebSocketMCPClient(
             ws_url=ws_url,
             agent_id=agent_id,
-            connection_timeout=20.0,  # Optimized timeouts
-            request_timeout=120.0,    # Increased for KIMI API processing
-            heartbeat_interval=60.0,  # Adjusted to be less than request timeout
-            health_check_interval=90.0,
-            ping_timeout=15.0
+            connection_timeout=30.0,  # Increased for stability
+            request_timeout=180.0,    # Increased for KIMI API processing (3 minutes)
+            heartbeat_interval=45.0,  # More frequent than health checks
+            health_check_interval=300.0,  # Much less frequent health checks (5 minutes)
+            ping_timeout=20.0,  # Increased ping timeout
+            circuit_breaker_threshold=8,  # More tolerant to occasional failures
+            circuit_breaker_timeout=120.0  # Longer cooldown
         )
         
         self.http_client = HTTPMCPClient(
             base_url=http_url,
             agent_id=agent_id,
-            timeout=30.0,
+            timeout=180.0,  # Match WebSocket timeout for consistency
             max_retries=2
         )
         
@@ -127,7 +129,7 @@ class HybridMCPOperationsAdapter:
             self.stats["websocket_requests"] += 1
             self.stats["websocket_successes"] += 1
             
-            logger.debug(f"WebSocket request successful: {method}")
+            logger.info(f"✅ WebSocket request successful: {method} (mode: websocket)")
             return result
             
         except Exception as e:
@@ -191,7 +193,7 @@ class HybridMCPOperationsAdapter:
             self.stats["http_requests"] += 1
             self.stats["http_successes"] += 1
             
-            logger.debug(f"HTTP request successful: {method}")
+            logger.info(f"📡 HTTP request successful: {method} (mode: http)")
             return result
             
         except Exception as e:
@@ -303,6 +305,14 @@ class HybridMCPOperationsAdapter:
         if databases:
             params["databases"] = databases
         return await self.send_request("build_schema_context", params)
+    
+    async def get_schema_context(self, database: str = "default") -> Dict[str, Any]:
+        """Get schema context for a database"""
+        try:
+            return await self.build_schema_context([database])
+        except Exception as e:
+            logger.error(f"Failed to get schema context for {database}: {e}")
+            return {"error": str(e), "schema_context": None}
     
     async def health_check(self) -> Dict[str, Any]:
         """Check server health"""

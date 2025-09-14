@@ -187,7 +187,7 @@ class QueryExecutor:
 
     def __init__(self, db_manager: DatabaseManager | None = None,
                  cache_manager: CacheManager | None = None,
-                 max_timeout: int = 30, max_result_rows: int = 1000):
+                 max_timeout: int = 180, max_result_rows: int = 1000):
         """
         Initialize the query executor.
         

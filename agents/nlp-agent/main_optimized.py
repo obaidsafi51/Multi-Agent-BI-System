@@ -66,7 +66,7 @@ class ProcessRequest(BaseModel):
     database_context: Optional[Dict[str, Any]] = Field(None, description="Database context for query processing")
     force_comprehensive: bool = Field(False, description="Force comprehensive processing path")
     use_cache: bool = Field(True, description="Enable semantic caching")
-    timeout: int = Field(30, description="Request timeout in seconds")
+    timeout: int = Field(180, description="Request timeout in seconds")
 
 class ProcessResponse(BaseModel):
     query: str
@@ -137,6 +137,9 @@ async def startup_event():
         mcp_server_ws_url = os.getenv("MCP_SERVER_WS_URL", "ws://tidb-mcp-server:8000/ws")
         mcp_server_http_url = os.getenv("MCP_SERVER_HTTP_URL", "http://tidb-mcp-server:8000")
         
+        # Get WebSocket configuration from performance config
+        websocket_config = perf_config["websocket"]
+        
         # Initialize hybrid MCP client (WebSocket-first with HTTP fallback)
         hybrid_mcp_client = HybridMCPOperationsAdapter(
             ws_url=mcp_server_ws_url,
@@ -147,9 +150,15 @@ async def startup_event():
             prefer_websocket=True
         )
         
-        # Also initialize the legacy WebSocket client for backward compatibility
-        websocket_config = perf_config["websocket"]
+        # Apply performance configuration to both WebSocket and HTTP clients
         websocket_client = hybrid_mcp_client.websocket_client
+        websocket_client.request_timeout = websocket_config["request_timeout"]
+        websocket_client.heartbeat_interval = websocket_config["heartbeat_interval"] 
+        websocket_client.health_check_interval = websocket_config["health_check_interval"]
+        websocket_client.ping_timeout = websocket_config["ping_timeout"]
+        
+        # Apply HTTP timeout configuration
+        hybrid_mcp_client.http_timeout = websocket_config["request_timeout"]
         
         # Register connection event handler
         async def connection_event_handler(event_type, stats):

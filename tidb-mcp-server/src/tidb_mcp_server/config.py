@@ -15,7 +15,7 @@ class LLMConfig(BaseModel):
     model: str = Field(default="moonshot-v1-8k", description="LLM model name")
     max_tokens: int = Field(default=4000, description="Maximum tokens per request")
     temperature: float = Field(default=0.7, description="Temperature for text generation")
-    timeout: int = Field(default=30, description="Request timeout in seconds")
+    timeout: int = Field(default=180, description="Request timeout in seconds")
     
     @field_validator('temperature')
     @classmethod
@@ -73,8 +73,8 @@ class DatabaseConfig(BaseModel):
     ssl_verify_cert: bool = Field(default=True, description="Verify SSL certificate")
     ssl_verify_identity: bool = Field(default=True, description="Verify SSL identity")
     connect_timeout: int = Field(default=10, description="Connection timeout in seconds")
-    read_timeout: int = Field(default=30, description="Read timeout in seconds")
-    write_timeout: int = Field(default=30, description="Write timeout in seconds")
+    read_timeout: int = Field(default=180, description="Read timeout in seconds")
+    write_timeout: int = Field(default=180, description="Write timeout in seconds")
     
     @field_validator('port')
     @classmethod
@@ -99,7 +99,7 @@ class MCPServerConfig(BaseModel):
     name: str = Field(default="universal-mcp-server", description="Server name")
     version: str = Field(default="1.0.0", description="Server version")
     max_connections: int = Field(default=10, description="Maximum concurrent connections")
-    request_timeout: int = Field(default=30, description="Request timeout in seconds")
+    request_timeout: int = Field(default=180, description="Request timeout in seconds")
     
     @field_validator('max_connections')
     @classmethod
@@ -145,7 +145,7 @@ class CacheConfig(BaseModel):
 class SecurityConfig(BaseModel):
     """Security configuration."""
     
-    max_query_timeout: int = Field(default=30, description="Maximum query timeout in seconds")
+    max_query_timeout: int = Field(default=180, description="Maximum query timeout in seconds")
     max_sample_rows: int = Field(default=100, description="Maximum sample rows to return")
     allowed_query_types: list[str] = Field(
         default=["SELECT"], 
@@ -201,7 +201,7 @@ class ServerConfig(BaseSettings):
     llm_model: str = Field(default="moonshot-v1-8k", env="LLM_MODEL")
     llm_max_tokens: int = Field(default=4000, env="LLM_MAX_TOKENS")
     llm_temperature: float = Field(default=0.7, env="LLM_TEMPERATURE")
-    llm_timeout: int = Field(default=30, env="LLM_TIMEOUT")
+    llm_timeout: int = Field(default=180, env="LLM_TIMEOUT")
     
     # Tools configuration
     enabled_tools_str: str = Field(
@@ -222,7 +222,7 @@ class ServerConfig(BaseSettings):
     mcp_server_name: str = Field(default="universal-mcp-server", env="MCP_SERVER_NAME")
     mcp_server_version: str = Field(default="1.0.0", env="MCP_SERVER_VERSION")
     mcp_max_connections: int = Field(default=10, env="MCP_MAX_CONNECTIONS")
-    mcp_request_timeout: int = Field(default=30, env="MCP_REQUEST_TIMEOUT")
+    mcp_request_timeout: int = Field(default=180, env="MCP_REQUEST_TIMEOUT")
     
     # Cache configuration
     cache_enabled: bool = Field(default=True, env="CACHE_ENABLED")
@@ -230,7 +230,7 @@ class ServerConfig(BaseSettings):
     cache_max_size: int = Field(default=1000, env="CACHE_MAX_SIZE")
     
     # Security configuration
-    max_query_timeout: int = Field(default=30, env="MAX_QUERY_TIMEOUT")
+    max_query_timeout: int = Field(default=180, env="MAX_QUERY_TIMEOUT")
     max_sample_rows: int = Field(default=100, env="MAX_SAMPLE_ROWS")
     rate_limit_requests_per_minute: int = Field(default=60, env="RATE_LIMIT_RPM")
     
