@@ -161,7 +161,7 @@ class TestSchemaDiscovery:
         
         with patch.object(self.manager.client, 'get_table_schema_detailed', new_callable=AsyncMock) as mock_detailed:
             mock_detailed.return_value = DetailedTableSchema(
-                schema=TableSchema(
+                table_schema=TableSchema(
                     database="test_db",
                     table="users",
                     columns=[

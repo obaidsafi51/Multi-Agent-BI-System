@@ -158,7 +158,7 @@ class TestEndToEndValidationWorkflows:
                         ]
                     
                     return DetailedTableSchema(
-                        schema=schema,
+                        table_schema=schema,
                         sample_data=sample_data,
                         discovery_time_ms=150
                     )
@@ -342,7 +342,7 @@ class TestEndToEndValidationWorkflows:
         async def updated_mock_get_schema(database: str, table: str):
             if database == "financial_db" and table == "financial_overview":
                 return DetailedTableSchema(
-                    schema=updated_schema,
+                    table_schema=updated_schema,
                     sample_data=[],
                     discovery_time_ms=150
                 )

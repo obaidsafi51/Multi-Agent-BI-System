@@ -142,7 +142,7 @@ class SchemaDiscoveryResult:
 @dataclass
 class DetailedTableSchema:
     """Detailed table schema with additional metadata."""
-    schema: TableSchema
+    table_schema: TableSchema
     sample_data: Optional[List[Dict[str, Any]]] = None
     statistics: Optional[Dict[str, Any]] = None
     relationships: Optional[List[Dict[str, Any]]] = None
