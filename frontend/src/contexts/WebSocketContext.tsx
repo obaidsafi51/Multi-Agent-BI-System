@@ -40,6 +40,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   const isConnectingRef = useRef(false);
   const activeSocketRef = useRef<WebSocket | null>(null);
+  const autoConnectAttemptedRef = useRef(false);
 
   const connect = useCallback(async (userId: string) => {
     if (isConnectingRef.current) {
@@ -63,8 +64,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         connectionCount: prev.connectionCount + 1
       }));
 
-      const wsUrl = `ws://localhost:8080/ws/chat/${userId}`;
+      const wsBaseUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080';
+      const wsUrl = `${wsBaseUrl}/ws/query/${userId}`;
       console.log(`WebSocketContext: Connecting to ${wsUrl} (ID: ${connectionId})`);
+      console.log(`WebSocketContext: Environment NEXT_PUBLIC_WS_URL:`, process.env.NEXT_PUBLIC_WS_URL);
+      console.log(`WebSocketContext: Final WebSocket URL:`, wsUrl);
 
       const socket = await websocketManager.getConnection(wsUrl);
       
@@ -79,14 +83,38 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
       activeSocketRef.current = socket;
 
+      // Check if socket is already open (from manager's connection)
+      if (socket.readyState === WebSocket.OPEN) {
+        console.log(`WebSocketContext: Socket already open (ID: ${connectionId})`);
+        console.log(`WebSocketContext: Setting state to CONNECTED`);
+        setState(prev => {
+          console.log(`WebSocketContext: Previous state:`, prev);
+          const newState = {
+            ...prev,
+            connectionState: WebSocketConnectionState.CONNECTED,
+            isConnected: true,
+            lastConnectedAt: Date.now()
+          };
+          console.log(`WebSocketContext: New state:`, newState);
+          return newState;
+        });
+        isConnectingRef.current = false;
+      }
+
       socket.onopen = () => {
         console.log(`WebSocketContext: Connected (ID: ${connectionId})`);
-        setState(prev => ({
-          ...prev,
-          connectionState: WebSocketConnectionState.CONNECTED,
-          isConnected: true,
-          lastConnectedAt: Date.now()
-        }));
+        console.log(`WebSocketContext: Setting state to CONNECTED`);
+        setState(prev => {
+          console.log(`WebSocketContext: Previous state:`, prev);
+          const newState = {
+            ...prev,
+            connectionState: WebSocketConnectionState.CONNECTED,
+            isConnected: true,
+            lastConnectedAt: Date.now()
+          };
+          console.log(`WebSocketContext: New state:`, newState);
+          return newState;
+        });
         isConnectingRef.current = false;
       };
 
@@ -124,6 +152,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   const disconnect = useCallback(() => {
     console.log('WebSocketContext: Disconnect requested');
+    console.trace('WebSocketContext: Disconnect call stack'); // Add stack trace to see what's calling disconnect
     isConnectingRef.current = false;
     
     if (activeSocketRef.current) {
@@ -150,6 +179,98 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       connectionCount: 0
     }));
   }, []);
+
+  // Auto-connect WebSocket on component mount (page load)
+  React.useEffect(() => {
+    if (!autoConnectAttemptedRef.current && !state.isConnected && !isConnectingRef.current) {
+      autoConnectAttemptedRef.current = true;
+      
+      // Generate a default user ID for the session
+      // Always generate a new session ID on page load to avoid conflicts
+      const defaultUserId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Store the new user ID (this will replace any existing one)
+      sessionStorage.setItem('websocket_user_id', defaultUserId);
+      
+      // Also store a session timestamp to help with debugging
+      sessionStorage.setItem('websocket_session_started', Date.now().toString());
+      
+      console.log('WebSocketContext: Auto-connecting on page load with user ID:', defaultUserId);
+      
+      // Auto-connect after a short delay to ensure everything is initialized
+      const connectTimeout = setTimeout(() => {
+        connect(defaultUserId);
+      }, 1000);
+
+      // Cleanup function to handle page unload/reload
+      const handleBeforeUnload = () => {
+        console.log('WebSocketContext: Page unloading, cleaning up connection');
+        disconnect();
+      };
+
+      // Add event listeners
+      window.addEventListener('beforeunload', handleBeforeUnload);
+
+      // Cleanup function - don't disconnect in development mode re-renders
+      return () => {
+        clearTimeout(connectTimeout);
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+        // Don't disconnect on cleanup - let the WebSocket stay connected
+        // The connection will be properly cleaned up on page unload via beforeunload
+        console.log('WebSocketContext: Effect cleanup - preserving connection');
+      };
+    }
+  }, [connect, disconnect]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Note: Intentionally excluding state.isConnected to prevent re-running when connection state changes
+
+  // Separate effect for visibility change handling - only when connected
+  React.useEffect(() => {
+    if (!state.isConnected) return;
+
+    let disconnectTimeout: NodeJS.Timeout | null = null;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        console.log('WebSocketContext: Page hidden, scheduling disconnect in 30 seconds...');
+        // Delay disconnect for BI systems where users might switch tabs during long operations
+        disconnectTimeout = setTimeout(() => {
+          console.log('WebSocketContext: Page hidden timeout reached, cleaning up connection');
+          disconnect();
+        }, 30000); // 30 second delay
+      } else if (document.visibilityState === 'visible') {
+        // Cancel pending disconnect if page becomes visible again
+        if (disconnectTimeout) {
+          console.log('WebSocketContext: Page visible, cancelling scheduled disconnect');
+          clearTimeout(disconnectTimeout);
+          disconnectTimeout = null;
+        }
+        
+        // Reconnect if disconnected
+        if (!state.isConnected) {
+          console.log('WebSocketContext: Page visible, reconnecting...');
+          // Reset auto-connect flag to allow reconnection
+          autoConnectAttemptedRef.current = false;
+          setTimeout(() => {
+            if (!state.isConnected && !isConnectingRef.current) {
+              const userId = sessionStorage.getItem('websocket_user_id') || 
+                             `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              connect(userId);
+            }
+          }, 500);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      // Clear any pending disconnect timeout
+      if (disconnectTimeout) {
+        clearTimeout(disconnectTimeout);
+      }
+    };
+  }, [state.isConnected, connect, disconnect]);
 
   const contextValue: WebSocketContextValue = {
     ...state,

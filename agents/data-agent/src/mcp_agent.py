@@ -421,8 +421,9 @@ class MCPDataAgent:
             
             # Execute raw SQL query through MCP
             mcp_result = await self.mcp_client.execute_query(
-                sql_query,
-                database=query_context.get('database') if query_context else self.default_database
+                query=sql_query,
+                timeout=30,
+                use_cache=execution_config.get('use_cache', True) if execution_config else True
             )
             
             self.metrics['queries_processed'] += 1

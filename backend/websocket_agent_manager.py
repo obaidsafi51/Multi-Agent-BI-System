@@ -48,6 +48,8 @@ class WebSocketConnection:
     message_count: int = 0
     error_count: int = 0
     last_error: Optional[str] = None
+    pending_responses: Dict[str, asyncio.Future] = field(default_factory=dict)
+    recv_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 @dataclass 
@@ -93,7 +95,7 @@ class WebSocketAgentManager:
             name="nlp-agent",
             agent_type=AgentType.NLP,
             http_url=os.getenv("NLP_AGENT_URL", "http://nlp-agent:8001"),
-            websocket_url=os.getenv("NLP_AGENT_WS_URL", "ws://nlp-agent:8011"),
+            websocket_url=os.getenv("NLP_AGENT_WS_URL", "ws://nlp-agent:8001/ws"),
             use_websocket=os.getenv("NLP_AGENT_USE_WS", "true").lower() == "true",
             circuit_breaker_config={
                 "failure_threshold": 3,
@@ -135,6 +137,9 @@ class WebSocketAgentManager:
             
             # Initialize connections
             self.connections[agent_type] = WebSocketConnection()
+        
+        # Task to handle incoming messages
+        self.message_router_tasks: Dict[AgentType, asyncio.Task] = {}
     
     async def start(self):
         """Start the WebSocket agent manager with delayed connection attempts"""
@@ -176,7 +181,11 @@ class WebSocketAgentManager:
         self._shutdown_event.set()
         
         # Cancel all tasks
-        for task in list(self.heartbeat_tasks.values()) + list(self.reconnect_tasks.values()):
+        all_tasks = (list(self.heartbeat_tasks.values()) + 
+                    list(self.reconnect_tasks.values()) + 
+                    list(self.message_router_tasks.values()))
+        
+        for task in all_tasks:
             if not task.done():
                 task.cancel()
                 try:
@@ -226,19 +235,19 @@ class WebSocketAgentManager:
                     await self._connect_agent(agent_type)
                 
                 if connection.websocket and connection.state == ConnectionState.CONNECTED:
+                    # Start message router task if not already running
+                    if agent_type not in self.message_router_tasks or self.message_router_tasks[agent_type].done():
+                        self.message_router_tasks[agent_type] = asyncio.create_task(
+                            self._message_router(agent_type)
+                        )
+                    
+                    # Wait for connection to be lost
                     try:
-                        # Listen for messages
-                        async for message in connection.websocket:
-                            if isinstance(message, str):
-                                await self._handle_message(agent_type, message)
-                            connection.message_count += 1
-                            
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.warning(f"WebSocket connection to {config.name} closed")
-                        connection.state = ConnectionState.DISCONNECTED
-                        
+                        await self.message_router_tasks[agent_type]
+                    except asyncio.CancelledError:
+                        break
                     except Exception as e:
-                        logger.error(f"Error in WebSocket connection to {config.name}: {e}")
+                        logger.error(f"Message router failed for {config.name}: {e}")
                         connection.state = ConnectionState.FAILED
                         connection.last_error = str(e)
                         connection.error_count += 1
@@ -252,6 +261,48 @@ class WebSocketAgentManager:
             except Exception as e:
                 logger.error(f"Unexpected error in connection maintenance for {config.name}: {e}")
                 await asyncio.sleep(config.reconnect_delay)
+    
+    async def _message_router(self, agent_type: AgentType):
+        """Central message router that handles all incoming WebSocket messages"""
+        config = self.agents[agent_type]
+        connection = self.connections[agent_type]
+        
+        try:
+            async for message in connection.websocket:
+                if isinstance(message, str):
+                    connection.message_count += 1
+                    try:
+                        data = json.loads(message)
+                        message_id = data.get("response_to")
+                        
+                        # If this is a response to a pending request, complete the future
+                        if message_id and message_id in connection.pending_responses:
+                            future = connection.pending_responses.pop(message_id)
+                            if not future.done():
+                                future.set_result(data)
+                        else:
+                            # Handle other message types
+                            await self._handle_message(agent_type, message)
+                            
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON message from {agent_type.value}: {message}")
+                    except Exception as e:
+                        logger.error(f"Error processing message from {agent_type.value}: {e}")
+                        
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning(f"WebSocket connection to {config.name} closed")
+            connection.state = ConnectionState.DISCONNECTED
+        except Exception as e:
+            logger.error(f"Error in message router for {config.name}: {e}")
+            connection.state = ConnectionState.FAILED
+            connection.last_error = str(e)
+            connection.error_count += 1
+        finally:
+            # Cancel any pending responses
+            for future in connection.pending_responses.values():
+                if not future.done():
+                    future.cancel()
+            connection.pending_responses.clear()
     
     async def _connect_agent(self, agent_type: AgentType):
         """Connect to agent WebSocket with better error handling"""
@@ -437,47 +488,26 @@ class WebSocketAgentManager:
             message["message_id"] = message_id
             message["timestamp"] = time.time()
             
-            # Send message
-            await connection.websocket.send(json.dumps(message))
+            # Create a future to wait for the response
+            response_future = asyncio.Future()
+            connection.pending_responses[message_id] = response_future
             
-            # Wait for response with proper correlation
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                try:
-                    response_raw = await asyncio.wait_for(
-                        connection.websocket.recv(), 
-                        timeout=2.0  # Shorter timeout for each recv attempt
-                    )
-                    response = json.loads(response_raw)
-                    
-                    # Check if this is the response we're waiting for
-                    response_to = response.get("response_to")
-                    if response_to == message_id:
-                        return response
-                        
-                    # Handle other message types (heartbeat, etc.)
-                    msg_type = response.get("type", "unknown")
-                    if msg_type == "heartbeat_response":
-                        connection.last_heartbeat = time.time()
-                        continue
-                    elif msg_type in ["progress_update", "connection_established"]:
-                        # Log progress updates but continue waiting
-                        logger.debug(f"Progress from {agent_type.value}: {response.get('status', 'unknown')}")
-                        continue
-                    
-                    # If it's not our response, continue waiting
-                    logger.debug(f"Received non-matching response from {agent_type.value}: {msg_type}")
-                        
-                except asyncio.TimeoutError:
-                    # Continue waiting if we haven't reached the overall timeout
-                    continue
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Received invalid JSON from {agent_type.value}: {e}")
-                    continue
-                except websockets.exceptions.ConnectionClosed:
-                    raise ConnectionError(f"WebSocket connection to {agent_type.value} closed")
-            
-            raise TimeoutError(f"No response received from {agent_type.value} within {timeout}s")
+            try:
+                # Send message
+                await connection.websocket.send(json.dumps(message))
+                
+                # Wait for response
+                response = await asyncio.wait_for(response_future, timeout=timeout)
+                return response
+                
+            except asyncio.TimeoutError:
+                # Clean up pending response
+                connection.pending_responses.pop(message_id, None)
+                raise TimeoutError(f"No response received from {agent_type.value} within {timeout}s")
+            except Exception as e:
+                # Clean up pending response
+                connection.pending_responses.pop(message_id, None)
+                raise e
         
         if circuit_breaker:
             return await circuit_breaker.call(_send)

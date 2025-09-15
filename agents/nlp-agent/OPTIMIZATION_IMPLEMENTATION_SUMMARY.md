@@ -22,7 +22,7 @@ Successfully implemented comprehensive optimizations for the NLP Agent to achiev
 - **Event Handling**: Real-time event broadcasting and subscription
 - **Performance Gain**: ~30% reduction in communication overhead
 
-### 3. Intelligent Query Classification (`query_classifier.py`)
+### 3. Unified Query Processing (Integrated)
 
 - **Fast Path**: Simple queries processed in <2 seconds
 - **Standard Path**: Balanced processing for most queries
@@ -52,11 +52,11 @@ agents/nlp-agent/
 ├── src/
 │   ├── optimized_kimi_client.py     # Parallel KIMI processing
 │   ├── websocket_mcp_client.py      # WebSocket client with batching
-│   ├── query_classifier.py          # Intelligent query routing
+│   ├── hybrid_mcp_operations_adapter.py # WebSocket + HTTP failover
 │   ├── optimized_nlp_agent.py       # Main optimized agent
 │   └── enhanced_cache_manager.py    # Advanced semantic caching
 ├── main_optimized.py                # Enhanced FastAPI server
-├── config_optimized.py              # Configuration management
+├── performance_config.py            # Performance configuration
 └── pyproject.toml                   # Updated dependencies
 
 tidb-mcp-server/
@@ -147,7 +147,7 @@ tidb-mcp-server/
 
 ```bash
 # Copy optimized configuration
-cp config_optimized.py .env_optimized
+cp performance_config.py .env_optimized
 
 # Update environment variables
 export MCP_SERVER_WS_URL="ws://localhost:8000/ws"

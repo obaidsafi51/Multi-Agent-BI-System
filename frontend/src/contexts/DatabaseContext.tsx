@@ -102,7 +102,8 @@ export const DatabaseContextProvider: React.FC<DatabaseContextProviderProps> = (
     setError(null);
 
     try {
-      const response = await fetch('/api/database/list');
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+      const response = await fetch(`${apiUrl}/api/database/list`);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch databases: ${response.statusText}`);
@@ -136,7 +137,8 @@ export const DatabaseContextProvider: React.FC<DatabaseContextProviderProps> = (
     }
 
     try {
-      const response = await fetch('/api/database/select', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+      const response = await fetch(`${apiUrl}/api/database/select`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

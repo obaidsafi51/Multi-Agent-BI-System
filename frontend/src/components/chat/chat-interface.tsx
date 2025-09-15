@@ -8,12 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Send, ThumbsUp, ThumbsDown, Sparkles, BarChart3, TrendingUp, PieChart, Activity } from "lucide-react";
 import { ChatMessage, QuerySuggestion, UserFeedback } from "@/types/dashboard";
-import { QueryProgressStatus } from "@/types/websocket";
+import { QueryProgressStatus, WebSocketConnectionState } from "@/types/websocket";
 import { motion, AnimatePresence } from "framer-motion";
 import { DatabaseSetupButton } from "../database-setup-button";
 import { QueryProgressDisplay } from "../query-progress-display";
 import { StreamingResultDisplay } from "../streaming-result-display";
-import { WebSocketConnectionControl } from "../websocket-connection-control";
 import { useWebSocketClient } from "@/hooks/useWebSocketClient";
 import { useGlobalWebSocket } from "@/contexts/WebSocketContext";
 import { useDatabaseContext } from "@/contexts/DatabaseContext";
@@ -55,37 +54,17 @@ export function ChatInterface({
   // Use global WebSocket context for connection persistence
   const globalWebSocket = useGlobalWebSocket();
   
-  // WebSocket client (fallback for compatibility)
+  // WebSocket client (temporary - disable cleanup to avoid conflicts with global context)
   const webSocketClient = useWebSocketClient({ 
     user_id: userId || sessionId || 'default_user',
-    url: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+    url: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080',
+    disableCleanup: true  // Prevent this hook from interfering with global WebSocket context
   });
 
   // Track active queries for progress display
   const [activeQueryIds, setActiveQueryIds] = useState<Set<string>>(new Set());
 
-  // Manual WebSocket connection management using global context
-  const handleWebSocketConnect = () => {
-    if (enableWebSocket) {
-      const effectiveUserId = userId || sessionId || 'default_user';
-      console.log('Manual WebSocket connection requested via global context');
-      globalWebSocket.connect(effectiveUserId);
-    }
-  };
-
-  const handleWebSocketDisconnect = () => {
-    console.log('Manual WebSocket disconnection requested via global context');
-    globalWebSocket.disconnect();
-  };
-
-  const handleWebSocketReconnect = () => {
-    if (enableWebSocket) {
-      const effectiveUserId = userId || sessionId || 'default_user';
-      console.log('Manual WebSocket reconnection requested via global context');
-      globalWebSocket.disconnect();
-      setTimeout(() => globalWebSocket.connect(effectiveUserId), 500);
-    }
-  };
+  // WebSocket is now auto-connected via WebSocketContext on page load
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -270,16 +249,20 @@ export function ChatInterface({
                 }}
               />
               
-              {/* WebSocket Connection Control */}
+              {/* WebSocket Connection Status (read-only) - Auto-connects on page load */}
               {enableWebSocket && (
-                <WebSocketConnectionControl
-                  connectionState={globalWebSocket.connectionState}
-                  isConnected={globalWebSocket.isConnected}
-                  onConnect={handleWebSocketConnect}
-                  onDisconnect={handleWebSocketDisconnect}
-                  onReconnect={handleWebSocketReconnect}
-                  compact={true}
-                />
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <div className={`w-2 h-2 rounded-full ${
+                    globalWebSocket.isConnected ? 'bg-green-500' : 
+                    globalWebSocket.connectionState === WebSocketConnectionState.CONNECTING ? 'bg-yellow-500 animate-pulse' : 
+                    'bg-red-500'
+                  }`}></div>
+                  <span>
+                    {globalWebSocket.isConnected ? 'Connected' : 
+                     globalWebSocket.connectionState === WebSocketConnectionState.CONNECTING ? 'Connecting...' : 
+                     'Disconnected'}
+                  </span>
+                </div>
               )}
             </div>
           )}

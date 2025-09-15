@@ -5,6 +5,7 @@ This is the high-performance Natural Language Processing (NLP) Agent for the AI-
 ## 🚀 Key Features
 
 ### Performance & Optimization
+
 - **Sub-millisecond response times** for cached queries (up to 1,277x faster)
 - **Intelligent semantic caching** with multi-level cache hierarchy
 - **Fast-path processing** for simple queries
@@ -12,38 +13,45 @@ This is the high-performance Natural Language Processing (NLP) Agent for the AI-
 - **Adaptive cache TTL** based on query characteristics
 
 ### Connectivity & Reliability
+
 - **Persistent WebSocket connections** to MCP server
 - **Enhanced connection management** with circuit breaker pattern
 - **Automatic reconnection** with exponential backoff
 - **Health monitoring** and performance analytics
 
 ### Query Intelligence
-- **Query classification** with fast-path detection
+
+- **Unified query processing** for optimal performance
 - **Financial entity recognition** and intent extraction
 - **Context building** for multi-agent communication
-- **Ambiguity detection** and clarification suggestions
+- **Advanced semantic caching** for instant responses
 
 ## 🏗 Architecture
 
 ### Core Components
 
 1. **OptimizedNLPAgent** (`src/optimized_nlp_agent.py`)
+
    - Main orchestrator with parallel processing
    - WebSocket connectivity and caching integration
 
 2. **OptimizedKimiClient** (`src/optimized_kimi_client.py`)
+
    - High-performance KIMI API client with connection pooling
    - Retry logic and error handling
 
 3. **WebSocketMCPClient** (`src/websocket_mcp_client.py`)
+
    - Persistent WebSocket connections to MCP server
    - Real-time communication and event handling
 
-4. **QueryClassifier** (`src/query_classifier.py`)
-   - Smart query complexity analysis
-   - Fast-path routing for simple queries
+4. **HybridMCPOperationsAdapter** (`src/hybrid_mcp_operations_adapter.py`)
+
+   - WebSocket-first with HTTP fallback communication
+   - Intelligent failover for maximum reliability
 
 5. **PerformanceOptimizer** (`src/performance_optimizer.py`)
+
    - Multi-level caching with semantic similarity
    - Performance analytics and optimization
 
@@ -169,10 +177,7 @@ Access real-time metrics at `GET /performance`:
     "average_response_time_seconds": 0.0048,
     "websocket_connected": true
   },
-  "recommendations": [
-    "Performance is excellent",
-    "Cache hit rate above target"
-  ]
+  "recommendations": ["Performance is excellent", "Cache hit rate above target"]
 }
 ```
 
@@ -198,7 +203,7 @@ python test_performance_optimization.py
 curl -X POST http://localhost:8001/process \
   -d '{"query": "Show me sales", "context": {}}'
 
-# Test complex query  
+# Test complex query
 curl -X POST http://localhost:8001/process \
   -d '{"query": "Compare quarterly revenue trends...", "context": {}}'
 
@@ -217,17 +222,20 @@ curl http://localhost:8001/performance | jq '.'
 ## 📚 Supported Query Types
 
 ### Financial Metrics
+
 - Revenue, sales, profit analysis
-- Cash flow and budget queries  
+- Cash flow and budget queries
 - ROI and performance metrics
 - Financial ratios and KPIs
 
 ### Time-based Queries
+
 - Quarterly/monthly comparisons (Q1 2024, YTD, etc.)
 - Historical trends and forecasts
 - Period-over-period analysis
 
 ### Example Queries
+
 ```
 "Show me total sales for Q1 2024"           → 0.000s (cached)
 "Compare revenue this quarter vs last"      → 0.006s (first time)
@@ -241,15 +249,16 @@ curl http://localhost:8001/performance | jq '.'
 
 ```
 src/
-├── optimized_nlp_agent.py     # Main agent with parallel processing
-├── optimized_kimi_client.py   # High-performance KIMI client
-├── websocket_mcp_client.py    # WebSocket connectivity
-├── query_classifier.py        # Query analysis and routing  
-├── performance_optimizer.py   # Caching and optimization
-├── cache_manager.py          # Advanced cache management
-├── enhanced_monitoring.py     # Performance monitoring
-├── context_builder.py        # Agent communication
-└── models.py                 # Data models
+├── optimized_nlp_agent.py       # Main agent with unified processing
+├── optimized_kimi_client.py     # High-performance KIMI client
+├── enhanced_websocket_client.py # Enhanced WebSocket connectivity
+├── hybrid_mcp_operations_adapter.py # WebSocket + HTTP failover
+├── performance_optimizer.py     # Caching and optimization
+├── cache_manager.py            # Advanced cache management
+├── enhanced_monitoring.py       # Performance monitoring
+├── context_builder.py          # Agent communication
+├── http_mcp_client.py          # HTTP MCP client for fallback
+└── models.py                   # Data models
 ```
 
 ### Performance Tuning
@@ -257,11 +266,13 @@ src/
 Environment-specific optimization:
 
 **Development Mode:**
+
 - Lower cache thresholds for faster iteration
 - More frequent health checks
 - Detailed logging
 
-**Production Mode:**  
+**Production Mode:**
+
 - Larger cache sizes (2000+ entries)
 - Higher similarity thresholds for precision
 - Optimized connection timeouts
@@ -271,11 +282,13 @@ Environment-specific optimization:
 ### Common Issues
 
 1. **Slow Response Times**
+
    - Check `/performance` endpoint
    - Verify WebSocket connectivity
    - Review cache hit rates
 
 2. **Connection Issues**
+
    - Verify MCP server availability
    - Check network connectivity
    - Review timeout settings
@@ -288,7 +301,7 @@ Environment-specific optimization:
 ### Monitoring
 
 - Performance dashboard: `GET /performance`
-- Health status: `GET /health`  
+- Health status: `GET /health`
 - Container logs: `docker compose logs nlp-agent`
 
 ## 📄 License

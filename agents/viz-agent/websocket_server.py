@@ -178,6 +178,9 @@ class WebSocketVizServer:
                 await self.handle_stats_request(websocket, data, client_id, message_id)
             elif message_type == "export_chart":
                 await self.handle_chart_export(websocket, data, client_id, message_id)
+            elif message_type == "viz_query":
+                # Handle visualization query from backend
+                await self.handle_viz_query(websocket, data, client_id, message_id)
             elif message_type == "test_message":
                 # Handle test messages from connectivity tests
                 response = {
@@ -350,6 +353,58 @@ class WebSocketVizServer:
         }
         
         await websocket.send(json.dumps(response))
+    
+    async def handle_viz_query(self, websocket: WebSocketServerProtocol, data: Dict, client_id: str, message_id: str):
+        """Handle visualization query from backend"""
+        try:
+            # Extract data and query information
+            query_data = data.get("data", [])
+            columns = data.get("columns", [])
+            query = data.get("query", "")
+            intent = data.get("intent", {})
+            
+            # Generate appropriate visualization based on the data
+            if not query_data:
+                response = {
+                    "type": "viz_response",
+                    "response_to": message_id,
+                    "client_id": client_id,
+                    "success": False,
+                    "error": "No data provided for visualization",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            else:
+                # For now, return the data with basic chart suggestion
+                visualization_hint = intent.get("visualization_hint", "table")
+                
+                response = {
+                    "type": "viz_response",
+                    "response_to": message_id,
+                    "client_id": client_id,
+                    "success": True,
+                    "visualization": {
+                        "type": visualization_hint,
+                        "data": query_data,
+                        "columns": columns,
+                        "row_count": len(query_data)
+                    },
+                    "query": query,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            await websocket.send(json.dumps(response))
+            
+        except Exception as e:
+            logger.error(f"Error in handle_viz_query: {str(e)}")
+            error_response = {
+                "type": "viz_response",
+                "response_to": message_id,
+                "client_id": client_id,
+                "success": False,
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            await websocket.send(json.dumps(error_response))
     
     async def send_progress(self, websocket: WebSocketServerProtocol, message_id: str, client_id: str, status: str, progress: int):
         """Send progress update"""

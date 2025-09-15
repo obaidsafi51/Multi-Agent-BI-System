@@ -7,7 +7,9 @@ parameter validation and error handling.
 """
 
 import logging
-from typing import Any
+import time
+import threading
+from typing import Any, Dict, Tuple
 
 from fastmcp import FastMCP
 
@@ -39,6 +41,16 @@ _query_executor: QueryExecutor | None = None
 _cache_manager: CacheManager | None = None
 _mcp_server: FastMCP | None = None
 _schema_intelligence: SchemaIntelligenceEngine | None = None
+
+# Request deduplication cache to prevent redundant calls within short time windows
+_request_dedup_cache: Dict[str, Tuple[Any, float]] = {}
+_request_dedup_lock = threading.RLock()
+_DEDUP_WINDOW_SECONDS = 5  # Cache identical requests for 5 seconds
+_dedup_stats = {
+    'hits': 0,
+    'misses': 0,
+    'total_requests': 0
+}
 
 
 def initialize_tools(schema_inspector: SchemaInspector,
@@ -76,6 +88,64 @@ def initialize_tools(schema_inspector: SchemaInspector,
         initialize_llm_tools(llm_config, cache_manager)
     
     logger.info(f"MCP tools initialized (database: {config.database_tools_enabled}, llm: {config.llm_tools_enabled}, schema_intelligence: True)")
+
+
+def _get_deduped_result(key: str, func, *args, **kwargs):
+    """
+    Get result from deduplication cache or execute function if not cached.
+    
+    This prevents multiple identical requests from hitting the database
+    within a short time window, improving performance significantly.
+    
+    Args:
+        key: Unique key for the request
+        func: Function to execute if not cached
+        *args: Function arguments
+        **kwargs: Function keyword arguments
+        
+    Returns:
+        Cached result or fresh result from function execution
+    """
+    current_time = time.time()
+    
+    with _request_dedup_lock:
+        _dedup_stats['total_requests'] += 1
+        
+        # Check if we have a cached result within the dedup window
+        if key in _request_dedup_cache:
+            cached_result, cache_time = _request_dedup_cache[key]
+            if current_time - cache_time < _DEDUP_WINDOW_SECONDS:
+                _dedup_stats['hits'] += 1
+                logger.info(f"Request deduplication PREVENTED redundant call for key: {key} (age: {current_time - cache_time:.2f}s)")
+                return cached_result
+            else:
+                # Remove expired entry
+                del _request_dedup_cache[key]
+        
+        # Execute function and cache result
+        _dedup_stats['misses'] += 1
+        result = func(*args, **kwargs)
+        _request_dedup_cache[key] = (result, current_time)
+        
+        # Clean up old entries to prevent memory leaks
+        _cleanup_dedup_cache(current_time)
+        
+        logger.debug(f"Executed and cached request for key: {key}")
+        return result
+
+
+def _cleanup_dedup_cache(current_time: float) -> None:
+    """Clean up expired entries from deduplication cache."""
+    keys_to_remove = []
+    for key, (_, cache_time) in _request_dedup_cache.items():
+        if current_time - cache_time >= _DEDUP_WINDOW_SECONDS:
+            keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        del _request_dedup_cache[key]
+    
+    if keys_to_remove:
+        logger.debug(f"Cleaned up {len(keys_to_remove)} expired deduplication cache entries")
 
 
 def _ensure_initialized() -> None:
@@ -227,10 +297,15 @@ def get_table_schema(database: str, table: str) -> dict[str, Any]:
     if not table or not table.strip():
         raise ValueError("Table name is required and cannot be empty")
 
-    try:
+    # Use request deduplication to prevent multiple identical calls
+    dedup_key = f"schema:{database}:{table}"
+    
+    def _get_schema():
         logger.debug(f"Getting schema for table '{database}.{table}' via MCP tool")
+        return _schema_inspector.get_table_schema(database, table)
 
-        schema = _schema_inspector.get_table_schema(database, table)
+    try:
+        schema = _get_deduped_result(dedup_key, _get_schema)
 
         # Convert to MCP-compatible format
         result = {
@@ -379,7 +454,7 @@ def execute_query(query: str, timeout: int | None = None, use_cache: bool = True
 
     try:
         logger.info(f"Executing query via MCP tool (timeout={timeout}, use_cache={use_cache}): "
-                   f"{query[:100]}...")
+                   f"{query}")
 
         query_result = _query_executor.execute_query(
             query=query,
@@ -444,7 +519,7 @@ def validate_query(query: str) -> dict[str, Any]:
         raise ValueError("Query is required and cannot be empty")
 
     try:
-        logger.info(f"Validating query via MCP tool: {query[:100]}...")
+        logger.info(f"Validating query via MCP tool: {query}")
 
         validation_result = _query_executor.validate_query_syntax(query)
 
@@ -483,10 +558,22 @@ def get_server_stats() -> dict[str, Any]:
         # Get schema inspector cache statistics
         schema_cache_stats = _schema_inspector.get_cache_stats()
 
+        # Get request deduplication statistics
+        with _request_dedup_lock:
+            dedup_cache_size = len(_request_dedup_cache)
+            dedup_effectiveness = (_dedup_stats['hits'] / _dedup_stats['total_requests'] * 100) if _dedup_stats['total_requests'] > 0 else 0
+            dedup_stats = {
+                **_dedup_stats,
+                'cache_size': dedup_cache_size,
+                'effectiveness_percent': round(dedup_effectiveness, 2),
+                'window_seconds': _DEDUP_WINDOW_SECONDS
+            }
+
         result = {
             "cache": cache_stats,
             "query_executor": query_stats,
             "schema_cache": schema_cache_stats,
+            "request_deduplication": dedup_stats,
             "server_status": "healthy"
         }
 

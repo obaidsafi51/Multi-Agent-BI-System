@@ -40,16 +40,13 @@ class NLPAgentLauncher:
         # Configuration from environment
         self.http_host = os.getenv("HOST", "0.0.0.0")
         self.http_port = int(os.getenv("PORT", "8001"))
-        # Disable standalone WebSocket server - NLP agent connects as client to MCP server
-        self.websocket_enabled = False  # os.getenv("ENABLE_WEBSOCKETS", "true").lower() == "true"
-        self.websocket_host = os.getenv("WEBSOCKET_HOST", "0.0.0.0")
-        self.websocket_port = int(os.getenv("WEBSOCKET_PORT", "8011"))
+        # WebSocket now served on same port as HTTP via FastAPI
+        self.websocket_enabled = True
         
         logger.info(f"NLP Agent Configuration:")
-        logger.info(f"  HTTP Server: {self.http_host}:{self.http_port}")
-        logger.info(f"  WebSocket Enabled: {self.websocket_enabled}")
-        if self.websocket_enabled:
-            logger.info(f"  WebSocket Server: {self.websocket_host}:{self.websocket_port}")
+        logger.info(f"  HTTP & WebSocket Server: {self.http_host}:{self.http_port}")
+        logger.info(f"  WebSocket endpoint: /ws (for backend communication)")
+        logger.info(f"  MCP Client: WebSocket client to TiDB MCP server")
     
     async def start_http_server(self):
         """Start the HTTP API server"""
@@ -75,8 +72,9 @@ class NLPAgentLauncher:
             raise
     
     async def start_websocket_server(self):
-        """WebSocket server disabled - NLP agent acts as client only"""
-        logger.info("WebSocket server disabled - NLP agent connects as client to MCP server")
+        """WebSocket server runs on same port as HTTP via FastAPI"""
+        logger.info("WebSocket server runs on same port as HTTP server via FastAPI /ws endpoint")
+        # No separate WebSocket server needed - handled by FastAPI
         return
     
     async def run(self):
@@ -84,19 +82,17 @@ class NLPAgentLauncher:
         try:
             logger.info("Starting NLP Agent with HTTP and WebSocket servers...")
             
-            # Create tasks for both servers
+            # Create task for HTTP server (includes WebSocket via FastAPI)
             http_task = asyncio.create_task(
                 self.start_http_server(),
                 name="http-server"
             )
             self.tasks.append(http_task)
             
-            if self.websocket_enabled:
-                websocket_task = asyncio.create_task(
-                    self.start_websocket_server(),
-                    name="websocket-server"
-                )
-                self.tasks.append(websocket_task)
+            # WebSocket server runs on same port via FastAPI - no separate task needed
+            logger.info("WebSocket server will be available at /ws endpoint on HTTP server")
+            
+
             
             # Set up signal handlers for graceful shutdown
             loop = asyncio.get_event_loop()

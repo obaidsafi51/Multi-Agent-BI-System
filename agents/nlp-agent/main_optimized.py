@@ -2,24 +2,28 @@
 Enhanced NLP Agent v2.2.0 with advanced reliability, performance optimization, and monitoring
 """
 import asyncio
+import json
 import logging
 import os
 import psutil
+import time
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 from dotenv import load_dotenv
+import websockets.exceptions
 
 from src.optimized_nlp_agent import OptimizedNLPAgent
 from src.enhanced_websocket_client import EnhancedWebSocketMCPClient
 from src.hybrid_mcp_operations_adapter import HybridMCPOperationsAdapter
-from src.performance_optimizer import PerformanceOptimizer
-from src.enhanced_monitoring import EnhancedMonitoringSystem, AlertLevel
+from src.enhanced_monitoring import EnhancedMonitoringSystem
 # Query classifier removed - using unified processing approach
+# PerformanceOptimizer removed - using AdvancedCacheManager directly
 from performance_config import PerformanceConfig
 
 # Load environment variables
@@ -53,8 +57,11 @@ nlp_agent: OptimizedNLPAgent = None
 websocket_client: EnhancedWebSocketMCPClient = None
 hybrid_mcp_client: HybridMCPOperationsAdapter = None
 # query_classifier removed - using unified processing approach
-performance_optimizer: PerformanceOptimizer = None
+# performance_optimizer removed - using AdvancedCacheManager directly
 monitoring_system: EnhancedMonitoringSystem = None
+
+# WebSocket server for backend communication
+active_websocket_connections: Dict[str, WebSocket] = {}
 
 # Request/Response models
 class ProcessRequest(BaseModel):
@@ -79,6 +86,7 @@ class ProcessResponse(BaseModel):
     execution_time: float
     cache_hit: bool
     timestamp: str
+    success: bool = True
 
 class HealthResponse(BaseModel):
     status: str
@@ -91,7 +99,7 @@ class HealthResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the enhanced NLP agent with all optimization features"""
-    global nlp_agent, websocket_client, performance_optimizer, monitoring_system
+    global nlp_agent, websocket_client, monitoring_system
     
     try:
         logger.info("Starting Enhanced NLP Agent v2.2.0...")
@@ -112,19 +120,7 @@ async def startup_event():
         perf_config = PerformanceConfig.get_config(environment)
         logger.info(f"Using performance configuration for: {environment}")
         
-        # Initialize performance optimizer with configuration
-        optimizer_config = perf_config["optimizer"]
-        performance_optimizer = PerformanceOptimizer(
-            memory_cache_size=optimizer_config["memory_cache_size"],
-            semantic_cache_size=optimizer_config["semantic_cache_size"],
-            query_cache_size=optimizer_config["query_cache_size"],
-            schema_cache_ttl=optimizer_config["schema_cache_ttl"],
-            context_cache_ttl=optimizer_config["context_cache_ttl"],
-            semantic_similarity_threshold=optimizer_config["semantic_similarity_threshold"],
-            enable_request_deduplication=optimizer_config["enable_request_deduplication"],
-            enable_response_prediction=optimizer_config["enable_response_prediction"]
-        )
-        performance_optimizer.start()
+        # Performance optimization now handled by AdvancedCacheManager in NLP agent
         
         # Initialize query classifier
         # QueryClassifier removed - using unified processing approach
@@ -205,7 +201,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    global nlp_agent, websocket_client, hybrid_mcp_client, performance_optimizer, monitoring_system
+    global nlp_agent, websocket_client, hybrid_mcp_client, monitoring_system
     
     logger.info("Shutting down Enhanced NLP Agent...")
     
@@ -213,8 +209,7 @@ async def shutdown_event():
     if monitoring_system:
         await monitoring_system.stop()
     
-    if performance_optimizer:
-        await performance_optimizer.stop()
+    # Performance optimizer removed - cache manager shutdown handled by NLP agent
     
     if nlp_agent:
         await nlp_agent.stop()
@@ -268,12 +263,26 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
                     database_context=database_context  # Pass database context to NLP agent
                 )
             
-            # Optimize query processing with caching and deduplication
-            result, optimization_stats = await performance_optimizer.optimize_query_processing(
-                query=request.query,
-                context=request.context,
-                processing_function=process_with_nlp_agent
+            # Process query with request deduplication using cache manager
+            import hashlib
+            import json
+            request_signature = hashlib.sha256(
+                json.dumps({"query": request.query, "context": request.context}, sort_keys=True).encode()
+            ).hexdigest()
+            
+            # Use cache manager's deduplication feature
+            result = await nlp_agent.cache_manager.deduplicate_request(
+                request_signature=request_signature,
+                request_executor=process_with_nlp_agent
             )
+            
+            # Create optimization stats for compatibility
+            optimization_stats = {
+                "cache_hits": 0,
+                "cache_misses": 1,
+                "deduplication_used": request_signature in nlp_agent.cache_manager._pending_requests,
+                "optimization_methods": ["request_deduplication"]
+            }
             
             execution_time = asyncio.get_event_loop().time() - start_time
             
@@ -297,7 +306,7 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
             
             response = ProcessResponse(
                 query=request.query,
-                intent=result.intent.dict() if result.intent else {},
+                intent=result.intent.model_dump() if result.intent else {},
                 entities={},  # Not directly available in ProcessingResult
                 sql_query=result.sql_query or "",
                 explanation="",  # Not directly available in ProcessingResult
@@ -351,10 +360,22 @@ async def health_check():
         if websocket_client:
             websocket_stats = websocket_client.get_connection_stats()
         
-        # Get performance optimization statistics
+        # Get performance optimization statistics from cache manager
         optimization_stats = {}
-        if performance_optimizer:
-            optimization_stats = performance_optimizer.get_optimization_stats()
+        if nlp_agent and nlp_agent.cache_manager:
+            cache_stats = nlp_agent.cache_manager.get_stats()
+            optimization_stats = {
+                "overall": {
+                    "total_requests": cache_stats.get("l1_hits", 0) + cache_stats.get("l1_misses", 0),
+                    "total_cache_hits": cache_stats.get("total_hits", 0),
+                    "total_cache_misses": cache_stats.get("total_misses", 0),
+                    "overall_hit_rate": cache_stats.get("hit_rate_percent", 0) / 100,
+                    "pending_requests": cache_stats.get("pending_requests", 0)
+                },
+                "features": {
+                    "request_deduplication": cache_stats.get("request_deduplication_enabled", True)
+                }
+            }
         
         # Calculate uptime
         uptime = getattr(app.state, "start_time", 0)
@@ -373,7 +394,7 @@ async def health_check():
                 "websocket": websocket_stats,
                 "nlp_agent_active": nlp_agent is not None,
                 "monitoring_active": monitoring_system is not None,
-                "optimizer_active": performance_optimizer is not None
+                "optimizer_active": nlp_agent and nlp_agent.cache_manager is not None
             },
             performance_metrics={
                 "health_score": health_status["health_score"],
@@ -388,61 +409,17 @@ async def health_check():
         logger.error(f"Health check error: {e}")
         raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
 
-@app.get("/status")
-async def get_status():
-    """Get detailed agent status and metrics"""
-    global nlp_agent
-    
-    try:
-        status = {
-            "agent_initialized": nlp_agent is not None,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        if nlp_agent:
-            status["performance_metrics"] = nlp_agent.get_performance_metrics()
-            status["cache_stats"] = nlp_agent.get_cache_stats()
-            
-            # Check if the NLP agent has a WebSocket client
-            if hasattr(nlp_agent, 'mcp_client') and nlp_agent.mcp_client:
-                status["websocket_connected"] = nlp_agent.mcp_client.is_connected
-                if hasattr(nlp_agent.mcp_client, 'get_connection_stats'):
-                    status["connection_stats"] = nlp_agent.mcp_client.get_connection_stats()
-            else:
-                status["websocket_connected"] = False
-        
-        # Query classifier removed - using unified processing approach
-        status["processing_approach"] = "unified"
-        
-        return status
-        
-    except Exception as e:
-        logger.error(f"Status check error: {e}")
-        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
-
-@app.post("/classify")
-async def classify_query(request: ProcessRequest):
-    """Query classification endpoint - now returns unified approach info"""
-    try:
-        return {
-            "query": request.query,
-            "processing_approach": "unified",
-            "message": "All queries now use unified processing path for optimal performance",
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Classification endpoint error: {e}")
-        raise HTTPException(status_code=500, detail=f"Classification endpoint failed: {str(e)}")
-
 @app.post("/cache/clear")
 async def clear_cache():
     """Clear semantic cache and optimization caches"""
     try:
-        if not performance_optimizer:
-            raise HTTPException(status_code=503, detail="Performance optimizer not initialized")
+        if not nlp_agent or not nlp_agent.cache_manager:
+            raise HTTPException(status_code=503, detail="Cache manager not initialized")
         
-        cleared_count = await performance_optimizer.clear_cache()
+        # Clear L1 cache and get count
+        cleared_count = len(nlp_agent.cache_manager._l1_cache)
+        nlp_agent.cache_manager._l1_cache.clear()
+        nlp_agent.cache_manager._l1_access_order.clear()
         
         # Also clear NLP agent cache if available
         nlp_cleared_count = 0
@@ -474,10 +451,10 @@ async def get_metrics():
         if not monitoring_system:
             raise HTTPException(status_code=503, detail="Monitoring system not initialized")
         
-        # Get optimization statistics
+        # Get optimization statistics from cache manager
         optimization_stats = {}
-        if performance_optimizer:
-            optimization_stats = performance_optimizer.get_optimization_stats()
+        if nlp_agent and nlp_agent.cache_manager:
+            optimization_stats = nlp_agent.cache_manager.get_stats()
         
         # Get WebSocket statistics
         websocket_stats = {}
@@ -501,40 +478,15 @@ async def get_metrics():
         logger.error(f"Metrics retrieval error: {e}")
         raise HTTPException(status_code=500, detail=f"Metrics retrieval failed: {str(e)}")
 
-@app.get("/metrics/export/{format_type}")
-async def export_metrics(format_type: str):
-    """Export metrics in various formats (json, prometheus)"""
-    try:
-        if not monitoring_system:
-            raise HTTPException(status_code=503, detail="Monitoring system not initialized")
-        
-        if format_type not in ["json", "prometheus"]:
-            raise HTTPException(status_code=400, detail="Supported formats: json, prometheus")
-        
-        exported_data = monitoring_system.export_metrics(format_type)
-        
-        content_type = "application/json" if format_type == "json" else "text/plain"
-        
-        return {
-            "format": format_type,
-            "data": exported_data,
-            "content_type": content_type,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Metrics export error: {e}")
-        raise HTTPException(status_code=500, detail=f"Metrics export failed: {str(e)}")
-
 @app.get("/performance")
 async def get_performance_dashboard():
     """Get comprehensive performance dashboard with optimization statistics"""
     try:
-        if not performance_optimizer:
-            raise HTTPException(status_code=503, detail="Performance optimizer not initialized")
+        if not nlp_agent or not nlp_agent.cache_manager:
+            raise HTTPException(status_code=503, detail="Cache manager not initialized")
         
-        # Get optimization stats
-        optimization_stats = performance_optimizer.get_optimization_stats()
+        # Get optimization stats from cache manager
+        optimization_stats = nlp_agent.cache_manager.get_stats()
         
         # Get WebSocket connection stats
         websocket_stats = {}
@@ -575,8 +527,9 @@ async def get_performance_dashboard():
         
         # Performance recommendations based on current stats
         recommendations = []
-        overall_hit_rate = optimization_stats["overall"]["overall_hit_rate"]
-        avg_response_time = optimization_stats["overall"]["average_response_time_ms"] / 1000
+        overall_hit_rate = optimization_stats["hit_rate_percent"] / 100.0
+        avg_response_time = optimization_stats["avg_response_time_ms"] / 1000
+        total_requests = optimization_stats["total_hits"] + optimization_stats["total_misses"]
         
         if overall_hit_rate < 0.4:
             recommendations.append("Consider increasing cache sizes for better hit rates")
@@ -594,7 +547,7 @@ async def get_performance_dashboard():
             "performance_summary": {
                 "overall_hit_rate": overall_hit_rate,
                 "average_response_time_seconds": avg_response_time,
-                "total_requests": optimization_stats["overall"]["total_requests"],
+                "total_requests": total_requests,
                 "websocket_connected": websocket_stats.get("is_connected", False)
             },
             "optimization_stats": optimization_stats,
@@ -605,11 +558,11 @@ async def get_performance_dashboard():
             "configuration": {
                 "environment": os.getenv("ENVIRONMENT", "development"),
                 "cache_sizes": {
-                    "memory": performance_optimizer.memory_cache_size,
-                    "semantic": performance_optimizer.semantic_cache_size,
-                    "query": performance_optimizer.query_cache_size
+                    "l1_cache": nlp_agent.cache_manager.l1_max_size if nlp_agent and nlp_agent.cache_manager else 1000,
+                    "l1_ttl": nlp_agent.cache_manager.l1_ttl_seconds if nlp_agent and nlp_agent.cache_manager else 300,
+                    "max_memory_mb": nlp_agent.cache_manager.max_memory_bytes // (1024 * 1024) if nlp_agent and nlp_agent.cache_manager else 100
                 },
-                "similarity_threshold": performance_optimizer.semantic_similarity_threshold
+                "cache_features": ["multi_level", "redis_integration", "request_deduplication"]
             }
         }
         
@@ -621,12 +574,17 @@ async def get_performance_dashboard():
 async def trigger_performance_optimization():
     """Manually trigger performance optimization and cache warming"""
     try:
-        if not performance_optimizer:
-            raise HTTPException(status_code=503, detail="Performance optimizer not initialized")
+        if not nlp_agent or not nlp_agent.cache_manager:
+            raise HTTPException(status_code=503, detail="Cache manager not initialized")
         
-        # Trigger manual optimization
-        await performance_optimizer._proactive_cache_warming()
-        await performance_optimizer._optimize_memory_usage()
+        # Trigger manual cache optimization (basic cleanup)
+        cleared_expired = 0
+        for key, entry in list(nlp_agent.cache_manager._l1_cache.items()):
+            if entry.is_expired():
+                del nlp_agent.cache_manager._l1_cache[key]
+                if key in nlp_agent.cache_manager._l1_access_order:
+                    nlp_agent.cache_manager._l1_access_order.remove(key)
+                cleared_expired += 1
         
         # Get connection performance recommendations
         if websocket_client:
@@ -634,9 +592,13 @@ async def trigger_performance_optimization():
             avg_response_time = websocket_client.stats.average_response_time
             current_timeout = websocket_client.request_timeout
             
-            connection_recommendations = performance_optimizer.optimize_connection_performance(
-                current_timeout, recent_failures, avg_response_time
-            )
+            # Simple connection recommendations without performance optimizer
+            connection_recommendations = {
+                "recommended_timeout": current_timeout,
+                "recent_failures": recent_failures,
+                "avg_response_time": avg_response_time,
+                "status": "stable" if recent_failures < 3 else "needs_attention"
+            }
         else:
             connection_recommendations = {}
         
@@ -644,10 +606,11 @@ async def trigger_performance_optimization():
             "timestamp": datetime.now().isoformat(),
             "optimization_triggered": True,
             "actions_performed": [
-                "cache_warming",
-                "memory_optimization",
+                "cache_cleanup",
+                "expired_entries_removal",
                 "connection_analysis"
             ],
+            "cleared_expired_entries": cleared_expired,
             "connection_recommendations": connection_recommendations,
             "message": "Performance optimization completed successfully"
         }
@@ -730,6 +693,338 @@ async def resolve_alert(alert_id: str):
         logger.error(f"Alert resolution error: {e}")
         raise HTTPException(status_code=500, detail=f"Alert resolution failed: {str(e)}")
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for backend communication on port 8011"""
+    client_id = f"backend_{uuid.uuid4().hex[:8]}"
+    
+    try:
+        await websocket.accept()
+        active_websocket_connections[client_id] = websocket
+        
+        logger.info(f"WebSocket connection established with backend client: {client_id}")
+        
+        # Send connection acknowledgment
+        await websocket.send_json({
+            "type": "connection_established",
+            "client_id": client_id,
+            "timestamp": datetime.now().isoformat(),
+            "server": "nlp-agent",
+            "capabilities": ["query_processing", "sql_generation", "intent_extraction"]
+        })
+        
+        # Main message handling loop
+        while True:
+            try:
+                # Receive message from backend
+                message = await websocket.receive_json()
+                logger.info(f"Received WebSocket message from {client_id}: {message.get('type', 'unknown')}")
+                
+                # Handle different message types
+                message_type = message.get("type", "unknown")
+                
+                if message_type == "heartbeat":
+                    # Respond to heartbeat
+                    await websocket.send_json({
+                        "type": "heartbeat_response",
+                        "timestamp": datetime.now().isoformat(),
+                        "correlation_id": message.get("correlation_id")
+                    })
+                    logger.debug(f"Heartbeat response sent to {client_id}")
+                    
+                elif message_type == "sql_query":
+                    # Handle SQL query requests from backend
+                    await handle_websocket_sql_query(websocket, message, client_id)
+                    
+                elif message_type == "query":
+                    # Handle general query requests (same as HTTP /process)
+                    await handle_websocket_query(websocket, message, client_id)
+                    
+                elif message_type == "nlp_query_with_context":
+                    # Handle enhanced query requests with database context
+                    await handle_websocket_nlp_query_with_context(websocket, message, client_id)
+                    
+                else:
+                    logger.warning(f"Unknown message type from {client_id}: {message_type}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": {
+                            "type": "unknown_message_type",
+                            "message": f"Unknown message type: {message_type}"
+                        },
+                        "response_to": message.get("message_id"),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected by backend client: {client_id}")
+                break
+            except websockets.exceptions.ConnectionClosed:
+                logger.info(f"WebSocket connection closed for client: {client_id}")
+                break
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON from {client_id}: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_json",
+                        "message": "Invalid JSON format"
+                    },
+                    "timestamp": datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error handling WebSocket message from {client_id}: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "error": {
+                        "type": "processing_error",
+                        "message": str(e)
+                    },
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+    except Exception as e:
+        logger.error(f"WebSocket connection error for {client_id}: {e}")
+    finally:
+        # Cleanup connection
+        if client_id in active_websocket_connections:
+            del active_websocket_connections[client_id]
+        logger.info(f"WebSocket connection cleaned up for client: {client_id}")
+
+async def handle_websocket_sql_query(websocket: WebSocket, message: Dict[str, Any], client_id: str):
+    """Handle SQL query messages from backend via WebSocket"""
+    start_time = asyncio.get_event_loop().time()
+    message_id = message.get("message_id")
+    
+    try:
+        if not nlp_agent:
+            raise HTTPException(status_code=503, detail="NLP Agent not initialized")
+        
+        # Extract request parameters
+        sql_query = message.get("sql_query", "")
+        query_id = message.get("query_id", f"ws_query_{int(time.time() * 1000)}")
+        query_context = message.get("query_context", {})
+        execution_config = message.get("execution_config", {})
+        
+        logger.info(f"Processing WebSocket SQL query request: {query_id}")
+        
+        if not sql_query:
+            raise ValueError("SQL query is required")
+        
+        # For SQL queries, we'll convert to a natural language processing request
+        # This maintains compatibility with the NLP agent's processing pipeline
+        fake_nl_query = f"Execute SQL: {sql_query}"
+        
+        # Process using the NLP agent's optimized processing
+        result = await nlp_agent.process_query_optimized(
+            query=fake_nl_query,
+            user_id=query_context.get("user_id", "backend_user"),
+            session_id=query_context.get("session_id", "backend_session"),
+            context=query_context,
+            database_context=query_context.get("database_context")
+        )
+        
+        execution_time = asyncio.get_event_loop().time() - start_time
+        
+        # Build WebSocket response
+        response = {
+            "type": "sql_query_response",
+            "success": True,
+            "query_id": query_id,
+            "intent": result.intent.model_dump() if result.intent else {},
+            "sql_query": result.sql_query or sql_query,  # Return original if no new SQL generated
+            "explanation": f"Processed SQL query via NLP agent",
+            "processing_time_ms": int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": {
+                "agent": "nlp-agent",
+                "version": "2.2.0",
+                "processing_path": "websocket_sql",
+                "cache_hit": False  # Direct SQL queries typically bypass cache
+            }
+        }
+        
+        # Send response
+        await websocket.send_json(response)
+        logger.info(f"WebSocket SQL query response sent to {client_id} in {execution_time:.3f}s")
+        
+    except Exception as e:
+        execution_time = asyncio.get_event_loop().time() - start_time
+        logger.error(f"WebSocket SQL query processing error for {client_id}: {e}")
+        
+        error_response = {
+            "type": "sql_query_response",
+            "success": False,
+            "query_id": message.get("query_id", "unknown"),
+            "error": {
+                "type": "sql_processing_error",
+                "message": str(e)
+            },
+            "processing_time_ms": int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        await websocket.send_json(error_response)
+
+async def handle_websocket_query(websocket: WebSocket, message: Dict[str, Any], client_id: str):
+    """Handle general query messages from backend via WebSocket"""
+    start_time = asyncio.get_event_loop().time()
+    message_id = message.get("message_id")
+    
+    try:
+        if not nlp_agent:
+            raise HTTPException(status_code=503, detail="NLP Agent not initialized")
+        
+        # Extract request parameters
+        query = message.get("query", "")
+        query_id = message.get("query_id", f"ws_query_{int(time.time() * 1000)}")
+        context = message.get("context", {})
+        database_context = message.get("database_context")
+        
+        logger.info(f"Processing WebSocket query request: {query[:100]}...")
+        
+        if not query:
+            raise ValueError("Query is required")
+        
+        # Process using the NLP agent's optimized processing
+        result = await nlp_agent.process_query_optimized(
+            query=query,
+            user_id=context.get("user_id", "backend_user"),
+            session_id=context.get("session_id", "backend_session"),
+            context=context,
+            database_context=database_context
+        )
+        
+        execution_time = asyncio.get_event_loop().time() - start_time
+        
+        # Build WebSocket response
+        response = {
+            "type": "query_response",
+            "success": True,
+            "query_id": query_id,
+            "query": query,
+            "intent": result.intent.model_dump() if result.intent else {},
+            "sql_query": result.sql_query or "",
+            "explanation": f"Processed natural language query",
+            "processing_time_ms": int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": {
+                "agent": "nlp-agent",
+                "version": "2.2.0", 
+                "processing_path": "websocket_query",
+                "cache_hit": False  # WebSocket queries typically bypass cache for real-time processing
+            }
+        }
+        
+        # Send response
+        await websocket.send_json(response)
+        logger.info(f"WebSocket query response sent to {client_id} in {execution_time:.3f}s")
+        
+    except Exception as e:
+        execution_time = asyncio.get_event_loop().time() - start_time
+        logger.error(f"WebSocket query processing error for {client_id}: {e}")
+        
+        error_response = {
+            "type": "query_response",
+            "success": False,
+            "query_id": message.get("query_id", "unknown"),
+            "error": {
+                "type": "query_processing_error",
+                "message": str(e)
+            },
+            "processing_time_ms": int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        await websocket.send_json(error_response)
+
+async def handle_websocket_nlp_query_with_context(websocket: WebSocket, message: Dict[str, Any], client_id: str):
+    """Handle enhanced NLP query messages with database context from backend via WebSocket"""
+    start_time = asyncio.get_event_loop().time()
+    message_id = message.get("message_id")
+    
+    try:
+        if not nlp_agent:
+            raise HTTPException(status_code=503, detail="NLP Agent not initialized")
+        
+        # Extract request parameters
+        query = message.get("query", "")
+        query_id = message.get("query_id", f"ws_nlp_query_{int(time.time() * 1000)}")
+        user_id = message.get("user_id", "backend_user")
+        session_id = message.get("session_id", "backend_session")
+        context = message.get("context", {})
+        database_context = message.get("database_context")
+        
+        logger.info(f"Processing enhanced WebSocket NLP query: {query[:100]}...")
+        
+        if not query:
+            raise ValueError("Query is required")
+        
+        # Process using the NLP agent's optimized processing with enhanced context
+        result = await nlp_agent.process_query_optimized(
+            query=query,
+            user_id=user_id,
+            session_id=session_id,
+            context=context,
+            database_context=database_context
+        )
+        
+        execution_time = asyncio.get_event_loop().time() - start_time
+        
+        # Build enhanced WebSocket response matching backend expectations
+        response = {
+            "type": "nlp_response",
+            "success": True,
+            "query_id": query_id,
+            "query": query,
+            "intent": result.intent.model_dump() if result.intent else {},
+            "entities": {},  # Not available in ProcessingResult - placeholder for compatibility
+            "sql_query": result.sql_query or "",
+            "explanation": "Processed natural language query with database context",
+            "complexity": "medium",
+            "processing_path": result.processing_path or "websocket_nlp_enhanced",
+            "execution_time": execution_time,
+            "cache_hit": False,
+            "processing_time_ms": result.processing_time_ms or int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat(),
+            "metadata": {
+                "agent": "nlp-agent",
+                "version": "2.2.0",
+                "processing_method": "enhanced_websocket",
+                "database_context_available": database_context is not None
+            }
+        }
+        
+        # Send response
+        await websocket.send_json(response)
+        logger.info(f"Enhanced WebSocket NLP response sent to {client_id} in {execution_time:.3f}s")
+        
+    except Exception as e:
+        execution_time = asyncio.get_event_loop().time() - start_time
+        logger.error(f"Enhanced WebSocket NLP processing error for {client_id}: {e}")
+        
+        error_response = {
+            "type": "nlp_response",
+            "success": False,
+            "query_id": message.get("query_id", "unknown"),
+            "query": message.get("query", ""),
+            "error": {
+                "type": "nlp_processing_error",
+                "message": str(e)
+            },
+            "execution_time": execution_time,
+            "processing_time_ms": int(execution_time * 1000),
+            "response_to": message_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        await websocket.send_json(error_response)
+
 @app.get("/diagnostics")
 async def get_diagnostics():
     """Get comprehensive system diagnostics"""
@@ -751,7 +1046,7 @@ async def get_diagnostics():
                 "nlp_agent": nlp_agent is not None,
                 "websocket_client": websocket_client is not None and websocket_client.is_connected,
                 "processing_approach": "unified",
-                "performance_optimizer": performance_optimizer is not None,
+                "cache_manager": nlp_agent and nlp_agent.cache_manager is not None,
                 "monitoring_system": monitoring_system is not None
             }
         }
@@ -767,13 +1062,15 @@ async def get_diagnostics():
                 "circuit_breaker": connection_stats.get("circuit_breaker", {})
             }
         
-        # Add performance diagnostics
-        if performance_optimizer:
-            optimization_stats = performance_optimizer.get_optimization_stats()
+        # Add performance diagnostics from cache manager
+        if nlp_agent and nlp_agent.cache_manager:
+            cache_stats = nlp_agent.cache_manager.get_stats()
             diagnostics["performance_diagnostics"] = {
-                "cache_efficiency": optimization_stats.get("overall", {}).get("overall_hit_rate", 0),
-                "average_response_time": optimization_stats.get("overall", {}).get("average_response_time_ms", 0),
-                "active_optimizations": optimization_stats.get("features", {})
+                "cache_efficiency": cache_stats.get("hit_rate_percent", 0) / 100,
+                "average_response_time": cache_stats.get("avg_response_time_ms", 0),
+                "pending_requests": cache_stats.get("pending_requests", 0),
+                "l1_cache_size": cache_stats.get("l1_cache_size", 0),
+                "memory_usage_percent": cache_stats.get("memory_usage_percent", 0)
             }
         
         # Add health diagnostics
@@ -784,6 +1081,23 @@ async def get_diagnostics():
                 "status": health_status.get("status", "unknown"),
                 "performance_trend": health_status.get("performance_trend", "unknown"),
                 "active_alerts": len(monitoring_system.active_alerts)
+            }
+        
+        # Add agent status information (consolidated from removed /status endpoint)
+        if nlp_agent:
+            diagnostics["agent_status"] = {
+                "performance_metrics": nlp_agent.get_performance_metrics(),
+                "cache_stats": nlp_agent.get_cache_stats(),
+                "websocket_connected": (
+                    nlp_agent.mcp_client.is_connected 
+                    if hasattr(nlp_agent, 'mcp_client') and nlp_agent.mcp_client 
+                    else False
+                ),
+                "connection_stats": (
+                    nlp_agent.mcp_client.get_connection_stats()
+                    if hasattr(nlp_agent, 'mcp_client') and nlp_agent.mcp_client and hasattr(nlp_agent.mcp_client, 'get_connection_stats')
+                    else {}
+                )
             }
         
         return diagnostics

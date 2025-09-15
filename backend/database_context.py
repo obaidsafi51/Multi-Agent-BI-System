@@ -291,6 +291,40 @@ class DatabaseContextManager:
             logger.error(f"Error storing context for session {session_id}: {e}")
             return False
     
+    async def update_context(self, session_id: str, context: DatabaseContext) -> bool:
+        """
+        Update existing database context in Redis.
+        
+        Args:
+            session_id: Session identifier
+            context: Updated database context
+            
+        Returns:
+            True if updated successfully, False otherwise
+        """
+        if not self.redis_client:
+            logger.warning("Redis client not available, context not updated")
+            return False
+        
+        try:
+            context_key = f"{self.context_prefix}{session_id}"
+            
+            # Check if context exists
+            existing_context = await self.redis_client.get(context_key)
+            if not existing_context:
+                logger.warning(f"No existing context found for session {session_id}")
+                return False
+            
+            # Update the context
+            context_data = json.dumps(context.to_dict())
+            await self.redis_client.setex(context_key, self.session_ttl, context_data)
+            logger.debug(f"Updated context for session {session_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating context for session {session_id}: {e}")
+            return False
+    
     async def get_context(self, session_id: str) -> Optional[DatabaseContext]:
         """
         Retrieve database context from Redis.

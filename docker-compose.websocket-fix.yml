@@ -1,0 +1,128 @@
+# Docker Compose override for WebSocket reliability fixes
+# This file can be used with: docker-compose -f docker-compose.yml -f docker-compose.websocket-fix.yml up
+
+services:
+  # Enhanced NLP Agent with improved WebSocket reliability
+  nlp-agent:
+    environment:
+      # WebSocket Connection Reliability Improvements
+      - MCP_SERVER_HTTP_URL=http://tidb-mcp-server:8000
+      - MCP_SERVER_WS_URL=ws://tidb-mcp-server:8000/ws
+      
+      # Optimized Connection Timeouts for Docker Environment
+      - WS_CONNECTION_TIMEOUT=20.0  # Increased for Docker network latency
+      - WS_REQUEST_TIMEOUT=45.0     # Increased for complex SQL operations
+      - WS_HEARTBEAT_INTERVAL=45.0  # Less frequent for stability
+      - WS_HEALTH_CHECK_INTERVAL=90.0
+      - WS_PING_TIMEOUT=15.0        # Increased for Docker delays
+      
+      # Reconnection Strategy Improvements
+      - WS_INITIAL_RECONNECT_DELAY=2.0  # Start with longer delay
+      - WS_MAX_RECONNECT_DELAY=30.0     # Faster max recovery
+      - WS_MAX_RECONNECT_ATTEMPTS=-1    # Unlimited attempts
+      
+      # Circuit Breaker Configuration
+      - WS_CIRCUIT_BREAKER_THRESHOLD=3
+      - WS_CIRCUIT_BREAKER_TIMEOUT=60.0
+      
+      # HTTP Fallback Configuration
+      - ENABLE_HTTP_FALLBACK=true
+      - HTTP_FALLBACK_TIMEOUT=30.0
+      - HTTP_MAX_RETRIES=2
+      - PREFER_WEBSOCKET=true
+      
+      # Performance Settings
+      - MAX_CONCURRENT_REQUESTS=8   # Reduced for stability
+      - CONNECTION_POOL_SIZE=12     # Balanced pool size
+      
+      # Debug Settings (can be disabled in production)
+      - WS_DEBUG_LOGGING=true
+      - CONNECTION_STATE_LOGGING=true
+    
+    # Health check with more lenient timing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 45s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    
+    # Restart policy for connection issues
+    restart: unless-stopped
+    
+    # Resource limits to prevent container resource starvation
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+          cpus: "0.3"
+
+  # Enhanced TiDB MCP Server with WebSocket optimizations
+  tidb-mcp-server:
+    environment:
+      # WebSocket Server Configuration
+      - USE_HTTP_API=true
+      - ENABLE_WEBSOCKETS=true
+      - WS_HEARTBEAT_INTERVAL=60    # Match client expectations
+      - WS_CLEANUP_INTERVAL=120     # Less aggressive cleanup
+      - WS_CONNECTION_TIMEOUT=30    # Allow more time for connections
+      - WS_MAX_CONNECTIONS=50       # Increased connection limit
+      
+      # Performance Optimizations
+      - UVICORN_WORKERS=1           # Single worker for WebSocket consistency
+      - UVICORN_TIMEOUT_KEEP_ALIVE=65  # Keep connections alive longer
+      - UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=30
+      
+      # HTTP API Optimizations
+      - HTTP_REQUEST_TIMEOUT=45
+      - HTTP_CONNECTION_POOL_SIZE=20
+      
+      # Database Connection Optimizations
+      - DB_POOL_SIZE=10
+      - DB_POOL_TIMEOUT=30
+      - DB_POOL_RECYCLE=3600        # 1 hour connection recycling
+      
+      # Cache Optimizations
+      - CACHE_ENABLED=true
+      - CACHE_TTL_SECONDS=600       # Longer cache for stability
+      - CACHE_MAX_SIZE=2000         # Larger cache
+      
+      # Resource Management
+      - MAX_QUERY_TIMEOUT=45        # Must be <= MCP_REQUEST_TIMEOUT
+      - MCP_REQUEST_TIMEOUT=60      # Override default timeout
+      - MAX_CONCURRENT_QUERIES=10
+      - RATE_LIMIT_RPM=200          # Higher rate limit
+    
+    # Enhanced health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 45s
+    
+    # Resource limits for stable performance
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+
+# Network configuration for better container communication
+networks:
+  ai-cfo-network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.driver.mtu: "1500"
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1

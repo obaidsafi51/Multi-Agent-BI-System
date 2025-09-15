@@ -145,6 +145,10 @@ class AdvancedCacheManager:
         # Tag tracking for invalidation
         self._tag_to_keys: Dict[str, Set[str]] = {}
         
+        # Request deduplication
+        self._pending_requests: Dict[str, asyncio.Future] = {}
+        self._enable_request_deduplication: bool = True
+        
         logger.info(
             f"Advanced cache manager initialized: "
             f"L1={l1_max_size} entries, "
@@ -494,6 +498,46 @@ class AdvancedCacheManager:
         # For now, we'll just log the warming attempt
         logger.debug("Cache warming cycle completed")
     
+    async def deduplicate_request(
+        self,
+        request_signature: str,
+        request_executor
+    ) -> Any:
+        """
+        Deduplicate identical requests using signature to prevent redundant processing.
+        
+        Args:
+            request_signature: Unique signature for the request
+            request_executor: Async function to execute if not already pending
+            
+        Returns:
+            Result from the request executor
+        """
+        if not self._enable_request_deduplication:
+            return await request_executor()
+        
+        # Check if request is already pending
+        if request_signature in self._pending_requests:
+            logger.debug(f"Request deduplication: waiting for existing request {request_signature[:8]}...")
+            return await self._pending_requests[request_signature]
+        
+        # Create future for this request
+        future = asyncio.Future()
+        self._pending_requests[request_signature] = future
+        
+        try:
+            # Execute request
+            result = await request_executor()
+            future.set_result(result)
+            return result
+        except Exception as e:
+            future.set_exception(e)
+            raise
+        finally:
+            # Cleanup
+            if request_signature in self._pending_requests:
+                del self._pending_requests[request_signature]
+    
     async def shutdown(self) -> None:
         """Shutdown cache manager."""
         logger.info("Shutting down cache manager...")
@@ -527,7 +571,9 @@ class AdvancedCacheManager:
             "evictions": self.metrics.evictions,
             "total_size_mb": self.metrics.total_size_bytes / (1024 * 1024),
             "avg_response_time_ms": self.metrics.avg_response_time_ms,
-            "memory_usage_percent": (self.metrics.total_size_bytes / self.max_memory_bytes) * 100
+            "memory_usage_percent": (self.metrics.total_size_bytes / self.max_memory_bytes) * 100,
+            "pending_requests": len(self._pending_requests),
+            "request_deduplication_enabled": self._enable_request_deduplication
         }
 
 
