@@ -39,9 +39,9 @@ class TiDBConnection:
             "database": os.getenv("TIDB_DATABASE", "Agentic_BI"),
             "charset": "utf8mb4",
             "autocommit": True,
-            "connect_timeout": 30,
-            "read_timeout": 30,
-            "write_timeout": 30,
+            "connect_timeout": 60,  # Increased for better network tolerance
+            "read_timeout": 120,    # Increased for complex queries and schema operations
+            "write_timeout": 60,    # Increased for bulk operations
         }
     
     def _create_ssl_context(self) -> Optional[ssl.SSLContext]:
@@ -57,33 +57,59 @@ class TiDBConnection:
     
     @contextmanager
     def get_connection(self):
-        """Get a database connection with proper cleanup."""
+        """Get a database connection with proper cleanup and retry logic."""
         connection = None
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Create connection configuration
+                connect_config = self.config.copy()
+                
+                # Add SSL configuration for TiDB Cloud
+                ssl_context = self._create_ssl_context()
+                if ssl_context:
+                    connect_config["ssl"] = ssl_context
+                
+                # Add cursor class for dict results
+                connect_config["cursorclass"] = pymysql.cursors.DictCursor
+                
+                # Establish connection
+                connection = pymysql.connect(**connect_config)
+                logger.debug(f"Database connection established (attempt {attempt + 1})")
+                
+                # Success, exit retry loop and yield connection
+                break
+                
+            except Exception as e:
+                logger.warning(f"Database connection attempt {attempt + 1} failed: {e}")
+                
+                if connection:
+                    try:
+                        connection.close()
+                    except:
+                        pass
+                    connection = None
+                
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"Database connection failed after {max_retries} attempts: {e}")
+                    raise
+        
+        # Only yield once after successful connection or after all retries exhausted
         try:
-            # Create connection configuration
-            connect_config = self.config.copy()
-            
-            # Add SSL configuration for TiDB Cloud
-            ssl_context = self._create_ssl_context()
-            if ssl_context:
-                connect_config["ssl"] = ssl_context
-            
-            # Add cursor class for dict results
-            connect_config["cursorclass"] = pymysql.cursors.DictCursor
-            
-            # Establish connection
-            connection = pymysql.connect(**connect_config)
-            logger.debug("Database connection established")
-            
             yield connection
-            
-        except Exception as e:
-            logger.error(f"Database connection error: {e}")
-            raise
         finally:
             if connection:
-                connection.close()
-                logger.debug("Database connection closed")
+                try:
+                    connection.close()
+                    logger.debug("Database connection closed")
+                except Exception as close_error:
+                    logger.warning(f"Error closing database connection: {close_error}")
     
     def test_connection(self) -> bool:
         """Test database connectivity."""

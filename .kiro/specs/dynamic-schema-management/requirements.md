@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document outlines the requirements for implementing dynamic schema management to replace static configurations in the AI CFO BI Agent system. The current system suffers from hardcoded table names, column mappings, and SQL templates that break when database schemas change. This feature will implement intelligent schema discovery, flexible query generation, and automatic configuration updates to eliminate static dependencies.
+This document outlines the requirements for implementing dynamic schema management to replace static configurations in the AGENT BI system. The current system suffers from hardcoded table names, column mappings, and SQL templates that break when database schemas change. This feature will implement intelligent schema discovery, flexible query generation, and automatic configuration updates to eliminate static dependencies.
 
 ## Requirements
 

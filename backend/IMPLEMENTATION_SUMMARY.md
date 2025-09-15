@@ -4,7 +4,7 @@
 
 ### Overview
 
-Successfully implemented a comprehensive FastAPI backend with WebSocket support, authentication, rate limiting, and security middleware for the AI CFO BI Agent system.
+Successfully implemented a comprehensive FastAPI backend with WebSocket support, authentication, rate limiting, and security middleware for the AGENT BI system.
 
 ### Key Features Implemented
 

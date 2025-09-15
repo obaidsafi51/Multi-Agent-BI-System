@@ -1,5 +1,5 @@
 """
-Communication protocols for AI CFO BI Agent system.
+Communication protocols for AGENT BI system.
 
 This module implements the three communication protocols:
 - MCP (Model Context Protocol): Redis-based context store

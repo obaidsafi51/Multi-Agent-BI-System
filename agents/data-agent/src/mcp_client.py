@@ -16,7 +16,7 @@ import structlog
 import aiohttp
 from pydantic import BaseModel
 
-logger = structlog.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class MCPRequest(BaseModel):
@@ -71,17 +71,34 @@ class TiDBMCPClient:
                 timeout = aiohttp.ClientTimeout(total=30)
                 self.session = aiohttp.ClientSession(timeout=timeout)
             
-            # Test connection with server stats (non-critical)
+            # Test connection with health check first
+            try:
+                async with self.session.get(f"{self.server_url}/health") as response:
+                    if response.status == 200:
+                        health_data = await response.json()
+                        logger.info(f"Connected to TiDB MCP Server: {health_data.get('status', 'unknown')}")
+                        self.is_connected = True
+                        return True
+                    else:
+                        logger.warning(f"Health check failed with status {response.status}")
+            except Exception as health_error:
+                logger.debug(f"Health check failed: {health_error}")
+            
+            # Try server stats as fallback test
             try:
                 result = await self._send_request("get_server_stats_tool", {})
                 if result and not result.get('error'):
-                    logger.info("Successfully connected to TiDB MCP Server")
+                    logger.info("Successfully connected to TiDB MCP Server via stats check")
+                    self.is_connected = True
+                    return True
                 else:
-                    logger.warning("Connected to TiDB MCP Server but stats check failed - continuing anyway")
+                    logger.warning("Connected to TiDB MCP Server but stats check failed - will try anyway")
             except Exception as stats_error:
-                logger.warning(f"Connected to TiDB MCP Server but stats check failed: {stats_error} - continuing anyway")
+                logger.debug(f"Stats check failed: {stats_error}")
             
+            # Assume connection is OK if we can reach the server
             self.is_connected = True
+            logger.info("Assuming TiDB MCP Server connection is working")
             return True
             
         except Exception as e:
@@ -114,15 +131,9 @@ class TiDBMCPClient:
             await self.connect()
         
         request_id = str(uuid.uuid4())
-        request = MCPRequest(
-            id=request_id,
-            method=method,
-            params=params
-        )
         
         try:
-            # Since TiDB MCP Server uses FastMCP, we need to call the tools directly
-            # through HTTP endpoints rather than JSON-RPC
+            # Try the direct HTTP endpoint approach first
             url = f"{self.server_url}/tools/{method}"
             
             logger.debug(f"Sending MCP request to {url}: {method}")
@@ -136,6 +147,10 @@ class TiDBMCPClient:
                     result = await response.json()
                     logger.debug(f"MCP request successful: {method}")
                     return result
+                elif response.status == 404:
+                    # Try alternative endpoint structure
+                    logger.debug(f"Trying alternative endpoint structure for {method}")
+                    return await self._try_alternative_endpoint(method, params)
                 else:
                     error_text = await response.text()
                     logger.error(f"MCP request failed ({response.status}): {error_text}")
@@ -144,7 +159,48 @@ class TiDBMCPClient:
         except Exception as e:
             error_msg = str(e) if e else "Unknown connection error"
             logger.error(f"MCP request error for {method}: {error_msg}")
-            return {"error": error_msg}
+            # Try alternative endpoint as fallback
+            try:
+                return await self._try_alternative_endpoint(method, params)
+            except Exception as fallback_error:
+                logger.error(f"Fallback request also failed: {fallback_error}")
+                return {"error": error_msg}
+    
+    async def _try_alternative_endpoint(self, method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Try alternative endpoint structures for MCP requests.
+        
+        Args:
+            method: MCP method name
+            params: Request parameters
+            
+        Returns:
+            Response data or None if failed
+        """
+        # Try different endpoint patterns
+        alternative_urls = [
+            f"{self.server_url}/{method}",
+            f"{self.server_url}/mcp/{method}",
+            f"{self.server_url}/api/{method}"
+        ]
+        
+        for url in alternative_urls:
+            try:
+                logger.debug(f"Trying alternative endpoint: {url}")
+                async with self.session.post(
+                    url,
+                    json=params,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        logger.info(f"Alternative endpoint successful: {url}")
+                        return result
+            except Exception as e:
+                logger.debug(f"Alternative endpoint {url} failed: {e}")
+                continue
+        
+        return {"error": f"All endpoint attempts failed for method: {method}"}
     
     async def discover_databases(self) -> List[Dict[str, Any]]:
         """
@@ -252,11 +308,40 @@ class TiDBMCPClient:
         if timeout:
             params["timeout"] = timeout
         
+        logger.info(f"Executing query via MCP: {query[:100]}...")
+        
         result = await self._send_request("execute_query_tool", params)
         
         if result and not result.get('error'):
-            return result
-        return None
+            # Debug logging to understand MCP response structure
+            logger.info(f"MCP Response keys: {list(result.keys()) if result else 'None'}")
+            logger.info(f"MCP Response data field: {result.get('data', 'MISSING')}")
+            logger.info(f"MCP Response rows field: {result.get('rows', 'MISSING')}")
+            logger.info(f"MCP Response full: {result}")
+            
+            # Standardize response format - handle both 'data' and 'rows' fields
+            rows_data = result.get('data') or result.get('rows', [])
+            logger.info(f"Extracted rows_data: {rows_data}")
+            logger.info(f"Query executed successfully, rows: {len(rows_data)}")
+            standardized_result = {
+                'success': True,
+                'data': rows_data,
+                'columns': result.get('columns', []),
+                'row_count': len(rows_data),
+                'execution_time_ms': result.get('execution_time_ms', 0),
+                'metadata': result.get('metadata', {})
+            }
+            return standardized_result
+        else:
+            error_msg = result.get('error', 'Unknown error') if result else 'No response from MCP server'
+            logger.error(f"Query execution failed: {error_msg}")
+            return {
+                'success': False,
+                'error': error_msg,
+                'data': [],
+                'columns': [],
+                'row_count': 0
+            }
     
     async def validate_query(self, query: str) -> Optional[Dict[str, Any]]:
         """

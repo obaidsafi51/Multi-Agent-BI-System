@@ -1,4 +1,4 @@
-# Database package for AI CFO BI Agent - Pure PyMySQL implementation
+# Database package for AGENT BI - Pure PyMySQL implementation
 from .connection import (
     DatabaseManager, 
     get_database, 

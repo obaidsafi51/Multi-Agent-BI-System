@@ -256,57 +256,187 @@ class BackendMCPClient:
                         "table_count": len(tables)
                     }
                     
-                    # Get detailed schema for each table using MCP tools
-                    for table in tables:
+                    # Get detailed schema for all tables in parallel using batch operations
+                    async def fetch_table_schema(table):
                         table_name = table.get("name") if isinstance(table, dict) else str(table)
+                        max_retries = 3
+                        retry_delay = 1.0
+                        
+                        for attempt in range(max_retries):
+                            try:
+                                # Use get_table_schema MCP tool with retry logic
+                                schema_result = await self.call_tool("get_table_schema", {
+                                    "database": db_name,
+                                    "table": table_name
+                                })
+                                
+                                logger.debug(f"🔍 Schema result for {db_name}.{table_name}: {type(schema_result)}")
+                                
+                                # Handle different response formats - WebSocket MCP wraps in success/schema structure
+                                actual_schema = schema_result
+                                if isinstance(schema_result, dict) and schema_result.get("success") and "schema" in schema_result:
+                                    actual_schema = schema_result["schema"]
+                                
+                                # Enhanced schema validation with multiple fallback attempts
+                                if actual_schema:
+                                    columns = []
+                                    indexes = []
+                                    foreign_keys = []
+                                    
+                                    # Try different schema formats
+                                    if isinstance(actual_schema, dict):
+                                        if "columns" in actual_schema:
+                                            # Standard format
+                                            columns = actual_schema.get("columns", [])
+                                            indexes = actual_schema.get("indexes", [])
+                                            foreign_keys = actual_schema.get("foreign_keys", [])
+                                        elif "schema" in actual_schema and isinstance(actual_schema["schema"], dict):
+                                            # Nested schema format
+                                            nested_schema = actual_schema["schema"]
+                                            columns = nested_schema.get("columns", [])
+                                            indexes = nested_schema.get("indexes", [])
+                                            foreign_keys = nested_schema.get("foreign_keys", [])
+                                        elif "fields" in actual_schema:
+                                            # Alternative fields format
+                                            columns = actual_schema.get("fields", [])
+                                        else:
+                                            # Try to extract any column-like information
+                                            for key, value in actual_schema.items():
+                                                if isinstance(value, list) and key.lower() in ["columns", "fields", "attributes"]:
+                                                    columns = value
+                                                    break
+                                    
+                                    # Validate we have some column information
+                                    if columns or (isinstance(actual_schema, dict) and len(actual_schema) > 0):
+                                        return {
+                                            "table_name": table_name,
+                                            "schema": actual_schema,
+                                            "columns": columns,
+                                            "indexes": indexes,
+                                            "foreign_keys": foreign_keys
+                                        }
+                                    else:
+                                        if attempt < max_retries - 1:
+                                            logger.warning(f"⚠️ Schema for {db_name}.{table_name} has no column information, retrying...")
+                                            await asyncio.sleep(retry_delay)
+                                            retry_delay *= 1.5
+                                            continue
+                                        else:
+                                            logger.warning(f"⚠️ Schema for {db_name}.{table_name} has no column information after {max_retries} attempts")
+                                            return {"table_name": table_name, "error": "No column information found"}
+                                else:
+                                    if attempt < max_retries - 1:
+                                        logger.warning(f"⚠️ Empty schema response for {db_name}.{table_name}, retrying...")
+                                        await asyncio.sleep(retry_delay)
+                                        retry_delay *= 1.5
+                                        continue
+                                    else:
+                                        logger.warning(f"⚠️ Empty schema response for {db_name}.{table_name} after {max_retries} attempts")
+                                        return {"table_name": table_name, "error": "Empty schema response"}
+                                        
+                            except Exception as e:
+                                if attempt < max_retries - 1:
+                                    logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name} (attempt {attempt + 1}): {e}, retrying...")
+                                    await asyncio.sleep(retry_delay)
+                                    retry_delay *= 1.5
+                                    continue
+                                else:
+                                    logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name} after {max_retries} attempts: {e}")
+                                    return {"table_name": table_name, "error": str(e)}
+                        
+                        # This should never be reached, but just in case
+                        return {"table_name": table_name, "error": "Unknown error in schema fetch"}
+                    
+                    # Mark heavy operation in progress to prevent heartbeat conflicts
+                    if self.use_websocket and self.ws_client:
+                        async with self.ws_client.operation_lock:
+                            self.ws_client.heavy_operation_in_progress = True
+                    
+                    # Process tables in parallel with controlled concurrency
+                    logger.info(f"🚀 Processing {len(tables)} tables in parallel for {db_name}")
+                    # Reduce concurrency to prevent overwhelming WebSocket connection
+                    max_concurrent = min(3, len(tables))  # Max 3 concurrent requests
+                    semaphore = asyncio.Semaphore(max_concurrent)
+                    
+                    async def bounded_fetch(table):
+                        async with semaphore:
+                            # Add small delay between requests to prevent overwhelming
+                            await asyncio.sleep(0.1)
+                            return await fetch_table_schema(table)
+                    
+                    # Execute all table schema fetches concurrently with retry logic
+                    max_retries = 2
+                    retry_delay = 2.0
+                    
+                    for attempt in range(max_retries + 1):
                         try:
-                            # Use get_table_schema MCP tool
-                            schema_result = await self.call_tool("get_table_schema", {
-                                "database": db_name,
-                                "table": table_name
-                            })
+                            logger.info(f"🔄 Schema fetch attempt {attempt + 1}/{max_retries + 1} for {db_name}")
+                            schema_results = await asyncio.gather(
+                                *[bounded_fetch(table) for table in tables],
+                                return_exceptions=True
+                            )
                             
-                            logger.debug(f"🔍 Schema result for {db_name}.{table_name}: {type(schema_result)}")
+                            # Check if we got mostly successful results
+                            successful_results = sum(
+                                1 for result in schema_results 
+                                if not isinstance(result, Exception) and not result.get("error")
+                            )
                             
-                            # Handle different response formats - WebSocket MCP wraps in success/schema structure
-                            actual_schema = schema_result
-                            if isinstance(schema_result, dict) and schema_result.get("success") and "schema" in schema_result:
-                                actual_schema = schema_result["schema"]
-                            
-                            if actual_schema and "columns" in actual_schema:
-                                # MCP server returns schema directly, not nested
-                                columns = actual_schema.get("columns", [])
-                                indexes = actual_schema.get("indexes", [])
-                                foreign_keys = actual_schema.get("foreign_keys", [])
-                                primary_keys = actual_schema.get("primary_keys", [])
-                                
-                                # Build detailed table info with complete column metadata
-                                table_info = {
-                                    "name": table_name,
-                                    "columns": columns,  # Full column details with data_types, constraints
-                                    "column_count": len(columns),
-                                    "indexes": indexes,
-                                    "foreign_keys": foreign_keys,
-                                    "primary_keys": primary_keys,
-                                    "column_names": [col.get("name") for col in columns],
-                                    "data_types": {col.get("name"): col.get("data_type") for col in columns},
-                                    "nullable_columns": [col.get("name") for col in columns if col.get("is_nullable")],
-                                    "primary_key_columns": [col.get("name") for col in columns if col.get("is_primary_key")]
-                                }
-                                
-                                database_info["tables"].append(table_info)
-                                schema_context["total_columns"] += len(columns)
-                                schema_context["tables"].append(f"{db_name}.{table_name}")
-                                
-                                logger.debug(f"📋 {table_name}: {len(columns)} columns with detailed metadata")
+                            if successful_results >= len(tables) * 0.7:  # 70% success rate
+                                logger.info(f"✅ Schema fetch successful: {successful_results}/{len(tables)} tables")
+                                break
                             else:
-                                logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name}: {schema_result}")
-                                if schema_result and "error" in schema_result:
-                                    logger.error(f"❌ Schema error for {db_name}.{table_name}: {schema_result['error']}")
+                                if attempt < max_retries:
+                                    logger.warning(f"⚠️ Only {successful_results}/{len(tables)} tables successful, retrying in {retry_delay}s")
+                                    await asyncio.sleep(retry_delay)
+                                    retry_delay *= 1.5  # Exponential backoff
                                 
                         except Exception as e:
-                            logger.error(f"❌ Error getting schema for {db_name}.{table_name}: {e}")
+                            if attempt < max_retries:
+                                logger.warning(f"⚠️ Schema fetch failed (attempt {attempt + 1}): {e}, retrying in {retry_delay}s")
+                                await asyncio.sleep(retry_delay)
+                                retry_delay *= 1.5
+                            else:
+                                logger.error(f"❌ Schema fetch failed after {max_retries + 1} attempts: {e}")
+                                # Create error results for all tables
+                                schema_results = [{"table_name": table.get("name") if isinstance(table, dict) else str(table), "error": str(e)} for table in tables]
+                    
+                    # Process results
+                    for result in schema_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"Exception in parallel schema fetch: {result}")
                             continue
+                            
+                        table_name = result.get("table_name", "unknown")
+                        if "error" in result:
+                            logger.warning(f"❌ Schema error for {db_name}.{table_name}: {result['error']}")
+                            continue
+                        
+                        columns = result.get("columns", [])
+                        indexes = result.get("indexes", [])
+                        foreign_keys = result.get("foreign_keys", [])
+                        schema = result.get("schema", {})
+                        primary_keys = schema.get("primary_keys", [])
+                        
+                        # Build detailed table info with complete column metadata
+                        table_info = {
+                            "name": table_name,
+                            "columns": columns,  # Full column details with data_types, constraints
+                            "column_count": len(columns),
+                            "indexes": indexes,
+                            "foreign_keys": foreign_keys,
+                            "primary_keys": primary_keys,
+                            "column_names": [col.get("name") for col in columns],
+                            "data_types": {col.get("name"): col.get("data_type") for col in columns},
+                            "nullable_columns": [col.get("name") for col in columns if col.get("is_nullable")],
+                            "primary_key_columns": [col.get("name") for col in columns if col.get("is_primary_key")]
+                        }
+                        
+                        database_info["tables"].append(table_info)
+                        schema_context["total_columns"] += len(columns)
+                        schema_context["tables"].append(f"{db_name}.{table_name}")
+                        
+                        logger.debug(f"📋 {table_name}: {len(columns)} columns with detailed metadata")
                     
                     schema_context["databases"][db_name] = database_info
                     schema_context["total_tables"] += len(database_info["tables"])
@@ -317,6 +447,11 @@ class BackendMCPClient:
                     logger.error(f"❌ Error processing database {db_name}: {e}")
                     schema_context["databases"][db_name] = {"error": str(e)}
                     continue
+                finally:
+                    # Clear heavy operation flag
+                    if self.use_websocket and self.ws_client:
+                        async with self.ws_client.operation_lock:
+                            self.ws_client.heavy_operation_in_progress = False
             
             logger.info(f"🎉 Schema context built successfully: {schema_context['total_tables']} tables, {schema_context['total_columns']} columns across {len(schema_context['databases'])} databases")
             return schema_context

@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI CFO BI Agent",
-  description: "AI-Powered Business Intelligence Agent for CFOs",
+  title: "AGENT BI",
+  description: "AI-Powered Business Intelligence Agent",
 };
 
 export default function RootLayout({

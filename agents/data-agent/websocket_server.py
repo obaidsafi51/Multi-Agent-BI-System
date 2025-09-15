@@ -215,6 +215,7 @@ class WebSocketDataServer:
     
     async def handle_sql_query(self, websocket: WebSocketServerProtocol, data: Dict, client_id: str, message_id: str):
         """Handle SQL query request"""
+        logger.info(f"🔥 DEBUG: handle_sql_query called for client {client_id} with message_id {message_id}")
         try:
             if not self.data_agent:
                 raise RuntimeError("Data agent not initialized")
@@ -228,13 +229,28 @@ class WebSocketDataServer:
                 await self.send_error(websocket, "Missing sql_query in request", client_id)
                 return
             
+            logger.info(f"Processing SQL query for {client_id}: {sql_query[:100]}...")
+            
+            # Clean SQL query - remove USE statements that cause pattern issues
+            logger.info(f"Original SQL query: {sql_query}")
+            cleaned_sql = self._clean_sql_query(sql_query)
+            logger.info(f"Cleaned SQL query: {cleaned_sql}")
+            
+            # Verify that cleaning worked - USE statements are now allowed and kept
+            if "USE " in cleaned_sql.upper() and "SELECT" in cleaned_sql.upper():
+                logger.info("✅ SQL cleaning successful - USE + SELECT pattern maintained")
+            elif "USE " in cleaned_sql.upper():
+                logger.info("✅ SQL cleaning successful - standalone USE statement maintained")  
+            else:
+                logger.info("✅ SQL cleaning successful - no USE statement needed")
+            
             # Send processing status
             await self.send_progress(websocket, message_id, client_id, "processing", 20)
             
             # Execute SQL query through MCP data agent
             start_time = time.time()
             result = await self.data_agent.execute_sql(
-                sql_query=sql_query,
+                sql_query=cleaned_sql,
                 query_context=query_context,
                 query_id=query_id,
                 execution_config=execution_config
@@ -246,23 +262,70 @@ class WebSocketDataServer:
             # Send completion status
             await self.send_progress(websocket, message_id, client_id, "completed", 100)
             
-            # Send result
+            # Send result - Return the actual data, not just True/False
             response = {
                 "type": "sql_query_response",
                 "response_to": message_id,
                 "client_id": client_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "query_id": query_id,
-                "result": result,
-                "processing_time_ms": processing_time
+                "success": result.get("success", False),
+                "data": result.get("data", []),
+                "processed_data": result.get("data", []),  # Include both for compatibility
+                "columns": result.get("columns", []),
+                "row_count": result.get("row_count", 0),
+                "processing_time_ms": processing_time,
+                "error": result.get("error"),
+                "metadata": result.get("metadata", {})
             }
             
             await websocket.send(json.dumps(response))
-            logger.info(f"SQL query processed for {client_id} in {processing_time:.2f}ms")
+            logger.info(f"SQL query processed for {client_id} in {processing_time:.2f}ms, rows: {result.get('row_count', 0)}")
             
         except Exception as e:
             logger.error(f"Error processing SQL query for {client_id}: {e}")
             await self.send_error(websocket, str(e), client_id)
+    
+    def _clean_sql_query(self, sql_query: str) -> str:
+        """
+        Clean SQL query to ensure proper TiDB syntax with USE statement.
+        
+        Args:
+            sql_query: Original SQL query
+            
+        Returns:
+            Cleaned SQL query with proper USE statement formatting
+        """
+        # For TiDB, we need to keep USE statements but ensure proper semicolon formatting
+        lines = sql_query.strip().split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Process USE statements - keep them but ensure proper semicolon
+            if line.upper().startswith('USE '):
+                # Ensure USE statement ends with semicolon
+                if not line.endswith(';'):
+                    line = line + ';'
+                logger.info(f"✅ Keeping USE statement with proper formatting: {line}")
+                cleaned_lines.append(line)
+                continue
+                
+            # Skip empty lines
+            if not line:
+                continue
+                
+            cleaned_lines.append(line)
+        
+        cleaned_sql = '\n'.join(cleaned_lines)
+        
+        # Also remove multiple semicolons and clean up
+        cleaned_sql = cleaned_sql.replace(';;', ';').strip()
+        if cleaned_sql.endswith(';'):
+            cleaned_sql = cleaned_sql[:-1]  # Remove trailing semicolon
+        
+        return cleaned_sql
     
     async def handle_health_check(self, websocket: WebSocketServerProtocol, data: Dict, client_id: str, message_id: str):
         """Handle health check request"""

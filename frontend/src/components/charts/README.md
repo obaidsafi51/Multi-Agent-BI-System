@@ -1,6 +1,6 @@
 # ChartRenderer Component
 
-A comprehensive, reusable chart rendering component built with Recharts for the AI CFO BI Agent frontend. This component provides intelligent chart type selection, CFO-specific styling, and advanced export capabilities.
+A comprehensive, reusable chart rendering component built with Recharts for the AGENT BI frontend. This component provides intelligent chart type selection, business-specific styling, and advanced export capabilities.
 
 ## Features
 

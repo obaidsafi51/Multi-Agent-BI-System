@@ -1,5 +1,5 @@
 """
-AI CFO Backend - FastAPI Gateway with WebSocket Support
+AGENT BI Backend - FastAPI Gateway with WebSocket Support
 Main FastAPI application with async endpoints, WebSocket handlers, and authentication.
 
 INTENDED WORKFLOW:
@@ -179,8 +179,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI CFO Backend",
-    description="FastAPI Gateway for AI CFO BI Agent with WebSocket Support",
+    title="AGENT BI Backend",
+    description="FastAPI Gateway for AGENT BI with WebSocket Support",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -552,7 +552,7 @@ class QueryHistoryEntry(BaseModel):
 async def root():
     """Root endpoint"""
     return {
-        "message": "AI CFO Backend API",
+        "message": "AGENT BI Backend API",
         "version": "1.0.0",
         "status": "operational",
         "endpoints": {
@@ -817,6 +817,11 @@ async def process_query_core(query_request: QueryRequest) -> QueryResponse:
         )
         
         logger.info(f"📊 Data Agent WebSocket response received: {bool(data_result)}")
+        logger.info(f"🔍 DEBUG: Data agent response type: {type(data_result)}")
+        logger.info(f"🔍 DEBUG: Data agent response keys: {list(data_result.keys()) if isinstance(data_result, dict) else 'Not a dict'}")
+        if isinstance(data_result, dict):
+            logger.info(f"🔍 DEBUG: Data agent success field: {data_result.get('success')}")
+            logger.info(f"🔍 DEBUG: Data agent error field: {data_result.get('error')}")
         
         if not data_result or not data_result.get("success"):
             error_msg = data_result.get('error', 'Unknown error') if data_result else 'No response from data agent'
@@ -848,7 +853,7 @@ async def process_query_core(query_request: QueryRequest) -> QueryResponse:
         columns = data_result.get("columns", [])
         logger.info(f"✅ Data processing completed, retrieved {len(query_data)} rows")
         
-        # Step 3: Send data to Viz Agent
+        # Step 3: Send data to Viz Agent with session context for dashboard integration
         logger.info(f"🎨 Sending data to Viz Agent: {len(query_data)} rows")
         
         viz_result = await send_to_agent_enhanced(
@@ -860,9 +865,12 @@ async def process_query_core(query_request: QueryRequest) -> QueryResponse:
                 "query": query_request.query,
                 "intent": query_intent,
                 "query_id": query_id,
+                "session_id": session_id,  # Include session for dashboard integration
+                "user_id": user_id,        # Include user for dashboard integration
                 "context": {
                     "timestamp": datetime.utcnow().isoformat(),
-                    "source": "backend_api"
+                    "source": "backend_api_websocket",
+                    "database_context": database_context
                 }
             }
         )
@@ -897,7 +905,7 @@ async def process_query_core(query_request: QueryRequest) -> QueryResponse:
                 columns=columns,
                 row_count=len(query_data),
                 sql_query=sql_query,
-                processing_time_ms=data_result.get("processing_time_ms", 0)
+                processing_time_ms=int(data_result.get("processing_time_ms", 0))
             ),
             visualization={
                 "chart_type": viz_result.get("chart_config", {}).get("chart_type", "table"),
@@ -1818,6 +1826,26 @@ async def fallback_nlp_processing(query: str, query_id: str) -> dict:
     }
 
 
+def _clean_sql_query_backend(sql_query: str) -> str:
+    """Clean SQL query and preserve USE statements for MCP server (now supports USE statements)"""
+    lines = sql_query.strip().split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        stripped_line = line.strip()
+        
+        # Keep USE statements - MCP server now supports them
+        if stripped_line.upper().startswith('USE '):
+            logger.info(f"🔧 Preserving USE statement for database context: {stripped_line}")
+            cleaned_lines.append(line)
+            continue
+            
+        if stripped_line:  # Only add non-empty lines
+            cleaned_lines.append(line)
+    
+    cleaned_sql = '\n'.join(cleaned_lines).strip()
+    return cleaned_sql
+
 async def fallback_data_processing(sql_query: str, query_context: dict, query_id: str) -> dict:
     """Fallback data processing using MCP server when data agent is unavailable"""
     logger.warning(f"Using fallback data processing via MCP for query {query_id}")
@@ -1826,8 +1854,12 @@ async def fallback_data_processing(sql_query: str, query_context: dict, query_id
         from mcp_client import get_backend_mcp_client
         mcp_client = get_backend_mcp_client()
         
+        # Clean the SQL query to remove USE statements that cause multi-statement issues
+        cleaned_sql = _clean_sql_query_backend(sql_query)
+        logger.info(f"🧹 Fallback SQL cleaned: {cleaned_sql[:100]}...")
+        
         # Execute query through MCP server
-        result = await mcp_client.execute_query(sql_query)
+        result = await mcp_client.execute_query(cleaned_sql)
         
         if result and not result.get("error"):
             processed_data = result.get("rows", [])
@@ -2000,6 +2032,11 @@ async def process_websocket_query_directly(query_request: QueryRequest) -> Query
             logger.warning("Data agent response missing processed_data field")
         else:
             # Data agent response looks good, continue with processing
+            # Debug logging to understand what backend receives
+            logger.info(f"🔍 DEBUG: Backend received processed_data length: {len(data_result.get('processed_data', []))}")
+            logger.info(f"🔍 DEBUG: Backend received processed_data sample: {str(data_result.get('processed_data', []))[:200]}...")
+            logger.info(f"🔍 DEBUG: Backend received row_count: {data_result.get('row_count', 'MISSING')}")
+            
             query_data = data_result.get("processed_data", [])
             columns = data_result.get("columns", [])
             logger.info(f"✅ Data processing completed, retrieved {len(query_data)} rows")
@@ -2047,7 +2084,7 @@ async def process_websocket_query_directly(query_request: QueryRequest) -> Query
                     columns=columns,
                     row_count=len(query_data),
                     sql_query=sql_query,
-                    processing_time_ms=data_result.get("processing_time_ms", 0)
+                    processing_time_ms=int(data_result.get("processing_time_ms", 0))
                 ),
                 visualization={
                     "chart_type": viz_result.get("chart_config", {}).get("chart_type", "table"),
@@ -2128,7 +2165,7 @@ async def process_websocket_query_directly(query_request: QueryRequest) -> Query
                 columns=columns,
                 row_count=len(query_data),
                 sql_query=sql_query,
-                processing_time_ms=data_result.get("processing_time_ms", 0)
+                processing_time_ms=int(data_result.get("processing_time_ms", 0))
             ),
             visualization={
                 "chart_type": viz_result.get("chart_config", {}).get("chart_type", "table"),

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design document outlines the architecture for implementing dynamic schema management in the AI CFO BI Agent system. The solution addresses the current static configuration issues by implementing intelligent schema discovery, flexible query generation, and runtime configuration management. The design leverages the existing TiDB MCP server while adding new components for semantic understanding, configuration management, and agent synchronization.
+This design document outlines the architecture for implementing dynamic schema management in the AGENT BI system. The solution addresses the current static configuration issues by implementing intelligent schema discovery, flexible query generation, and runtime configuration management. The design leverages the existing TiDB MCP server while adding new components for semantic understanding, configuration management, and agent synchronization.
 
 ## Architecture
 

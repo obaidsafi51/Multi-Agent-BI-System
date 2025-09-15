@@ -1,6 +1,6 @@
 # MCP Schema Management Configuration
 
-This document describes the configuration system for MCP (Model Context Protocol) schema management in the AI CFO BI Agent.
+This document describes the configuration system for MCP (Model Context Protocol) schema management in the AGENT BI.
 
 ## Overview
 

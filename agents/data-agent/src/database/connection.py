@@ -187,7 +187,7 @@ class TiDBConnectionManager:
             logger.info("TiDB connection manager initialized successfully")
             
         except Exception as e:
-            logger.error("Failed to initialize TiDB connection", error=str(e))
+            logger.error(f"Failed to initialize TiDB connection: {str(e)}")
             raise
     
     def _setup_event_listeners(self) -> None:
@@ -207,7 +207,7 @@ class TiDBConnectionManager:
         @event.listens_for(self.async_engine.sync_engine, "handle_error")
         def on_error(exception_context):
             self.stats['failed_connections'] += 1
-            logger.error("Database connection error", error=str(exception_context.original_exception))
+            logger.error(f"Database connection error: {str(exception_context.original_exception)}")
     
     async def _test_connection(self) -> None:
         """
@@ -226,7 +226,7 @@ class TiDBConnectionManager:
             logger.info("Database connection test successful")
             
         except Exception as e:
-            logger.error("Database connection test failed", error=str(e))
+            logger.error(f"Database connection test failed: {str(e)}")
             raise
     
     @asynccontextmanager
@@ -246,7 +246,7 @@ class TiDBConnectionManager:
             await session.commit()
         except Exception as e:
             await session.rollback()
-            logger.error("Database session error", error=str(e))
+            logger.error(f"Database session error: {str(e)}")
             raise
         finally:
             await session.close()

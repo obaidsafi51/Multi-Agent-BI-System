@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design outlines the migration from static schema management to dynamic MCP-based schema management for the AI CFO BI Agent. The system will leverage the existing TiDB MCP server to replace static SQL files, migration scripts, and hardcoded schema definitions with real-time schema discovery and operations through the Model Context Protocol (MCP).
+This design outlines the migration from static schema management to dynamic MCP-based schema management for the AGENT BI. The system will leverage the existing TiDB MCP server to replace static SQL files, migration scripts, and hardcoded schema definitions with real-time schema discovery and operations through the Model Context Protocol (MCP).
 
 The migration will maintain backward compatibility while providing enhanced flexibility, real-time schema synchronization, and reduced maintenance overhead. The existing TiDB MCP server already provides comprehensive database operations including schema discovery, query execution, and data sampling.
 

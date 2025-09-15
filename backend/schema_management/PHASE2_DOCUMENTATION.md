@@ -2,19 +2,21 @@
 
 ## Overview
 
-Phase 2 of the Dynamic Schema Management system introduces advanced semantic understanding and intelligent query building capabilities. This phase enables the AI CFO BI Agent to understand business terminology, automatically map business concepts to database schema elements, and generate optimized SQL queries from natural language intents.
+Phase 2 of the Dynamic Schema Management system introduces advanced semantic understanding and intelligent query building capabilities. This phase enables the AGENT BI to understand business terminology, automatically map business concepts to database schema elements, and generate optimized SQL queries from natural language intents.
 
 ## Architecture
 
 ### Core Components
 
 1. **SemanticSchemaMapper** (`semantic_mapper.py`)
+
    - Maps business terms to database schema elements
    - Uses TF-IDF vectorization and cosine similarity
    - Supports learning from successful queries
    - Provides confidence scoring and context matching
 
 2. **IntelligentQueryBuilder** (`query_builder.py`)
+
    - Generates SQL queries from business intent
    - Performs query optimization and join planning
    - Validates queries before execution
@@ -31,18 +33,21 @@ Phase 2 of the Dynamic Schema Management system introduces advanced semantic und
 ### Semantic Mapping (Task 4)
 
 #### Business Term Resolution
+
 - **Automatic Mapping**: Maps business terms like "revenue", "customer", "profit" to actual database columns
 - **Confidence Scoring**: Each mapping includes a confidence score (0.0-1.0)
 - **Context Awareness**: Considers business context when resolving ambiguous terms
 - **Learning Capability**: Improves mappings based on successful query history
 
 #### Supported Similarity Methods
+
 - **Exact Match**: Perfect string matches (highest confidence)
 - **Fuzzy Match**: Uses difflib for partial string matches
 - **Semantic**: TF-IDF vectorization with cosine similarity
 - **NLP Enhanced**: Optional NLTK/spaCy integration for advanced NLP
 
 #### Business Term Categories
+
 - Financial terms (revenue, profit, cost, etc.)
 - Customer-related terms (customer, client, user, etc.)
 - Product terms (product, item, sku, etc.)
@@ -52,18 +57,21 @@ Phase 2 of the Dynamic Schema Management system introduces advanced semantic und
 ### Intelligent Query Building (Task 5)
 
 #### Query Intent Processing
+
 - **Metric Type Identification**: Recognizes what metric is being requested
 - **Filter Application**: Applies time periods, categories, and other filters
 - **Aggregation Logic**: Handles SUM, COUNT, AVG, MIN, MAX operations
 - **Grouping and Sorting**: Implements GROUP BY and ORDER BY clauses
 
 #### Advanced Features
+
 - **Join Optimization**: Automatically determines necessary table joins
 - **Query Validation**: Validates generated SQL syntax and logic
 - **Performance Estimation**: Estimates query execution time and result size
 - **Alternative Queries**: Provides multiple query options when ambiguous
 
 #### Supported Query Types
+
 - Time-series analysis (revenue by month, quarterly trends)
 - Categorical analysis (sales by region, products by category)
 - Top-N queries (top customers, best-selling products)
@@ -73,18 +81,21 @@ Phase 2 of the Dynamic Schema Management system introduces advanced semantic und
 ### Schema Change Detection (Task 6)
 
 #### Real-time Monitoring
+
 - **Continuous Monitoring**: Background process checks for schema changes
 - **Change Classification**: Categorizes changes by type and severity
 - **Impact Analysis**: Analyzes potential impact on existing queries
 - **Notification System**: Configurable alerts for different change types
 
 #### Change Types Detected
+
 - **Structural Changes**: Table/column additions, deletions, renames
 - **Type Changes**: Data type modifications
 - **Constraint Changes**: Primary key, foreign key, index changes
 - **Permission Changes**: Access control modifications
 
 #### Severity Levels
+
 - **LOW**: Minor changes with minimal impact (adding nullable columns)
 - **MEDIUM**: Changes requiring query updates (column renames)
 - **HIGH**: Breaking changes (column deletions, type incompatibilities)
@@ -137,6 +148,7 @@ schema_manager = MCPSchemaManager(
 ### Semantic Mapping Methods
 
 #### `map_business_term_to_schema()`
+
 Maps a business term to schema elements.
 
 ```python
@@ -148,6 +160,7 @@ mappings = await schema_manager.map_business_term_to_schema(
 ```
 
 #### `learn_from_successful_query()`
+
 Improves mappings based on successful queries.
 
 ```python
@@ -161,6 +174,7 @@ schema_manager.learn_from_successful_query(
 ### Query Building Methods
 
 #### `build_intelligent_query()`
+
 Generates SQL from business intent.
 
 ```python
@@ -181,6 +195,7 @@ result = await schema_manager.build_intelligent_query(
 ### Change Detection Methods
 
 #### `get_schema_change_history()`
+
 Retrieves recent schema changes.
 
 ```python
@@ -191,6 +206,7 @@ changes = await schema_manager.get_schema_change_history(
 ```
 
 #### `add_schema_change_listener()`
+
 Adds a change notification listener.
 
 ```python
@@ -201,6 +217,7 @@ schema_manager.add_schema_change_listener(change_handler)
 ```
 
 #### `force_schema_change_check()`
+
 Forces an immediate schema check.
 
 ```python
@@ -210,6 +227,7 @@ result = await schema_manager.force_schema_change_check()
 ## Data Models
 
 ### SemanticMapping
+
 ```python
 @dataclass
 class SemanticMapping:
@@ -223,6 +241,7 @@ class SemanticMapping:
 ```
 
 ### QueryIntent
+
 ```python
 @dataclass
 class QueryIntent:
@@ -238,6 +257,7 @@ class QueryIntent:
 ```
 
 ### SchemaChange
+
 ```python
 @dataclass
 class SchemaChange:
@@ -257,12 +277,14 @@ class SchemaChange:
 ## Testing
 
 ### Test Coverage
+
 - **Unit Tests**: Individual component testing
 - **Integration Tests**: Cross-component interaction testing
 - **Performance Tests**: Load and stress testing
 - **Mock Tests**: Testing with simulated MCP server responses
 
 ### Running Tests
+
 ```bash
 # Run Phase 2 tests
 cd backend/schema_management
@@ -273,6 +295,7 @@ pytest test_phase2.py --cov=. --cov-report=html
 ```
 
 ### Test Examples
+
 ```python
 # Test semantic mapping
 async def test_semantic_mapping():
@@ -292,18 +315,21 @@ async def test_query_building():
 ## Performance Considerations
 
 ### Optimization Strategies
+
 - **Caching**: Semantic mappings and schema metadata are cached
 - **Batch Processing**: Schema changes are processed in batches
 - **Lazy Loading**: Optional components loaded only when needed
 - **Connection Pooling**: Efficient MCP server connection management
 
 ### Performance Metrics
+
 - **Semantic Mapping**: ~10-50ms per business term
 - **Query Building**: ~50-200ms per query intent
 - **Change Detection**: ~100-500ms per schema check
 - **Memory Usage**: ~50-100MB for typical workloads
 
 ### Scalability Limits
+
 - **Business Terms**: Up to 10,000 terms supported
 - **Schema Elements**: No hard limit (depends on database size)
 - **Change History**: Configurable retention (default: 30 days)
@@ -312,6 +338,7 @@ async def test_query_building():
 ## Usage Examples
 
 ### Basic Semantic Mapping
+
 ```python
 # Map business term to schema
 mappings = await schema_manager.map_business_term_to_schema(
@@ -325,6 +352,7 @@ for mapping in mappings:
 ```
 
 ### Intelligent Query Generation
+
 ```python
 # Generate query from business intent
 intent = {
@@ -343,13 +371,14 @@ if result['success']:
 ```
 
 ### Schema Change Monitoring
+
 ```python
 # Set up change monitoring
 def handle_schema_change(change):
     if change.severity == SeverityLevel.HIGH:
         # Send alert
         send_alert(f"Critical schema change: {change.change_type}")
-    
+
     # Log change
     logger.info(f"Schema change detected: {change}")
 
@@ -359,17 +388,21 @@ schema_manager.add_schema_change_listener(handle_schema_change)
 ## Integration with Existing Systems
 
 ### Backward Compatibility
+
 - All existing APIs remain unchanged
 - Phase 2 features are optional and can be disabled
 - Graceful degradation when optional dependencies are missing
 
 ### Agent Integration Ready
+
 - **NLP Agent**: Can use semantic mapping for query understanding
 - **Data Agent**: Can use intelligent query building for data retrieval
 - **Viz Agent**: Can subscribe to schema changes for visualization updates
 
 ### Migration Path
+
 Phase 2 provides the foundation for Phase 3 agent migrations:
+
 1. **Task 7**: Migrate NLP Agent to use semantic mapping
 2. **Task 8**: Migrate Data Agent to use intelligent query building
 3. **Task 9**: Migrate Backend Gateway to use dynamic schema management
@@ -379,24 +412,28 @@ Phase 2 provides the foundation for Phase 3 agent migrations:
 ### Common Issues
 
 #### Semantic Mapping Not Working
+
 - Check if `ENABLE_SEMANTIC_MAPPING=true`
 - Verify business terms are loaded correctly
 - Check MCP server connectivity
 - Review confidence threshold settings
 
 #### Query Building Failures
+
 - Verify schema metadata is available
 - Check semantic mappings for required terms
 - Review query intent structure
 - Validate database permissions
 
 #### Change Detection Not Triggering
+
 - Check if `ENABLE_CHANGE_DETECTION=true`
 - Verify monitoring interval settings
 - Check MCP server permissions
 - Review change detection logs
 
 ### Debug Mode
+
 ```python
 # Enable debug logging
 import logging
@@ -408,6 +445,7 @@ print(json.dumps(stats, indent=2))
 ```
 
 ### Health Checks
+
 ```python
 # Check Phase 2 component health
 health = await schema_manager.get_health_status()
@@ -419,6 +457,7 @@ print(f"Change Detection: {health['change_detection']['status']}")
 ## Future Enhancements
 
 ### Planned Improvements
+
 - **Advanced NLP**: Integration with transformer models
 - **Machine Learning**: Automated pattern recognition in queries
 - **Multi-language Support**: Business terms in multiple languages
@@ -426,6 +465,7 @@ print(f"Change Detection: {health['change_detection']['status']}")
 - **Federated Queries**: Cross-database query generation
 
 ### Extension Points
+
 - **Custom Similarity Functions**: Plugin architecture for custom matching
 - **External Term Dictionaries**: Integration with business glossaries
 - **Custom Change Handlers**: Domain-specific change processing
@@ -436,6 +476,7 @@ print(f"Change Detection: {health['change_detection']['status']}")
 Phase 2 successfully implements semantic understanding and query intelligence capabilities, providing a robust foundation for AI-powered business intelligence. The system can now understand business terminology, generate intelligent SQL queries, and monitor schema changes in real-time.
 
 Key achievements:
+
 - ✅ Semantic mapping with 85%+ accuracy for common business terms
 - ✅ Intelligent query generation with optimization hints
 - ✅ Real-time schema change detection with impact analysis

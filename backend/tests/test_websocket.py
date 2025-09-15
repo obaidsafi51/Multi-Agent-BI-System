@@ -29,7 +29,7 @@ class TestWebSocketConnection:
             # Should receive welcome message
             data = websocket.receive_json()
             assert data["type"] == "system"
-            assert "Connected to AI CFO Assistant" in data["message"]
+            assert "Connected to AGENT BI" in data["message"]
             assert "timestamp" in data
     
     def test_websocket_multiple_connections(self, client):

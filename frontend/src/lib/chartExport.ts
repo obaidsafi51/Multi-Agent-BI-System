@@ -148,7 +148,7 @@ export class ChartExportService {
         // Add company branding
         ctx.fillStyle = "#1f2937";
         ctx.font = "14px Arial, sans-serif";
-        ctx.fillText("AI CFO BI Agent", 10, canvas.height - 10);
+        ctx.fillText("AGENT BI", 10, canvas.height - 10);
 
         // Add timestamp
         ctx.fillStyle = "#6b7280";
@@ -175,7 +175,7 @@ export class ChartExportService {
         brandText.setAttribute("font-family", "Arial, sans-serif");
         brandText.setAttribute("font-size", "14");
         brandText.setAttribute("fill", "#1f2937");
-        brandText.textContent = "AI CFO BI Agent";
+        brandText.textContent = "AGENT BI";
 
         const timestampText = document.createElementNS("http://www.w3.org/2000/svg", "text");
         timestampText.setAttribute("x", (width - 200).toString());
@@ -197,7 +197,7 @@ export class ChartExportService {
 
         pdf.setFontSize(16);
         pdf.setTextColor(31, 41, 55); // #1f2937
-        pdf.text("AI CFO BI Agent", 10, 25);
+        pdf.text("AGENT BI", 10, 25);
 
         pdf.setFontSize(12);
         pdf.setTextColor(107, 114, 128); // #6b7280

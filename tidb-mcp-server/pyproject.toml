@@ -9,7 +9,7 @@ description = "A Model Context Protocol server for TiDB Cloud database access"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "AI CFO BI Agent Team"}
+    {name = "AGENT BI Team"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -70,16 +70,16 @@ class EnhancedWebSocketMCPClient:
         self,
         ws_url: str = "ws://tidb-mcp-server:8000/ws",
         agent_id: str = "nlp-agent",
-        # Connection settings - optimized for KIMI API processing
+        # Connection settings - optimized for KIMI API processing and schema operations
         initial_reconnect_delay: float = 3.0,  # Start with reasonable delay
         max_reconnect_delay: float = 60.0,  # Longer max delay for stability
         max_reconnect_attempts: int = -1,  # Unlimited
-        connection_timeout: float = 30.0,  # Increased timeout for Docker + network latency
-        request_timeout: float = 180.0,  # 3 minutes for KIMI API processing
-        # Health check settings - optimized for KIMI API response times
-        heartbeat_interval: float = 45.0,  # Balanced heartbeat interval
-        health_check_interval: float = 120.0,  # Less frequent health checks
-        ping_timeout: float = 20.0,  # Increased ping timeout
+        connection_timeout: float = 45.0,  # Increased timeout for Docker + network latency
+        request_timeout: float = 300.0,  # 5 minutes for KIMI API and schema processing
+        # Health check settings - optimized for KIMI API response times and schema operations
+        heartbeat_interval: float = 120.0,  # Even longer heartbeat interval for heavy operations
+        health_check_interval: float = 240.0,  # Less frequent health checks during processing
+        ping_timeout: float = 60.0,  # Even longer ping timeout for heavy operations
         # Circuit breaker settings - more tolerant for KIMI API variability
         circuit_breaker_threshold: int = 8,  # More tolerant threshold
         circuit_breaker_timeout: float = 120.0,  # Longer cooldown period
@@ -89,7 +89,7 @@ class EnhancedWebSocketMCPClient:
         batch_size: int = 5,
         batch_timeout: float = 0.1
     ):
-        # Connection configuration
+        # Connection configuration - optimized for production stability
         self.ws_url = ws_url
         self.agent_id = agent_id
         self.initial_reconnect_delay = initial_reconnect_delay
@@ -97,6 +97,11 @@ class EnhancedWebSocketMCPClient:
         self.max_reconnect_attempts = max_reconnect_attempts
         self.connection_timeout = connection_timeout
         self.request_timeout = request_timeout
+        
+        # Add connection stability tracking
+        self._connection_failures = 0
+        self._last_successful_connection = None
+        self._stable_connection_threshold = 300  # 5 minutes of stable connection
         
         # Health monitoring
         self.heartbeat_interval = heartbeat_interval
@@ -270,7 +275,7 @@ class EnhancedWebSocketMCPClient:
                         self.ws_url,
                         ping_interval=self.heartbeat_interval,
                         ping_timeout=self.ping_timeout,
-                        close_timeout=10,
+                        close_timeout=15,  # Increased close timeout
                         max_size=10**7,
                         compression=None  # Disable compression for better performance
                     ),
@@ -388,7 +393,7 @@ class EnhancedWebSocketMCPClient:
                 asyncio.create_task(self._reconnect())
     
     async def _reconnect(self):
-        """Attempt to reconnect with exponential backoff"""
+        """Attempt to reconnect with enhanced stability logic"""
         async with self.reconnection_lock:
             if self.connection_state == ConnectionState.RECONNECTING:
                 logger.debug("Reconnection already in progress, skipping duplicate attempt")
@@ -400,26 +405,67 @@ class EnhancedWebSocketMCPClient:
             
             self.connection_state = ConnectionState.RECONNECTING
             self.stats.reconnection_attempts += 1
+            self._connection_failures += 1
         
-        # Calculate backoff delay
+        # Enhanced backoff calculation with connection stability consideration
+        base_delay = self.initial_reconnect_delay
+        
+        # If we've had recent failures, increase the base delay
+        if self._connection_failures > 3:
+            base_delay *= 2
+        if self._connection_failures > 6:
+            base_delay *= 3
+        
+        # Calculate exponential backoff with jitter
         backoff_delay = min(
-            self.initial_reconnect_delay * (2 ** (self.stats.reconnection_attempts - 1)),
+            base_delay * (2 ** min(self.stats.reconnection_attempts - 1, 8)),
             self.max_reconnect_delay
         )
         
+        # Add jitter to prevent thundering herd
+        import random
+        jitter = random.uniform(0.1, 0.3) * backoff_delay
+        total_delay = backoff_delay + jitter
+        
         logger.info(
             f"Attempting reconnection {self.stats.reconnection_attempts} "
-            f"in {backoff_delay:.1f}s"
+            f"(failures: {self._connection_failures}) in {total_delay:.1f}s"
         )
         
-        await asyncio.sleep(backoff_delay)
+        await asyncio.sleep(total_delay)
         
         success = await self.connect()
         if success:
-            self.stats.reconnection_attempts = 0  # Reset on success
+            # Track successful connection for stability assessment
+            self._last_successful_connection = time.time()
+            
+            # Reset counters on successful connection
+            self.stats.reconnection_attempts = 0
             logger.info("Reconnection successful")
+            
+            # Start monitoring for connection stability
+            asyncio.create_task(self._monitor_connection_stability())
         else:
             logger.warning("Reconnection failed")
+    
+    async def _monitor_connection_stability(self):
+        """Monitor connection stability and reset failure counter on stable connections"""
+        try:
+            await asyncio.sleep(self._stable_connection_threshold)
+            
+            # If we've been connected for the threshold time, reset failure counter
+            if (self.is_connected and 
+                self._last_successful_connection and
+                time.time() - self._last_successful_connection >= self._stable_connection_threshold):
+                
+                old_failures = self._connection_failures
+                self._connection_failures = 0
+                logger.info(f"Connection stable for {self._stable_connection_threshold}s, "
+                           f"reset failure counter (was {old_failures})")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"Error in connection stability monitor: {e}")
     
     async def _start_background_tasks(self):
         """Start background maintenance tasks"""
@@ -519,14 +565,28 @@ class EnhancedWebSocketMCPClient:
             await self._handle_disconnect()
     
     async def _handle_disconnect(self):
-        """Handle unexpected disconnection"""
+        """Handle unexpected disconnection with enhanced logic"""
         if self.connection_state == ConnectionState.CONNECTED:
             logger.warning("Unexpected disconnection detected")
+            
+            # Check if this is a transient network issue
+            was_stable = (self._last_successful_connection and 
+                         time.time() - self._last_successful_connection > 60)
+            
+            if was_stable:
+                logger.info("Disconnection from stable connection - likely transient network issue")
+            else:
+                logger.warning("Disconnection from unstable connection - may indicate persistent issue")
+            
             await self._notify_connection_event("disconnected")
             self.connection_state = ConnectionState.DISCONNECTED
             
             # Start reconnection only if not already reconnecting
             if not self.reconnection_lock.locked():
+                # Add small delay for transient issues to resolve
+                if was_stable:
+                    await asyncio.sleep(1.0)  # Brief pause for stable connections
+                
                 asyncio.create_task(self._reconnect())
     
     async def _process_message(self, data: Dict[str, Any]):

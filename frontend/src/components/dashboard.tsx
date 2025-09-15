@@ -305,7 +305,7 @@ export default function Dashboard() {
             </div>
           </div>
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Loading your dashboard</h3>
-          <p className="text-slate-600 dark:text-slate-400">Setting up your AI CFO assistant...</p>
+          <p className="text-slate-600 dark:text-slate-400">Setting up your AGENT BI assistant...</p>
         </motion.div>
       </div>
     }>

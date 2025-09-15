@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This feature migrates the AI CFO BI Agent from static schema management (SQL files and migrations) to dynamic schema management using the existing TiDB MCP server. This will enable real-time schema discovery, eliminate the need for static schema files, and provide more flexible database operations through the MCP protocol. The system will leverage the existing tidb-mcp-server to dynamically discover and interact with database schemas instead of relying on hardcoded SQL schema definitions.
+This feature migrates the AGENT BI from static schema management (SQL files and migrations) to dynamic schema management using the existing TiDB MCP server. This will enable real-time schema discovery, eliminate the need for static schema files, and provide more flexible database operations through the MCP protocol. The system will leverage the existing tidb-mcp-server to dynamically discover and interact with database schemas instead of relying on hardcoded SQL schema definitions.
 
 ## Requirements
 

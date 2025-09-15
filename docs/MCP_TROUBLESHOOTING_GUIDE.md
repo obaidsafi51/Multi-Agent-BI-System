@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides comprehensive troubleshooting information for MCP (Model Context Protocol) schema management integration in the AI CFO BI Agent.
+This guide provides comprehensive troubleshooting information for MCP (Model Context Protocol) schema management integration in the AGENT BI.
 
 ## Quick Health Check
 

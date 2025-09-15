@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the recommended session management strategy for the AI CFO BI system to maintain persistent user connections across page reloads and browser sessions.
+This document outlines the recommended session management strategy for the AGENT BI system to maintain persistent user connections across page reloads and browser sessions.
 
 ## Current State Analysis
 
