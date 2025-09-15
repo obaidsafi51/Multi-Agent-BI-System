@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 import aiohttp
 from contextlib import asynccontextmanager
@@ -152,15 +153,27 @@ class BackendMCPClient:
             return {"error": str(e)}
     
     async def call_tool(self, tool_name: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        """Generic method to call any MCP tool."""
+        """Generic method to call any MCP tool with proper endpoint mapping."""
         try:
             if not self.session:
                 await self.connect()
             
             payload = params or {}
             
+            # Map tool names to actual endpoints
+            tool_endpoint_map = {
+                "list_databases": "discover_databases_tool",
+                "list_tables": "discover_tables_tool", 
+                "get_table_schema": "get_table_schema_tool",
+                "execute_query": "execute_query_tool",
+                "get_sample_data": "get_sample_data_tool",
+                "validate_query": "validate_query_tool"
+            }
+            
+            endpoint = tool_endpoint_map.get(tool_name, f"{tool_name}_tool")
+            
             async with self.session.post(
-                f"{self.server_url}/tools/{tool_name}",
+                f"{self.server_url}/tools/{endpoint}",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             ) as response:
@@ -169,12 +182,117 @@ class BackendMCPClient:
                     return result
                 else:
                     error_text = await response.text()
-                    logger.error(f"MCP tool '{tool_name}' failed ({response.status}): {error_text}")
+                    logger.error(f"MCP tool '{tool_name}' -> '{endpoint}' failed ({response.status}): {error_text}")
                     return {"error": f"HTTP {response.status}: {error_text}"}
                     
         except Exception as e:
             logger.error(f"MCP tool '{tool_name}' error: {e}")
             return {"error": str(e)}
+    
+    async def build_schema_context(self, database_name: str = None) -> Dict[str, Any]:
+        """
+        Build complete schema context using MCP server's database tools.
+        This method uses the proper MCP tools to construct comprehensive schema information.
+        """
+        try:
+            logger.info(f"🔨 Building schema context using MCP tools for: {database_name or 'all databases'}")
+            
+            # Get list of databases if none specified
+            if database_name:
+                databases_to_process = [database_name]
+            else:
+                db_result = await self.call_tool("list_databases", {})
+                if not db_result.get("success"):
+                    raise Exception(f"Failed to list databases: {db_result.get('error')}")
+                databases_to_process = [db["name"] for db in db_result.get("databases", []) if db.get("accessible", True)]
+            
+            schema_context = {
+                "databases": {},
+                "tables": [],
+                "total_tables": 0,
+                "total_columns": 0,
+                "last_updated": datetime.now().isoformat(),
+                "cache_key": f"schema_context:{database_name or 'all'}"
+            }
+            
+            for db_name in databases_to_process:
+                try:
+                    logger.info(f"📊 Processing database: {db_name}")
+                    
+                    # Get tables for this database using MCP tool
+                    tables_result = await self.call_tool("list_tables", {"database": db_name})
+                    if tables_result and "error" in tables_result:
+                        logger.warning(f"⚠️ Failed to get tables for {db_name}: {tables_result.get('error')}")
+                        schema_context["databases"][db_name] = {"error": f"Failed to list tables: {tables_result.get('error')}"}
+                        continue
+                    
+                    # Handle direct array response from MCP server
+                    tables = tables_result if isinstance(tables_result, list) else tables_result.get("tables", [])
+                    database_info = {
+                        "name": db_name,
+                        "tables": [],
+                        "table_count": len(tables)
+                    }
+                    
+                    # Get detailed schema for each table using MCP tools
+                    for table in tables:
+                        table_name = table.get("name") if isinstance(table, dict) else str(table)
+                        try:
+                            # Use get_table_schema MCP tool
+                            schema_result = await self.call_tool("get_table_schema", {
+                                "database": db_name,
+                                "table": table_name
+                            })
+                            
+                            if schema_result and "columns" in schema_result:
+                                # MCP server returns schema directly, not nested
+                                columns = schema_result.get("columns", [])
+                                indexes = schema_result.get("indexes", [])
+                                foreign_keys = schema_result.get("foreign_keys", [])
+                                primary_keys = schema_result.get("primary_keys", [])
+                                
+                                # Build detailed table info with complete column metadata
+                                table_info = {
+                                    "name": table_name,
+                                    "columns": columns,  # Full column details with data_types, constraints
+                                    "column_count": len(columns),
+                                    "indexes": indexes,
+                                    "foreign_keys": foreign_keys,
+                                    "primary_keys": primary_keys,
+                                    "column_names": [col.get("name") for col in columns],
+                                    "data_types": {col.get("name"): col.get("data_type") for col in columns},
+                                    "nullable_columns": [col.get("name") for col in columns if col.get("is_nullable")],
+                                    "primary_key_columns": [col.get("name") for col in columns if col.get("is_primary_key")]
+                                }
+                                
+                                database_info["tables"].append(table_info)
+                                schema_context["total_columns"] += len(columns)
+                                schema_context["tables"].append(f"{db_name}.{table_name}")
+                                
+                                logger.debug(f"📋 {table_name}: {len(columns)} columns with detailed metadata")
+                            else:
+                                logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name}: {schema_result.get('error')}")
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Error getting schema for {db_name}.{table_name}: {e}")
+                            continue
+                    
+                    schema_context["databases"][db_name] = database_info
+                    schema_context["total_tables"] += len(database_info["tables"])
+                    
+                    logger.info(f"✅ Processed database {db_name}: {len(database_info['tables'])} tables, {sum(t.get('column_count', 0) for t in database_info['tables'])} columns")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing database {db_name}: {e}")
+                    schema_context["databases"][db_name] = {"error": str(e)}
+                    continue
+            
+            logger.info(f"🎉 Schema context built successfully: {schema_context['total_tables']} tables, {schema_context['total_columns']} columns across {len(schema_context['databases'])} databases")
+            return schema_context
+            
+        except Exception as e:
+            logger.error(f"💥 Failed to build schema context: {e}")
+            raise Exception(f"Schema context building failed: {str(e)}")
     
     async def health_check(self) -> bool:
         """Check MCP server health."""

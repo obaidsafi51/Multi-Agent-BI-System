@@ -57,46 +57,59 @@ class OptimizedNLPAgent:
             cache_config: Cache configuration overrides
         """
         self.agent_id = agent_id or f"nlp-agent-{uuid.uuid4().hex[:8]}"
+        self.mcp_ws_url = mcp_ws_url
         self.enable_optimizations = enable_optimizations
         self.enable_semantic_caching = enable_semantic_caching
         self.enable_request_batching = enable_request_batching
         
         # Initialize optimized KIMI client with connection pooling
         # Initialize cache manager
-        cache_manager = AdvancedCacheManager(
+        self.cache_manager = AdvancedCacheManager(
             l1_max_size=1000,
             l1_ttl_seconds=300
         )
         
         self.kimi_client = OptimizedKimiClient(
             api_key=kimi_api_key,
-            cache_manager=cache_manager,
+            cache_manager=self.cache_manager,
             max_connections=10  # Connection pooling
         )
         
-        # Initialize MCP operations with hybrid WebSocket/HTTP adapter
-        logger.info("Initializing Hybrid MCP Operations Adapter (WebSocket-first with HTTP fallback)")
-        self.mcp_ops = HybridMCPOperationsAdapter(
-            ws_url=mcp_ws_url,
-            http_url="http://tidb-mcp-server:8000",
-            agent_id=agent_id,
-            prefer_websocket=True,
-            ws_failure_threshold=2,  # Switch to HTTP after 2 failures
-            ws_retry_cooldown=30.0   # Retry WebSocket after 30s
-        )
+        # WebSocket client management - support both internal and external clients
+        if websocket_client is not None:
+            # Use provided external WebSocket client
+            self.mcp_client = websocket_client
+            self.owns_websocket_client = False  # Don't own external client
+            self.skip_event_handlers = False  # Can set up event handlers with external client
+            logger.info(f"✅ Using external WebSocket client: {type(websocket_client)}")
+        else:
+            # Will create internal client later during start()
+            self.mcp_client = None
+            self.owns_websocket_client = True  # Will own internal client
+            self.skip_event_handlers = True  # Skip until client is created
+            logger.info("📋 Will create internal WebSocket client during startup")
         
-        # Store reference to the WebSocket client for backward compatibility
-        self.mcp_client = self.mcp_ops.websocket_client
-        self.owns_websocket_client = True
-        logger.info(f"✅ Using Hybrid MCP Adapter with WebSocket client: {type(self.mcp_client)}")
+        # MCP operations adapter (will be set up during start())
+        self.mcp_ops = None
         
         # Query classifier removed - using unified processing path
         
         # Initialize context builder
         self.context_builder = ContextBuilder()
         
-        # Initialize cache manager
-        self.cache_manager = cache_manager
+        # Table name mapping for database schema compatibility
+        # self.table_mappings = {
+        #     "cash_flow": "cashflow",  # Fix: NLP generates cash_flow but DB has cashflow
+        #     "balance_sheet": "balance_Sheet",  # Fix: Handle case sensitivity
+        #     "pnl": "pnl_statement",
+        #     "profit_loss": "pnl_statement",
+        #     "expense": "expenses",
+        #     "cost": "expenses",
+        #     "general_ledger": "general_ledger",
+        #     "inventory": "inventory",
+        #     "revenue": "revenue",
+        #     "supplier": "supplier_payments"
+        # }
         
         # Agent state
         self.is_running = False
@@ -112,21 +125,49 @@ class OptimizedNLPAgent:
             "cache_hits": 0,
             "websocket_requests": 0,
             "total_latency": 0.0,
-            "average_latency": 0.0
+            "average_latency": 0.0,
+            "optimized_single_call": 0,
+            "parallel_kimi_calls": 0
         }
         
         # Event handlers
         self._setup_event_handlers()
         
         logger.info(f"Optimized NLP Agent initialized: {self.agent_id}")
-        logger.info(f"Optimizations enabled: {enable_optimizations}")
-        logger.info(f"Semantic caching: {enable_semantic_caching}")
-        logger.info(f"Request batching: {enable_request_batching}")
-    
+        
+    def _get_mcp_interface(self):
+        """Get MCP interface - either mcp_ops adapter or direct client"""
+        return self.mcp_ops if self.mcp_ops else self
+        
+    async def generate_sql(self, **kwargs):
+        """Direct MCP generate_sql method for external client compatibility"""
+        return await self.mcp_client.send_request("llm_generate_sql_tool", kwargs)
+        
+    async def get_schema_context(self, **kwargs):
+        """Get schema context using backend cache instead of MCP server"""
+        database_name = kwargs.get('database', 'Agentic_BI')
+        database_context = {'database': database_name}
+        return await self._get_cached_schema_context(database_context)
+        
+    async def validate_query(self, query):
+        """Direct MCP validate_query method for external client compatibility"""
+        return await self.mcp_client.send_request("validate_sql_query", {"query": query})
+        
+    async def analyze_data(self, **kwargs):
+        """Direct MCP analyze_data method for external client compatibility"""
+        return await self.mcp_client.send_request("analyze_query_result", kwargs)
 
 
     def _setup_event_handlers(self):
         """Setup event handlers for real-time updates"""
+        if hasattr(self, 'skip_event_handlers') and self.skip_event_handlers:
+            logger.info("Skipping event handler setup - will be set up externally")
+            return
+            
+        if not self.mcp_client:
+            logger.warning("No MCP client available for event handler setup")
+            return
+            
         self.mcp_client.register_event_handler("schema_update", self._handle_schema_update)
         self.mcp_client.register_event_handler("cache_invalidation", self._handle_cache_invalidation)
         self.mcp_client.register_event_handler("server_status", self._handle_server_status)
@@ -140,14 +181,40 @@ class OptimizedNLPAgent:
             await self.cache_manager.initialize()
             logger.info("Cache manager initialized successfully")
             
-            # Connect to MCP server via WebSocket (only if we own the client)
+            # Set up MCP client and operations adapter
             if self.owns_websocket_client:
-                if not await self.mcp_client.connect():
-                    logger.warning("MCP WebSocket connection failed - will use fallback mode")
-                else:
-                    logger.info("Successfully connected to MCP server via WebSocket")
+                # Create internal WebSocket client and hybrid adapter
+                logger.info("Creating internal WebSocket client and MCP operations adapter...")
+                
+                # Create hybrid MCP adapter (handles both WebSocket and HTTP)
+                self.mcp_ops = HybridMCPOperationsAdapter(
+                    ws_url=self.mcp_ws_url,
+                    http_url=self.mcp_ws_url.replace("ws://", "http://").replace("/ws", ""),
+                    agent_id=self.agent_id,
+                    ws_failure_threshold=3,
+                    ws_retry_cooldown=60.0,
+                    prefer_websocket=True
+                )
+                
+                # Get the WebSocket client from the adapter
+                self.mcp_client = self.mcp_ops.websocket_client
+                
+                # Set up event handlers now that we have a client
+                self.skip_event_handlers = False
+                self._setup_event_handlers()
+                
+                # Start the hybrid adapter (includes WebSocket connection)
+                await self.mcp_ops.start()
+                logger.info("Internal WebSocket client and MCP adapter started successfully")
+                
+            elif self.mcp_client is not None:
+                # Using external WebSocket client - set up event handlers
+                logger.info("Setting up event handlers for external WebSocket client...")
+                self.skip_event_handlers = False
+                self._setup_event_handlers()
+                logger.info("Event handlers set up for external WebSocket client")
             else:
-                logger.info("Using external WebSocket client - connection managed externally")
+                raise ValueError("No WebSocket client available - either provide external client or allow internal creation")
             
             # Verify KIMI API connectivity
             if not await self.kimi_client.health_check():
@@ -173,7 +240,10 @@ class OptimizedNLPAgent:
         
         # Close connections (only if we own the WebSocket client)
         if self.owns_websocket_client:
-            await self.mcp_client.disconnect()
+            if self.mcp_ops:
+                await self.mcp_ops.stop()
+            elif self.mcp_client:
+                await self.mcp_client.disconnect()
         await self.kimi_client.close()
         
         logger.info("Optimized NLP agent stopped")
@@ -196,6 +266,14 @@ class OptimizedNLPAgent:
         try:
             logger.info(f"Processing query {query_id}: {query}")
             
+            # DEBUG: Log all parameters to trace database context flow
+            logger.info(f"🔍 DEBUG process_query_optimized parameters:")
+            logger.info(f"  - query: {query}")
+            logger.info(f"  - user_id: {user_id}")
+            logger.info(f"  - session_id: {session_id}")
+            logger.info(f"  - context: {context}")
+            logger.info(f"  - database_context: {database_context}")
+            
             # Database context logging and validation
             if database_context:
                 logger.info(f"Using database context for query {query_id}: {database_context.get('database_name', 'unknown')}")
@@ -209,18 +287,18 @@ class OptimizedNLPAgent:
             
             # Step 1: Check semantic cache first
             if self.enable_semantic_caching:
-                cached_result = await self._check_semantic_cache(query)
+                cached_result = await self._check_semantic_cache(query, database_context)
                 if cached_result:
                     self.metrics["cache_hits"] += 1
                     logger.info(f"Query {query_id} served from semantic cache")
                     return self._create_cached_result(query_id, cached_result, start_time)
             
-            # Step 2: Use unified processing (combines best of all paths)
-            result = await self._process_unified_path(query, user_id, session_id, context, query_id, database_context)
+            # Step 2: Use comprehensive processing (all queries get full treatment)
+            result = await self._process_comprehensive_path(query, user_id, session_id, context, query_id, database_context)
             
             # Step 3: Cache result if successful
             if result.success and self.enable_semantic_caching:
-                await self._cache_semantic_result(query, result)
+                await self._cache_semantic_result(query, result, database_context)
             
             # Step 4: Update metrics
             processing_time = time.time() - start_time
@@ -243,7 +321,13 @@ class OptimizedNLPAgent:
                 processing_path="error"
             )
     
-    async def _process_unified_path(
+
+
+
+    
+
+    
+    async def _process_comprehensive_path(
         self,
         query: str,
         user_id: str,
@@ -253,207 +337,68 @@ class OptimizedNLPAgent:
         database_context: Optional[Dict[str, Any]] = None
     ) -> ProcessingResult:
         """
-        Unified processing path combining all query types.
-        Uses single KIMI call + MCP operations for comprehensive processing.
-        """
-        logger.info(f"Starting unified path processing for query: {query}")
-        logger.info(f"MCP ops type: {type(self.mcp_ops)}")
-        try:
-            logger.debug(f"Processing {query_id} via unified path")
-            
-            # Step 1: Get schema context (cached for performance, database-aware)
-            schema_context = await self._get_cached_schema_context(database_context)
-            
-            # Step 2: Extract intent via MCP (with fallback)
-            intent_data = await self._extract_intent_via_mcp(query, context)
-            intent = self._create_query_intent(intent_data)
-            
-            # Step 3: Generate SQL via MCP WebSocket (database-context aware)
-            logger.info(f"Calling MCP generate_sql for query: {query}")
-            sql_params = {
-                "natural_language_query": query,
-                "schema_info": self._format_schema_for_llm(schema_context)
-            }
-            
-            # Include database context if available
-            if database_context and database_context.get('database_name'):
-                logger.info(f"Including database context in SQL generation: {database_context['database_name']}")
-                sql_params["database_name"] = database_context['database_name']
-            
-            sql_result = await self.mcp_ops.generate_sql(**sql_params)
-            logger.info(f"MCP SQL result: {sql_result}")
-            
-            # Step 4: Extract SQL from MCP response
-            sql_query = self._extract_sql_from_mcp_response(sql_result)
-            logger.info(f"Extracted SQL query: {sql_query}")
-            
-            # Step 5: Build comprehensive context
-            query_context = self.context_builder.build_query_context(
-                query=query,
-                intent=intent,
-                user_context=context,
-                schema_context=schema_context
-            )
-            
-            return ProcessingResult(
-                query_id=query_id,
-                success=True,
-                intent=intent,
-                sql_query=sql_query,
-                query_context=query_context,
-                processing_path="unified"
-            )
-            
-        except Exception as e:
-            logger.error(f"Unified path processing failed for {query_id}: {e}")
-            raise
-
-    async def _process_fast_path(
-        self,
-        query: str,
-        user_id: str,
-        session_id: str,
-        context: Optional[Dict[str, Any]],
-        query_id: str
-    ) -> ProcessingResult:
-        """
-        Fast path processing for simple queries.
-        - Single KIMI call for intent only
-        - Cached schema context
-        - Minimal context building
-        - Optimized for sub-second response
-        """
-        try:
-            logger.debug(f"Processing {query_id} via fast path")
-            
-            # Get cached schema context (avoid repeated fetching)
-            schema_context = await self._get_cached_schema_context()
-            
-            # Use MCP server's LLM tool instead of direct KIMI API calls
-            intent_data = await self._extract_intent_via_mcp(query, context)
-            intent = self._create_query_intent(intent_data)
-            
-            # Generate SQL via WebSocket (faster than HTTP)
-            sql_result = await self.mcp_ops.generate_sql(
-                natural_language_query=query,
-                schema_info=self._format_schema_for_llm(schema_context)
-            )
-            
-            # Minimal context building for fast response
-            minimal_context = self._build_minimal_context(query, intent, context)
-            
-            return ProcessingResult(
-                query_id=query_id,
-                success=True,
-                intent=intent,
-                sql_query=self._extract_sql_from_mcp_response(sql_result),
-                query_context=minimal_context,
-                processing_path="fast_path"
-            )
-            
-        except Exception as e:
-            logger.error(f"Fast path processing failed for {query_id}: {e}")
-            raise
-    
-    async def _process_standard_path(
-        self,
-        query: str,
-        user_id: str,
-        session_id: str,
-        context: Optional[Dict[str, Any]],
-        query_id: str
-    ) -> ProcessingResult:
-        """
-        Standard path processing for medium complexity queries.
-        - Parallel KIMI calls for intent and entities
-        - Standard context building
-        - Balanced performance vs completeness
-        """
-        try:
-            logger.debug(f"Processing {query_id} via standard path")
-            
-            # Get schema context
-            schema_context = await self._get_cached_schema_context()
-            
-            # Parallel MCP LLM calls for intent and entities (skip ambiguities)
-            intent_data, entities_data = await asyncio.gather(
-                self._extract_intent_via_mcp(query, context),
-                self._extract_entities_via_mcp(query, context)
-            )
-            self.metrics["parallel_kimi_calls"] += 1
-            
-            # Process results
-            intent = self._create_query_intent(intent_data)
-            entities = self._process_entities(entities_data)
-            
-            # Batch WebSocket requests to MCP server
-            sql_result, validation_result = await asyncio.gather(
-                self.mcp_ops.generate_sql(
-                    natural_language_query=query,
-                    schema_info=self._format_schema_for_llm(schema_context)
-                ),
-                self.mcp_ops.validate_query(query)
-            )
-            self.metrics["websocket_requests"] += 2
-            
-            # Standard context building
-            comprehensive_context = self.context_builder.build_query_context(
-                query=query,
-                intent=intent,
-                user_context=context,
-                schema_context=schema_context
-            )
-            
-            return ProcessingResult(
-                query_id=query_id,
-                success=True,
-                intent=intent,
-                sql_query=self._extract_sql_from_mcp_response(sql_result),
-                query_context=comprehensive_context,
-                processing_path="standard_path"
-            )
-            
-        except Exception as e:
-            logger.error(f"Standard path processing failed for {query_id}: {e}")
-            raise
-    
-    async def _process_comprehensive_path(
-        self,
-        query: str,
-        user_id: str,
-        session_id: str,
-        context: Optional[Dict[str, Any]],
-        query_id: str
-    ) -> ProcessingResult:
-        """
-        Comprehensive path processing for complex queries.
-        - Full parallel KIMI pipeline
+        Comprehensive path processing - now used for all queries.
+        - Schema-aware intent extraction with database context
         - Complete entity extraction and ambiguity detection
         - Comprehensive context building
         - Maximum accuracy and completeness
         """
+        logger.info(f"Starting comprehensive path processing for query: {query}")
+        
+        # Progress tracking for frontend
+        progress_steps = {
+            "schema_context": {"status": "pending", "message": "Loading database schema..."},
+            "intent_extraction": {"status": "pending", "message": "Extracting query intent..."},
+            "sql_generation": {"status": "pending", "message": "Generating SQL query..."},
+            "validation_analysis": {"status": "pending", "message": "Validating and analyzing..."},
+            "context_building": {"status": "pending", "message": "Building response context..."}
+        }
+        
         try:
             logger.debug(f"Processing {query_id} via comprehensive path")
             
-            # Get fresh schema context for complex queries
-            schema_context = await self.mcp_ops.get_schema_context()
+            # Step 1: Get schema context (database-aware, cached for performance)
+            progress_steps["schema_context"]["status"] = "in_progress"
+            logger.info("🔄 [1/5] Loading database schema context...")
             
-            # Try MCP LLM tools for enhanced extraction, fallback to basic extraction
+            schema_context = await self._get_cached_schema_context(database_context)
+            logger.info(f"🔍 DEBUG: schema_context = {schema_context}")
+            
+            progress_steps["schema_context"]["status"] = "completed"
+            progress_steps["schema_context"]["message"] = f"Schema loaded: {schema_context.get('total_tables', 0)} tables"
+            
+            # Format schema for LLM context
+            formatted_schema = self._format_schema_for_llm(schema_context)
+            logger.info(f"🔍 DEBUG: formatted_schema = {formatted_schema}")
+            
+            # Log database context usage
+            if database_context and database_context.get('database_name'):
+                logger.info(f"Using database context in comprehensive processing: {database_context['database_name']}")
+            
+            mcp_interface = self._get_mcp_interface()
+            logger.info(f"MCP ops type: {type(mcp_interface)}")
+            
+            # Try MCP LLM tools for schema-aware extraction, fallback to basic extraction
             try:
-                # Full parallel MCP LLM pipeline (all 3 calls in parallel)
-                intent_data, entities_data, ambiguities_data = await asyncio.gather(
-                    self._extract_intent_via_mcp(query, context),
-                    self._extract_entities_via_mcp(query, context),
-                    self._extract_ambiguities_via_mcp(query, context)
-                )
-                self.metrics["parallel_kimi_calls"] += 1
+                # Step 2: Intent extraction
+                progress_steps["intent_extraction"]["status"] = "in_progress"
+                logger.info("🔄 [2/5] Extracting query intent...")
+                
+                # ⚡ PERFORMANCE OPTIMIZATION: Only extract intent (most critical)
+                # Skip entities and ambiguities extraction to reduce 3 parallel calls to 1
+                logger.info("🎯 Using optimized single-call intent extraction")
+                intent_data = await self._extract_intent_via_mcp(query, context, schema_context)
+                self.metrics["optimized_single_call"] += 1
+                
+                progress_steps["intent_extraction"]["status"] = "completed"
+                progress_steps["intent_extraction"]["message"] = "Intent extracted successfully"
                 
                 # Process MCP LLM results
                 intent = self._create_query_intent(intent_data)
-                entities = self._process_entities(entities_data)
-                ambiguities = self._process_ambiguities(ambiguities_data)
+                entities = self._extract_basic_entities(query)  # Use lightweight basic extraction
+                ambiguities = []  # Skip ambiguity detection for performance
                 
-                logger.debug(f"Enhanced extraction successful for {query_id}")
+                logger.debug(f"Optimized extraction successful for {query_id}")
                 
             except Exception as mcp_error:
                 logger.warning(f"MCP LLM tools unavailable for {query_id}, using fallback extraction: {mcp_error}")
@@ -463,24 +408,63 @@ class OptimizedNLPAgent:
                 entities = self._extract_basic_entities(query)
                 ambiguities = []  # Skip ambiguity detection in fallback mode
             
-            # Batch WebSocket requests to MCP server
-            batch_results = await asyncio.gather(
-                self.mcp_ops.generate_sql(
-                    natural_language_query=query,
-                    schema_info=self._format_schema_for_llm(schema_context)
-                ),
-                self.mcp_ops.validate_query(query),
-                self.mcp_ops.analyze_data(
-                    data=json.dumps({"query": query, "intent": intent.model_dump()}),
-                    analysis_type="financial",
-                    context="Query complexity analysis"
-                )
+            # Step 3: Generate SQL
+            progress_steps["sql_generation"]["status"] = "in_progress"
+            logger.info("🔄 [3/5] Generating SQL query...")
+            
+            mcp_interface = self._get_mcp_interface()
+            sql_result = await mcp_interface.generate_sql(
+                natural_language_query=query,
+                schema_info=self._format_schema_for_llm(schema_context)
             )
-            self.metrics["websocket_requests"] += 3
+            generated_sql = self._extract_sql_from_mcp_response(sql_result)
             
-            sql_result, validation_result, analysis_result = batch_results
+            progress_steps["sql_generation"]["status"] = "completed"
+            progress_steps["sql_generation"]["message"] = "SQL query generated successfully"
             
-            # Comprehensive context building
+            # ⚡ PARALLEL OPTIMIZATION: Run validation and analysis concurrently
+            validation_result = None
+            analysis_result = None
+            
+            async def safe_validate():
+                try:
+                    if generated_sql:
+                        return await mcp_interface.validate_query(generated_sql)
+                except Exception as e:
+                    logger.warning(f"SQL validation failed (non-critical): {e}")
+                return None
+            
+            async def safe_analyze():
+                try:
+                    return await mcp_interface.analyze_query_result(
+                        query=query,
+                        sql_query=generated_sql,
+                        context="Optimized query analysis with lighter prompts"
+                    )
+                except Exception as e:
+                    logger.warning(f"Query analysis failed (non-critical): {e}")
+                return None
+            
+            # Step 4: Run validation and analysis in parallel for better performance
+            progress_steps["validation_analysis"]["status"] = "in_progress"
+            logger.info("🔄 [4/5] Running validation and analysis in parallel...")
+            
+            validation_result, analysis_result = await asyncio.gather(
+                safe_validate(),
+                safe_analyze(),
+                return_exceptions=True
+            )
+            
+            progress_steps["validation_analysis"]["status"] = "completed"
+            progress_steps["validation_analysis"]["message"] = "Validation and analysis completed in parallel"
+            logger.info("✅ Parallel validation and analysis completed")
+            
+            self.metrics["websocket_requests"] += 1  # Only count SQL generation as critical
+            
+            # Step 5: Comprehensive context building
+            progress_steps["context_building"]["status"] = "in_progress"
+            logger.info("🔄 [5/5] Building comprehensive response context...")
+            
             comprehensive_context = self.context_builder.build_query_context(
                 query=query,
                 intent=intent,
@@ -491,35 +475,49 @@ class OptimizedNLPAgent:
             # Add analysis insights
             comprehensive_context["analysis"] = analysis_result
             
+            progress_steps["context_building"]["status"] = "completed"
+            progress_steps["context_building"]["message"] = "Response context built successfully"
+            logger.info("✅ [5/5] All processing steps completed successfully!")
+            
             return ProcessingResult(
                 query_id=query_id,
                 success=True,
                 intent=intent,
-                sql_query=self._extract_sql_from_mcp_response(sql_result),
+                sql_query=generated_sql,
                 query_context=comprehensive_context,
-                processing_path="comprehensive_path"
+                processing_path="unified_path"
             )
             
         except Exception as e:
             logger.error(f"Comprehensive path processing failed for {query_id}: {e}")
             raise
     
-    async def _check_semantic_cache(self, query: str) -> Optional[Dict[str, Any]]:
+    async def _check_semantic_cache(self, query: str, database_context: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """Check semantic cache for similar query results"""
-        # Use semantic similarity cache key
-        cache_key = hashlib.md5(query.encode()).hexdigest()
+        # Create cache key that includes database context
+        cache_key_data = query
+        if database_context and database_context.get('database_name'):
+            cache_key_data = f"{query}|db:{database_context['database_name']}"
+        
+        cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()
         return await self.cache_manager.get("semantic", cache_key)
     
-    async def _cache_semantic_result(self, query: str, result: ProcessingResult):
+    async def _cache_semantic_result(self, query: str, result: ProcessingResult, database_context: Optional[Dict[str, Any]] = None):
         """Cache result for semantic similarity matching"""
         cache_data = {
             "intent": result.intent.model_dump() if result.intent else None,
             "sql_query": result.sql_query,
             "query_context": result.query_context,
-            "processing_path": result.processing_path
+            "processing_path": result.processing_path,
+            "database_context": database_context  # Store database context with cached result
         }
-        # Use semantic similarity cache key
-        cache_key = hashlib.md5(query.encode()).hexdigest()
+        
+        # Create cache key that includes database context
+        cache_key_data = query
+        if database_context and database_context.get('database_name'):
+            cache_key_data = f"{query}|db:{database_context['database_name']}"
+        
+        cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()
         await self.cache_manager.set("semantic", cache_key, cache_data, ttl=3600)
     
     async def _get_cached_schema_context(self, database_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -539,59 +537,126 @@ class OptimizedNLPAgent:
             logger.debug(f"Using cached schema context for database: {cache_key}")
             return self.schema_cache
         
-        # Fetch fresh schema context
+        # 🚫 NLP AGENT SHOULD NOT FETCH SCHEMA - Use backend's cached schema only
+        logger.info(f"� Looking for cached schema from backend for {cache_key}")
+        
+        # Try to get schema from backend's cache via Redis or HTTP API
         try:
-            schema_params = {}
-            if database_context and database_context.get('database_name'):
-                schema_params['database'] = database_context['database_name']
-                logger.info(f"Fetching schema context for database: {database_context['database_name']}")
+            # Try to get from Redis cache (same key as backend uses)
+            if hasattr(self, 'cache_manager') and self.cache_manager:
+                backend_cache_key = f"schema_context:{cache_key}"
+                cached_schema = await self.cache_manager.get("redis", backend_cache_key)
+                
+                if cached_schema:
+                    logger.info(f"✅ Using backend's cached schema for {cache_key}")
+                    self.schema_cache = cached_schema
+                    self.last_schema_update = current_time
+                    self.schema_cache_key = cache_key
+                    return cached_schema
             
-            schema_context = await self.mcp_ops.get_schema_context(**schema_params)
-            self.schema_cache = schema_context
-            self.last_schema_update = current_time
-            self.schema_cache_key = cache_key
+            # If no cached schema found, return empty schema and log warning
+            logger.warning(f"❌ No cached schema found for {cache_key} - database must be selected first in frontend")
+            logger.warning(f"💡 Frontend should enforce database selection before allowing queries")
             
-            logger.debug(f"Schema context refreshed for database: {cache_key}")
-            return schema_context
+            # Return empty schema structure
+            empty_schema = {
+                "databases": {},
+                "total_tables": 0,
+                "error": "no_schema_cached",
+                "message": "Database must be selected first. Please select a database in the frontend.",
+                "cache_key": cache_key
+            }
+            
+            return empty_schema
+            
         except Exception as e:
-            logger.warning(f"Failed to fetch schema context for database {cache_key}: {e}")
-            return self.schema_cache or {}
+            logger.warning(f"Failed to access backend's cached schema for database {cache_key}: {e}")
+            
+            # Return empty schema with error information
+            return {
+                "databases": {}, 
+                "total_tables": 0, 
+                "error": "cache_access_failed",
+                "message": f"Could not access cached schema: {str(e)}",
+                "cache_key": cache_key
+            }
     
     def _format_schema_for_llm(self, schema_context: Dict[str, Any]) -> str:
-        """Format schema context for LLM consumption"""
+        """Format schema context for LLM consumption with detailed column information"""
         try:
             schema_lines = ["Database Schema Information:"]
             
-            tables = schema_context.get("tables", [])
-            if tables:
-                schema_lines.append(f"Available Tables: {', '.join(tables[:10])}")
-            
-            metrics = schema_context.get("metrics", [])
-            if metrics:
-                schema_lines.append(f"Available Metrics: {', '.join(metrics[:20])}")
-            
+            # Get databases with detailed table schemas
             databases = schema_context.get("databases", {})
+            
             if databases:
-                schema_lines.append(f"Databases: {', '.join(databases.keys())}")
+                for db_name, db_info in databases.items():
+                    schema_lines.append(f"\nDatabase: {db_name}")
+                    tables = db_info.get("tables", {})
+                    
+                    if tables:
+                        schema_lines.append(f"Tables ({len(tables)}):")
+                        
+                        for table_name, table_schema in tables.items():
+                            # Add table information
+                            schema_lines.append(f"  - {table_name}:")
+                            
+                            # Add column details
+                            columns = table_schema.get("columns", [])
+                            if columns:
+                                schema_lines.append("    Columns:")
+                                for column in columns:
+                                    col_name = column.get("name", "unknown")
+                                    col_type = column.get("data_type", "unknown")
+                                    nullable = "NULL" if column.get("is_nullable", True) else "NOT NULL"
+                                    schema_lines.append(f"      {col_name} ({col_type}) {nullable}")
+                            
+                            # Add primary keys if available
+                            primary_keys = table_schema.get("primary_keys", [])
+                            if primary_keys:
+                                schema_lines.append(f"    Primary Keys: {', '.join(primary_keys)}")
+                            
+                            # Add indexes if available
+                            indexes = table_schema.get("indexes", [])
+                            if indexes:
+                                index_names = [idx.get("name", "unknown") for idx in indexes if isinstance(idx, dict)]
+                                if index_names:
+                                    schema_lines.append(f"    Indexes: {', '.join(index_names)}")
+            else:
+                # Fallback to basic format if detailed schema not available
+                tables = schema_context.get("tables", [])
+                if tables:
+                    schema_lines.append(f"Available Tables: {', '.join(tables[:10])}")
+                
+                metrics = schema_context.get("metrics", [])
+                if metrics:
+                    schema_lines.append(f"Available Metrics: {', '.join(metrics[:20])}")
+            
+            # Add usage instructions for LLM
+            schema_lines.append("\nIMPORTANT: Generate SQL queries using ONLY the columns listed above.")
+            schema_lines.append("Do NOT assume column names that are not explicitly listed in the schema.")
+            schema_lines.append("If a requested column doesn't exist, suggest the closest available column.")
             
             return "\n".join(schema_lines)
             
         except Exception as e:
             logger.error(f"Error formatting schema for LLM: {e}")
-            return "Schema information unavailable"
+            logger.debug(f"Schema context was: {schema_context}")
+            return "Schema information unavailable - please check database connection"
     
     def _extract_sql_from_mcp_response(self, mcp_response: Dict[str, Any]) -> str:
-        """Extract SQL query from MCP server response"""
+        """Extract SQL query from MCP server response and fix table names"""
         try:
+            extracted_sql = ""
+            
             # The MCP server returns SQL in different formats
             # Check common response fields
             
             # First, check if it's directly in 'sql' field
             if "sql" in mcp_response:
-                return str(mcp_response["sql"]).strip()
-            
-            # Check if it's in 'generated_text' field (LLM tool response)
-            if "generated_text" in mcp_response:
+                extracted_sql = str(mcp_response["sql"]).strip()
+            elif "generated_text" in mcp_response:
+                # Check if it's in 'generated_text' field (LLM tool response)  
                 generated_text = str(mcp_response["generated_text"])
                 
                 # Extract SQL from markdown code blocks (re already imported at top)
@@ -601,26 +666,34 @@ class OptimizedNLPAgent:
                     # Remove comments and extract just the SQL
                     lines = sql_query.split('\n')
                     sql_lines = [line for line in lines if line.strip() and not line.strip().startswith('--')]
-                    return '\n'.join(sql_lines).strip()
+                    extracted_sql = '\n'.join(sql_lines).strip()
+                else:
+                    # If no code block, try to extract SQL directly
+                    # Look for SELECT, INSERT, UPDATE, DELETE statements
+                    sql_keywords = r'\b(SELECT|INSERT|UPDATE|DELETE|WITH)\b'
+                    if re.search(sql_keywords, generated_text, re.IGNORECASE):
+                        # Clean up and return the text
+                        extracted_sql = generated_text.strip()
+            
+            # If no extracted SQL from generated_text, check other fields
+            if not extracted_sql:
+                # Check if it's in 'query' field
+                if "query" in mcp_response:
+                    extracted_sql = str(mcp_response["query"]).strip()
                 
-                # If no code block, try to extract SQL directly
-                # Look for SELECT, INSERT, UPDATE, DELETE statements
-                sql_keywords = r'\b(SELECT|INSERT|UPDATE|DELETE|WITH)\b'
-                if re.search(sql_keywords, generated_text, re.IGNORECASE):
-                    # Clean up and return the text
-                    return generated_text.strip()
+                # Check if it's in 'result' field
+                elif "result" in mcp_response:
+                    result = mcp_response["result"]
+                    if isinstance(result, str):
+                        extracted_sql = result.strip()  
+                    elif isinstance(result, dict):
+                        extracted_sql = self._extract_sql_from_mcp_response(result)
             
-            # Check if it's in 'query' field
-            if "query" in mcp_response:
-                return str(mcp_response["query"]).strip()
-            
-            # Check if it's in 'result' field
-            if "result" in mcp_response:
-                result = mcp_response["result"]
-                if isinstance(result, str):
-                    return result.strip()  
-                elif isinstance(result, dict):
-                    return self._extract_sql_from_mcp_response(result)
+            # Apply table name mappings to fix database schema compatibility
+            if extracted_sql:
+                extracted_sql = self._fix_table_names(extracted_sql)
+                
+            return extracted_sql
             
             # Log the response structure for debugging
             logger.warning(f"Could not extract SQL from MCP response. Response keys: {list(mcp_response.keys())}")
@@ -632,6 +705,42 @@ class OptimizedNLPAgent:
             logger.error(f"Error extracting SQL from MCP response: {e}")
             logger.debug(f"MCP response was: {mcp_response}")
             return ""
+    
+    def _fix_table_names(self, sql_query: str) -> str:
+        """
+        Fix table names in SQL query to match actual database schema.
+        Maps common variations to actual table names.
+        """
+        try:
+            fixed_sql = sql_query
+            
+            # Apply table name mappings
+            for logical_name, actual_name in self.table_mappings.items():
+                # Use word boundary regex to avoid partial matches
+                # Match table name in FROM, JOIN, UPDATE, INSERT INTO clauses
+                patterns = [
+                    rf'\bFROM\s+{logical_name}\b',
+                    rf'\bJOIN\s+{logical_name}\b',
+                    rf'\bUPDATE\s+{logical_name}\b',
+                    rf'\bINTO\s+{logical_name}\b',
+                    rf'\b{logical_name}\.', # Table.column references
+                    rf'\b{logical_name}\s*$', # Table at end of line
+                    rf'\b{logical_name}\s*;' # Table before semicolon
+                ]
+                
+                for pattern in patterns:
+                    fixed_sql = re.sub(pattern, 
+                                     lambda m: m.group(0).replace(logical_name, actual_name),
+                                     fixed_sql, flags=re.IGNORECASE)
+            
+            if fixed_sql != sql_query:
+                logger.info(f"Fixed table names in SQL: {sql_query} -> {fixed_sql}")
+            
+            return fixed_sql
+            
+        except Exception as e:
+            logger.error(f"Error fixing table names in SQL: {e}")
+            return sql_query  # Return original on error
     
     def _build_minimal_context(
         self,
@@ -974,33 +1083,46 @@ class OptimizedNLPAgent:
         logger.debug(f"Database context validation passed: {database_context}")
         return True
 
-    async def _extract_intent_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def _extract_intent_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None, schema_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Extract financial intent using MCP server's LLM tools instead of direct API calls"""
+        logger.info(f"🎯 Starting intent extraction for query: {query}")
         try:
-            # Create a system prompt for intent extraction
-            system_prompt = """You are a financial data analyst AI. Extract the intent from financial queries.
+            # Create schema-aware system prompt for intent extraction
+            schema_info = ""
+            if schema_context and schema_context.get("total_tables", 0) > 0:
+                schema_info = f"\n\nAvailable Database Schema:\n{self._format_schema_for_llm(schema_context)}\n"
+                logger.debug("Using schema-aware intent extraction")
+            else:
+                schema_info = "\n\nNote: Database schema not available - using general financial knowledge.\n"
+                logger.warning("Schema context unavailable - using schema-less intent extraction")
             
-Return a JSON object with these fields:
-- metric_type: The financial metric requested (revenue, profit, expense, cash_flow, balance_sheet, etc.)
-- time_period: The time period (current, yearly, quarterly, monthly, specific year/date)
+            system_prompt = f"""You are a financial data analyst AI with access to database schema information. Extract the intent from financial queries based on the available database structure.
+
+{schema_info}
+
+IMPORTANT: Return ONLY a valid JSON object, no additional text or markdown formatting.
+
+Based on the database schema above, return a JSON object with these exact fields:
+- metric_type: The financial metric requested - choose from available tables/columns (revenue, profit, expense, cash_flow, balance_sheet, etc.)
+- time_period: The time period (current_month, current_year, yearly, quarterly, monthly, specific dates)
 - aggregation_level: How to aggregate data (daily, weekly, monthly, quarterly, yearly)
-- filters: Any filters or conditions mentioned
-- comparison_periods: Any comparison time periods
-- visualization_hint: Suggested visualization type
+- filters: Any filters or conditions mentioned (as object)
+- comparison_periods: Any comparison time periods (as array)
+- visualization_hint: Suggested visualization type (bar_chart, line_chart, pie_chart, table)
 - confidence_score: Confidence in the extraction (0.0-1.0)
 
-Example query: "What is the revenue for 2024?"
-Example response: {
-    "metric_type": "revenue",
-    "time_period": "2024",
-    "aggregation_level": "yearly",
-    "filters": {"year": "2024"},
-    "comparison_periods": [],
-    "visualization_hint": "bar_chart",
-    "confidence_score": 0.9
-}"""
+Examples:
+Query: "What is the revenue for 2024?"
+Response: {{"metric_type": "revenue", "time_period": "2024", "aggregation_level": "yearly", "filters": {{"year": "2024"}}, "comparison_periods": [], "visualization_hint": "bar_chart", "confidence_score": 0.9}}
+
+Query: "show me the total revenue for this month"
+Response: {{"metric_type": "revenue", "time_period": "current_month", "aggregation_level": "monthly", "filters": {{}}, "comparison_periods": [], "visualization_hint": "bar_chart", "confidence_score": 0.9}}
+
+Query: "show cash flow"
+Response: {{"metric_type": "cash_flow", "time_period": "current", "aggregation_level": "monthly", "filters": {{}}, "comparison_periods": [], "visualization_hint": "table", "confidence_score": 0.8}}"""
 
             # Use MCP server's llm_generate_text_tool via WebSocket
+            logger.info(f"🎯 Calling MCP llm_generate_text_tool for intent extraction")
             result = await self.mcp_client.send_request(
                 "llm_generate_text_tool",
                 {
@@ -1010,20 +1132,32 @@ Example response: {
                     "temperature": 0.1
                 }
             )
+            logger.info(f"🎯 MCP intent extraction response received: {result}")
             
             # Parse the generated text as JSON
-            generated_text = result.get("text", "{}")
+            generated_text = result.get("generated_text", "{}")
+            logger.debug(f"Raw MCP intent response: {generated_text}")
             try:
-                intent_data = json.loads(generated_text)
+                # Try to extract JSON from the response (might be in markdown code blocks)
+                json_match = re.search(r'```json\s*(.*?)\s*```', generated_text, re.DOTALL | re.IGNORECASE)
+                if json_match:
+                    json_text = json_match.group(1).strip()
+                else:
+                    # Try to find JSON object directly
+                    json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
+                    json_text = json_match.group(0) if json_match else generated_text
+                
+                intent_data = json.loads(json_text)
                 logger.debug(f"Intent extracted via MCP: {intent_data}")
                 return intent_data
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse LLM response as JSON: {generated_text}")
+            except (json.JSONDecodeError, AttributeError) as e:
+                logger.warning(f"Failed to parse LLM response as JSON: {generated_text}, error: {e}")
                 # Fallback to basic intent extraction
                 return self._extract_basic_intent(query)
                 
         except Exception as e:
-            logger.warning(f"Intent extraction via MCP failed: {e}, using fallback")
+            logger.warning(f"🎯 Intent extraction via MCP failed: {e}, using fallback")
+            logger.exception("Full intent extraction error:")
             return self._extract_basic_intent(query)
     
     def _extract_basic_intent(self, query: str) -> Dict[str, Any]:
@@ -1069,7 +1203,7 @@ Example response: {
         
         return intent_data
     
-    async def _extract_entities_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def _extract_entities_via_mcp(self, query: str, context: Optional[Dict[str, Any]] = None, schema_context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Extract financial entities using MCP server's LLM tools"""
         try:
             system_prompt = """You are a financial data analyst AI. Extract financial entities from queries.

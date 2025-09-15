@@ -181,6 +181,11 @@ async def startup_event():
             websocket_client=websocket_client  # Use the WebSocket client
         )
         
+        # Set external WebSocket client and hybrid adapter for the NLP agent
+        nlp_agent.mcp_client = websocket_client
+        nlp_agent.mcp_ops = hybrid_mcp_client  # Use the hybrid adapter
+        logger.info(f"✅ Configured NLP agent with external WebSocket client: {type(websocket_client)}")
+        
         # Start all services
         await hybrid_mcp_client.start()
         await nlp_agent.start()
@@ -237,23 +242,30 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
             logger.info(f"Processing query: {request.query[:100]}...")
             
             # Log database context if present
+            logger.info("🎯 TRACE POINT 1: Extracting database_context from request")
             database_context = getattr(request, 'database_context', None)
+            logger.info(f"🎯 TRACE POINT 2: database_context = {database_context}")
+            
             if database_context:
                 logger.info(f"Using database context: {database_context.get('database_name', 'unknown')}")
                 # Basic validation of database context
                 if 'database_name' not in database_context:
                     logger.warning("Database context missing required 'database_name' field")
+            else:
+                logger.warning("🎯 TRACE POINT 3: No database_context found in request")
             
             # Use unified processing approach
             logger.info("Using unified processing path for all queries")
             
             # Use performance optimizer for query processing
             async def process_with_nlp_agent():
+                logger.info(f"🎯 TRACE POINT 4: About to call process_query_optimized with database_context: {database_context}")
                 return await nlp_agent.process_query_optimized(
                     query=request.query,
                     user_id=getattr(request, 'user_id', 'default_user'),
                     session_id=getattr(request, 'session_id', 'default_session'),
-                    context=request.context
+                    context=request.context,
+                    database_context=database_context  # Pass database context to NLP agent
                 )
             
             # Optimize query processing with caching and deduplication

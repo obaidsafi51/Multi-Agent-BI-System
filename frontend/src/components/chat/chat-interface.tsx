@@ -8,8 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Send, ThumbsUp, ThumbsDown, Sparkles, BarChart3, TrendingUp, PieChart, Activity } from "lucide-react";
 import { ChatMessage, QuerySuggestion, UserFeedback } from "@/types/dashboard";
+import { QueryProgressStatus } from "@/types/websocket";
 import { motion, AnimatePresence } from "framer-motion";
 import { DatabaseSetupButton } from "../database-setup-button";
+import { QueryProgressDisplay } from "../query-progress-display";
+import { StreamingResultDisplay } from "../streaming-result-display";
+import { WebSocketConnectionControl } from "../websocket-connection-control";
+import { useWebSocketClient } from "@/hooks/useWebSocketClient";
+import { useGlobalWebSocket } from "@/contexts/WebSocketContext";
+import { useDatabaseContext } from "@/contexts/DatabaseContext";
 
 interface ChatInterfaceProps {
   messages: ChatMessage[];
@@ -19,15 +26,66 @@ interface ChatInterfaceProps {
   isLoading?: boolean; // Add loading state prop
   onDatabaseSetup?: () => void; // Add database setup callback
   selectedDatabase?: string | null; // Add selected database prop
+  userId?: string; // Add user ID for WebSocket connection
+  enableWebSocket?: boolean; // Enable WebSocket functionality
 }
 
-export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidth = false, isLoading = false, onDatabaseSetup, selectedDatabase }: ChatInterfaceProps) {
+export function ChatInterface({ 
+  messages, 
+  suggestions, 
+  onSendMessage, 
+  isFullWidth = false, 
+  isLoading = false, 
+  onDatabaseSetup, 
+  selectedDatabase,
+  userId = 'user_default',
+  enableWebSocket = true 
+}: ChatInterfaceProps) {
   const [inputValue, setInputValue] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [feedbackDialog, setFeedbackDialog] = useState<{ open: boolean; messageId?: string }>({ open: false });
   const [feedbackComment, setFeedbackComment] = useState("");
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // const hasInitialized = useRef(false); // Track initialization (temporarily disabled)
+
+  // Database context
+  const { databaseContext, sessionId } = useDatabaseContext();
+
+  // Use global WebSocket context for connection persistence
+  const globalWebSocket = useGlobalWebSocket();
+  
+  // WebSocket client (fallback for compatibility)
+  const webSocketClient = useWebSocketClient({ 
+    user_id: userId || sessionId || 'default_user',
+    url: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+  });
+
+  // Track active queries for progress display
+  const [activeQueryIds, setActiveQueryIds] = useState<Set<string>>(new Set());
+
+  // Manual WebSocket connection management using global context
+  const handleWebSocketConnect = () => {
+    if (enableWebSocket) {
+      const effectiveUserId = userId || sessionId || 'default_user';
+      console.log('Manual WebSocket connection requested via global context');
+      globalWebSocket.connect(effectiveUserId);
+    }
+  };
+
+  const handleWebSocketDisconnect = () => {
+    console.log('Manual WebSocket disconnection requested via global context');
+    globalWebSocket.disconnect();
+  };
+
+  const handleWebSocketReconnect = () => {
+    if (enableWebSocket) {
+      const effectiveUserId = userId || sessionId || 'default_user';
+      console.log('Manual WebSocket reconnection requested via global context');
+      globalWebSocket.disconnect();
+      setTimeout(() => globalWebSocket.connect(effectiveUserId), 500);
+    }
+  };
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -36,12 +94,77 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
     }
   }, [messages]);
 
+  // Handle query completion and cleanup
+  useEffect(() => {
+    if (!webSocketClient) return;
+
+    // Check for completed/errored queries and clean them up after delay
+    const completedQueries = Array.from(activeQueryIds).filter(queryId => {
+      const queryState = webSocketClient.activeQueries.get(queryId);
+      return queryState && (
+        queryState.status === QueryProgressStatus.COMPLETED || 
+        queryState.status === QueryProgressStatus.ERROR
+      );
+    });
+
+    if (completedQueries.length > 0) {
+      // Clean up completed queries after 5 seconds to show results
+      const timeout = setTimeout(() => {
+        setActiveQueryIds(prev => {
+          const updated = new Set(prev);
+          completedQueries.forEach(queryId => {
+            updated.delete(queryId);
+            // Optionally convert WebSocket result to ChatMessage
+            const queryState = webSocketClient.activeQueries.get(queryId);
+            if (queryState?.result) {
+              // You could emit an event here to add the result as a chat message
+              console.log("Query completed:", queryId, queryState.result);
+            }
+          });
+          return updated;
+        });
+      }, 5000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [webSocketClient, activeQueryIds]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (inputValue.trim() && !isLoading) {
       console.log("ChatInterface: Sending message:", inputValue.trim());
       console.log("ChatInterface: Current messages count:", messages.length);
-      onSendMessage(inputValue.trim());
+      
+      // 🔥 ENFORCE DATABASE SELECTION - No queries allowed without database context
+      if (!databaseContext || !databaseContext.database_name) {
+        console.warn("❌ Query blocked: No database selected");
+        // Show database setup modal instead of processing query
+        if (onDatabaseSetup) {
+          onDatabaseSetup();
+        }
+        return;
+      }
+      
+      console.log("✅ Database context available:", databaseContext.database_name);
+      
+      // Try WebSocket first if enabled and connected
+      if (enableWebSocket && webSocketClient?.isConnected && databaseContext) {
+        const queryId = webSocketClient.sendQuery(
+          inputValue.trim(),
+          sessionId || undefined,
+          databaseContext as unknown as { database_name: string; session_id: string; [key: string]: unknown }
+        );
+        
+        // Track this query for progress display
+        setActiveQueryIds(prev => new Set(prev).add(queryId));
+        
+        console.log("WebSocket query sent with ID:", queryId);
+      } else {
+        // Fallback to HTTP (also requires database context)
+        console.log("Using HTTP fallback with database context:", databaseContext.database_name);
+        onSendMessage(inputValue.trim());
+      }
+      
       setInputValue("");
       setShowSuggestions(false);
     }
@@ -134,9 +257,9 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
             </div>
           </div>
           
-          {/* Database Setup Button - Only show in full width mode */}
+          {/* Database Setup Button and WebSocket Status - Only show in full width mode */}
           {isFullWidth && (
-            <div className="flex items-center">
+            <div className="flex items-center gap-4">
               <DatabaseSetupButton 
                 variant="secondary"
                 size="sm"
@@ -146,6 +269,18 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
                   console.log("Database selected from header:", dbName);
                 }}
               />
+              
+              {/* WebSocket Connection Control */}
+              {enableWebSocket && (
+                <WebSocketConnectionControl
+                  connectionState={globalWebSocket.connectionState}
+                  isConnected={globalWebSocket.isConnected}
+                  onConnect={handleWebSocketConnect}
+                  onDisconnect={handleWebSocketDisconnect}
+                  onReconnect={handleWebSocketReconnect}
+                  compact={true}
+                />
+              )}
             </div>
           )}
         </div>
@@ -302,6 +437,80 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
               );
             })}
           </AnimatePresence>
+
+          {/* Active Query Progress Displays and Results */}
+          {enableWebSocket && webSocketClient && Array.from(activeQueryIds).map(queryId => {
+            const queryState = webSocketClient.activeQueries.get(queryId);
+            if (!queryState) return null;
+            
+            // Show progress for active queries
+            if (queryState.status !== QueryProgressStatus.COMPLETED && queryState.status !== QueryProgressStatus.ERROR) {
+              return (
+                <motion.div
+                  key={`progress-${queryId}`}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="mb-8"
+                >
+                  <QueryProgressDisplay
+                    queryState={queryState}
+                    showEstimatedTime={true}
+                    showDetailedSteps={isFullWidth}
+                    compact={!isFullWidth}
+                  />
+                </motion.div>
+              );
+            }
+            
+            // Show results for completed queries
+            if (queryState.status === QueryProgressStatus.COMPLETED && queryState.result) {
+              return (
+                <motion.div
+                  key={`result-${queryId}`}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="mb-8"
+                  layout
+                >
+                  <StreamingResultDisplay
+                    result={queryState.result}
+                    isComplete={true}
+                    compact={!isFullWidth}
+                  />
+                </motion.div>
+              );
+            }
+            
+            // Show error state
+            if (queryState.status === QueryProgressStatus.ERROR) {
+              return (
+                <motion.div
+                  key={`error-${queryId}`}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="mb-8"
+                >
+                  <div className="p-4 rounded-lg bg-red-50 border border-red-200">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 bg-red-500 rounded-full" />
+                      <span className="font-medium text-red-900">Query Failed</span>
+                    </div>
+                    <p className="text-sm text-red-700">
+                      {queryState.error || 'An error occurred while processing your query.'}
+                    </p>
+                    <p className="text-xs text-red-600 mt-1">
+                      Query: {queryState.query_text}
+                    </p>
+                  </div>
+                </motion.div>
+              );
+            }
+            
+            return null;
+          })}
         </ScrollArea>
       </div>
 
@@ -360,7 +569,13 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
                   ref={inputRef}
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
-                  placeholder={isLoading ? "Processing your query..." : "Ask about your financial data, request analytics, or generate reports..."}
+                  placeholder={
+                    isLoading 
+                      ? "Processing your query..." 
+                      : !databaseContext?.database_name
+                        ? "Please select a database first to start asking questions..."
+                        : "Ask about your financial data, request analytics, or generate reports..."
+                  }
                   disabled={isLoading}
                   className={`
                     relative w-full rounded-2xl resize-none
@@ -389,7 +604,7 @@ export function ChatInterface({ messages, suggestions, onSendMessage, isFullWidt
                 {/* Send Button at Bottom Right */}
                 <Button
                   type="submit"
-                  disabled={!inputValue.trim() || isLoading}
+                  disabled={!inputValue.trim() || isLoading || !databaseContext?.database_name}
                   className={`
                     absolute right-2 bottom-2
                     rounded-full cursor-pointer text-white shadow-lg

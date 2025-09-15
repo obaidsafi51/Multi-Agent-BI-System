@@ -54,8 +54,9 @@ function DashboardContent() {
     // Clear any cached dashboard data to force refresh with new database context
     const cacheKey = `dashboard_initial_data_${databaseName}`;
     sessionStorage.removeItem(cacheKey);
-    // Refresh dashboard data after database selection and schema initialization
-    refreshDashboard();
+    
+    // Don't automatically refresh dashboard - let user manually refresh if needed
+    console.log("Database configured. Click 'Refresh Dashboard' to load data or start chatting to analyze data.");
     setShowDatabaseModal(false);
   };
 

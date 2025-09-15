@@ -185,7 +185,12 @@ class HybridMCPOperationsAdapter:
             elif method == "health_check":
                 result = await self.http_client.health_check()
             elif method == "build_schema_context":
-                result = await self.http_client.build_schema_context(params.get("databases"))
+                # build_schema_context doesn't exist - use discover_databases + get_table_schema instead
+                result = await self._build_schema_context_fallback(params.get("databases", []))
+            elif method == "validate_query_tool":
+                result = await self.http_client.execute_tool("validate_query_tool", params or {})
+            elif method == "llm_analyze_data_tool":
+                result = await self.http_client.execute_tool("llm_analyze_data_tool", params or {})
             else:
                 # Generic tool execution
                 result = await self.http_client.execute_tool(method, params or {})
@@ -317,6 +322,88 @@ class HybridMCPOperationsAdapter:
     async def health_check(self) -> Dict[str, Any]:
         """Check server health"""
         return await self.send_request("health_check")
+    
+    async def validate_query(self, query: str) -> Dict[str, Any]:
+        """Validate SQL query"""
+        return await self.send_request("validate_query_tool", {"query": query})
+    
+    async def analyze_query_result(self, **kwargs) -> Dict[str, Any]:
+        """Analyze query results"""
+        return await self.send_request("llm_analyze_data_tool", kwargs)
+    
+    async def analyze_data(self, **kwargs) -> Dict[str, Any]:
+        """Analyze data - alias for analyze_query_result"""
+        return await self.analyze_query_result(**kwargs)
+    
+    async def _build_schema_context_fallback(self, databases: List[str]) -> Dict[str, Any]:
+        """Build schema context using available tools when build_schema_context is not available"""
+        try:
+            logger.info("Building schema context using fallback method")
+            
+            # If no databases specified, discover them
+            if not databases:
+                discover_result = await self.send_request("discover_databases_tool")
+                databases = discover_result.get("databases", [])
+            
+            schema_context = {
+                "success": True,
+                "databases": {},
+                "tables": [],
+                "total_tables": 0,
+                "total_columns": 0
+            }
+            
+            for db_name in databases[:1]:  # Limit to first database to avoid timeout
+                try:
+                    # Get tables for this database
+                    tables_result = await self.send_request("discover_tables_tool", {"database": db_name})
+                    tables = tables_result.get("tables", [])
+                    
+                    db_info = {
+                        "name": db_name,
+                        "tables": {},
+                        "table_count": len(tables)
+                    }
+                    
+                    # Get schema for each table (limit to first 5 to prevent timeout)
+                    for table_name in tables[:5]:
+                        try:
+                            schema_result = await self.send_request("get_table_schema_tool", {
+                                "database": db_name, 
+                                "table": table_name
+                            })
+                            if schema_result.get("success"):
+                                db_info["tables"][table_name] = schema_result.get("schema", {})
+                                schema_context["total_tables"] += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to get schema for {db_name}.{table_name}: {e}")
+                            continue
+                    
+                    schema_context["databases"][db_name] = db_info
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to process database {db_name}: {e}")
+                    continue
+            
+            logger.info(f"Built fallback schema context: {schema_context['total_tables']} tables")
+            return schema_context
+            
+        except Exception as e:
+            logger.error(f"Schema context fallback failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "databases": {},
+                "tables": [],
+                "total_tables": 0,
+                "total_columns": 0
+            }
+    
+    # Lifecycle management
+    
+    async def analyze_data(self, **kwargs) -> Dict[str, Any]:
+        """Analyze data using LLM"""
+        return await self.send_request("llm_analyze_data_tool", kwargs)
     
     # Lifecycle management
     
