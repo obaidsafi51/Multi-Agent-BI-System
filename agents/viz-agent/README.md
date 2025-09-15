@@ -1,20 +1,20 @@
 # Visualization Agent
 
-The Visualization Agent is a sophisticated component of the AI-Powered BI Agent system that provides dynamic chart generation with CFO-specific styling and interactive features.
+The Visualization Agent is a sophisticated component of the Agentic BI system that provides dynamic chart generation with business intelligence styling and interactive features.
 
 ## Features
 
 ### 🎯 Chart Type Selection
 
 - **Intelligent Selection**: Automatically selects appropriate chart types based on financial data characteristics
-- **Financial Metrics Mapping**: Maps CFO terminology to optimal visualization types
+- **Financial Metrics Mapping**: Maps business terminology to optimal visualization types
 - **User Preferences**: Respects user-defined chart type preferences
 - **Alternative Suggestions**: Provides alternative chart types for the same data
 
 ### 📊 Dynamic Chart Generation
 
 - **Plotly Integration**: Uses Plotly for high-quality, interactive charts
-- **CFO-Specific Styling**: Professional styling with corporate, financial, and professional color schemes
+- **Business-Specific Styling**: Professional styling with corporate, financial, and professional color schemes
 - **Multiple Chart Types**: Supports line, bar, pie, area, scatter, heatmap, table, waterfall, gauge, and candlestick charts
 - **Responsive Design**: Charts adapt to different screen sizes
 
@@ -68,7 +68,7 @@ agent = VisualizationAgent()
 # Create request
 request = VisualizationRequest(
     request_id="example_001",
-    user_id="cfo_user",
+    user_id="business_user",
     query_intent={
         "metric_type": "revenue",
         "time_period": "monthly"
@@ -95,7 +95,7 @@ if response.success:
 ```python
 request = VisualizationRequest(
     request_id="example_002",
-    user_id="cfo_user",
+    user_id="business_user",
     query_intent={"metric_type": "budget_variance"},
     data=[
         {"department": "Sales", "budget": 100000, "actual": 95000},
@@ -117,7 +117,7 @@ from src.models import ExportConfig, ExportFormat
 
 request = VisualizationRequest(
     request_id="example_003",
-    user_id="cfo_user",
+    user_id="business_user",
     query_intent={"metric_type": "cash_flow"},
     data=cash_flow_data,
     export_config=ExportConfig(
