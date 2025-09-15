@@ -1,16 +1,16 @@
-# AI-Powered CFO Business Intelligence Agent
+# Agentic BI
 
-A sophisticated multi-agent system that provides natural language querying capabilities with dynamic dashboard visualization, specifically designed for Chief Financial Officers (CFOs).
+A sophisticated multi-agent system that provides natural language querying capabilities with dynamic dashboard visualization, designed for comprehensive business intelligence analysis.
 
 ## 🏗️ Architecture
 
 This system implements a microservices architecture with the following components:
 
 - **Frontend**: Next.js with TypeScript and shadcn/ui for modern, responsive UI
-- **Backend**: FastAPI gateway with WebSocket support for real-time communication
-- **Multi-Agent System**: Specialized agents for NLP, Data, Visualization, and Personalization
-- **Communication**: MCP (Redis), A2A (RabbitMQ), and ACP (Celery) protocols
-- **Database**: TiDB for scalable financial data storage
+- **Backend**: Python-based orchestration layer with WebSocket support for real-time communication
+- **Multi-Agent System**: Specialized agents for NLP, Data, and Visualization
+- **Communication**: MCP (Model Context Protocol), WebSockets, and HTTP
+- **Database**: TiDB for scalable data storage
 
 ## 🚀 Quick Start
 
@@ -20,78 +20,87 @@ This system implements a microservices architecture with the following component
 - Node.js 18+ (for local frontend development)
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/) (for local Python development)
 
-### Development Setup
+### Setup and Installation
 
-1. **Clone and setup environment**:
+1. **Clone the repository**:
 
    ```bash
-   git clone <repository-url>
-   cd ai-cfo-bi-agent
-   ./setup-dev.sh
+   git clone https://github.com/obaidsafi51/Multi-Agent-BI-System.git
+   cd "Agentic BI"
    ```
 
-   The setup script will:
-
-   - Validate Docker installation
-   - Create `.env` file from template
-   - Validate environment configuration
-   - Build and start all services with proper health checks
-
-2. **Configure environment variables** (if not done during setup):
+2. **Configure environment variables**:
 
    ```bash
    cp .env.example .env
-   # Edit .env with your configuration:
-   # - TIDB_PASSWORD: Set a secure password
-   # - KIMI_API_KEY: Your KIMI LLM API key
-   # - SECRET_KEY: Generate with: openssl rand -hex 32
+   # Edit .env with your configuration
    ```
 
-3. **Manual start** (alternative to setup script):
+3. **Build and start services**:
 
    ```bash
-   # Validate environment
-   ./scripts/validate-env.sh
-
-   # Start services
-   docker-compose up -d
+   docker compose up -d
    ```
+
+   This will build and start all containers defined in the docker-compose.yml file.
 
 4. **Access the application**:
 
    - Frontend: http://localhost:3000
    - Backend API: http://localhost:8000
-   - Backend Health: http://localhost:8000/health
-   - RabbitMQ Management: http://localhost:15672 (guest/guest)
+   - TiDB MCP Server: http://localhost:8080
+   - TiDB Dashboard: http://localhost:8080/dashboard
 
-5. **Troubleshooting**:
+5. **Check service status**:
 
    ```bash
-   # Run diagnostics
-   ./scripts/troubleshoot.sh
+   docker compose ps
+   ```
 
-   # View logs
-   docker-compose logs -f [service-name]
+6. **View logs**:
+
+   ```bash
+   docker compose logs -f [service-name]
    ```
 
 ## 📁 Project Structure
 
 ```
-ai-cfo-bi-agent/
-├── frontend/                 # Next.js frontend with shadcn/ui
-├── backend/                  # FastAPI gateway
+Agentic BI/
+├── frontend/                # Next.js frontend with UI components
+├── backend/                # Python-based orchestration backend
 ├── agents/
-│   ├── nlp-agent/           # KIMI-powered NLP processing
-│   ├── data-agent/          # TiDB data access
-│   ├── viz-agent/           # Plotly visualization generation
-│   └── personal-agent/      # ML-based personalization
-├── config/                  # Configuration files
-├── docker-compose.yml       # Container orchestration
-├── .env.example            # Environment template
-└── setup-dev.sh           # Development setup script
+│   ├── nlp-agent/         # Natural Language Processing Agent
+│   ├── data-agent/        # Data Query and Processing Agent
+│   └── viz-agent/         # Visualization Generation Agent
+├── tidb-mcp-server/       # TiDB Model Context Protocol Server
+├── shared/                # Shared code and models
+├── config/                # Configuration files
+└── docker-compose.yml     # Container orchestration
 ```
 
-## 🛠️ Development
+## 🛠️ Development Workflow
+
+### Full System
+
+The easiest way to run the complete system is with Docker Compose:
+
+```bash
+# Start all services
+docker compose up -d
+
+# Restart a specific service
+docker compose restart [service-name]
+
+# View logs from all services
+docker compose logs -f
+
+# View logs from a specific service
+docker compose logs -f [service-name]
+
+# Stop all services
+docker compose down
+```
 
 ### Frontend Development
 
@@ -101,13 +110,17 @@ npm install
 npm run dev
 ```
 
+The frontend will be available at http://localhost:3000.
+
 ### Backend Development
 
 ```bash
 cd backend
-uv sync                    # Install dependencies
-uv run uvicorn main:app --reload
+uv sync  # Install dependencies
+python main.py
 ```
+
+The backend will be available at http://localhost:8000.
 
 ### Agent Development
 
@@ -115,106 +128,213 @@ Each agent can be developed independently:
 
 ```bash
 cd agents/[agent-name]
-uv sync                    # Install dependencies
-uv run python main.py
+uv sync  # Install dependencies
+python main.py
 ```
 
-### Install All Dependencies
+## 🔄 System Components
 
+### NLP Agent
+
+The NLP Agent processes natural language queries, extracts intent and entities, and coordinates with the Data and Viz agents to produce results.
+
+Configuration:
+- Environment variables in `.env`
+- Performance settings in `performance_config.py`
+
+Start independently:
 ```bash
-make install-all           # Install all Python dependencies with uv
+cd agents/nlp-agent
+python main_optimized.py
 ```
 
-## 📦 Package Management
+### Data Agent
 
-This project uses [uv](https://docs.astral.sh/uv/) for Python package management, providing:
+The Data Agent handles database connections, query generation, validation, and execution.
 
-- **Fast dependency resolution**: 10-100x faster than pip
-- **Reproducible builds**: Lock files ensure consistent environments
-- **Better dependency management**: Automatic virtual environment handling
-- **Modern Python tooling**: Built-in support for pyproject.toml
+Configuration:
+- Database connection in `.env`
 
-### Installing uv
-
+Start independently:
 ```bash
-# macOS and Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+cd agents/data-agent
+python main.py
 ```
 
-## 🔧 Scripts
+### Viz Agent
 
-- `./setup-dev.sh` - Complete development environment setup
-- `./scripts/validate-env.sh` - Validate environment configuration
-- `./scripts/troubleshoot.sh` - Diagnose common issues
-- `./scripts/cleanup.sh` - Clean up development artifacts (.venv, cache, etc.)
-- `./scripts/pre-build.sh` - Prepare environment for clean Docker builds
-- `./scripts/wait-for-it.sh` - Wait for services to be ready
+The Viz Agent generates visualizations based on data and query intent.
 
-## 🐛 Troubleshooting
+Configuration:
+- Styling and chart options in environment variables
 
-### Common Issues
+Start independently:
+```bash
+cd agents/viz-agent
+python main.py
+```
 
-1. **Docker build failures**:
+### TiDB MCP Server
 
-   - Run `./scripts/cleanup.sh` to remove .venv directories and artifacts
-   - Run `./scripts/troubleshoot.sh` for diagnostics
-   - Try `./scripts/pre-build.sh` for clean build preparation
+The TiDB MCP Server provides schema intelligence and query validation through the Model Context Protocol.
 
-2. **Service startup issues**: Check logs with `docker-compose logs -f [service]`
+Configuration:
+- TiDB connection settings in `.env`
 
-3. **Environment errors**: Validate with `./scripts/validate-env.sh`
+Start independently:
+```bash
+cd tidb-mcp-server
+python main.py
+```
 
-4. **Port conflicts**: Check if ports 3000, 8000, 4000, 5672, 6379 are available
+### Backend Orchestration
 
-5. **Permission issues with .venv**: Run `sudo ./scripts/cleanup.sh` if needed
+The Backend coordinates communication between agents and manages WebSocket connections with the frontend.
 
-### Health Checks
+Configuration:
+- Connection settings in `.env`
+- Logging in `logging_config.yaml`
 
-All services include health checks:
+Start independently:
+```bash
+cd backend
+python main.py
+```
 
-- Backend: `curl http://localhost:8000/health`
-- Frontend: `curl http://localhost:3000`
-- Redis: `docker-compose exec redis redis-cli ping`
-- RabbitMQ: `docker-compose exec rabbitmq rabbitmq-diagnostics ping`
-- TiDB: `docker-compose exec tidb mysql -h localhost -P 4000 -u root -p -e "SELECT 1"`
+## 📊 Features
 
-# Windows
-
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-
-# With pip
-
-pip install uv
-
-````
+- **Natural Language Querying**: Ask business questions in plain English
+- **Dynamic Visualization**: Automatic chart generation based on query context
+- **Interactive Dashboards**: Customizable visualization layouts
+- **Real-time Updates**: WebSocket-based live data streaming
+- **Schema Intelligence**: Smart query validation and schema awareness
+- **Multi-Agent Architecture**: Specialized agents for different aspects of BI
+- **Performance Optimization**: Caching and parallel processing
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
-- `TIDB_PASSWORD`: TiDB database password
-- `KIMI_API_KEY`: KIMI LLM API key for natural language processing
-- `SECRET_KEY`: JWT secret key (generate with `openssl rand -hex 32`)
+Key environment variables to configure:
+
+```
+# Database
+TIDB_HOST=tidb
+TIDB_PORT=4000
+TIDB_USER=root
+TIDB_PASSWORD=your_password
+TIDB_DATABASE=your_database
+
+# API Keys
+LLM_API_KEY=your_llm_api_key
+
+# Ports
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
+NLP_AGENT_PORT=8001
+DATA_AGENT_PORT=8002
+VIZ_AGENT_PORT=8003
+MCP_SERVER_PORT=8080
+
+# WebSockets
+WEBSOCKET_PROTOCOL=ws
+WEBSOCKET_HOST=localhost
+```
 
 ### Service Ports
 
 - Frontend: 3000
 - Backend: 8000
-- Redis: 6379
-- RabbitMQ: 5672 (Management: 15672)
+- NLP Agent: 8001
+- Data Agent: 8002
+- Viz Agent: 8003
+- TiDB MCP Server: 8080
 - TiDB: 4000
 
-## 📊 Features
+## 🛠️ Advanced Configuration
 
-- **Natural Language Queries**: Ask financial questions in plain English
-- **Dynamic Visualizations**: Automatic chart generation based on query context
-- **Personalized Experience**: ML-powered recommendations and preferences
-- **Real-time Updates**: WebSocket-based live data streaming
-- **Bento Grid Dashboard**: Modern, customizable dashboard layout
-- **Multi-Agent Architecture**: Scalable, fault-tolerant system design
+### Customizing WebSocket Settings
+
+Edit `backend/websocket_agent_manager.py` to adjust WebSocket behavior:
+
+```python
+# Configuration options
+RECONNECT_ATTEMPTS = 5
+RECONNECT_DELAY = 1.5  # seconds
+PING_INTERVAL = 30  # seconds
+```
+
+### Optimizing NLP Agent Performance
+
+Edit `agents/nlp-agent/performance_config.py`:
+
+```python
+# Adjust cache size and optimization level
+CACHE_SIZE = 2000
+SEMANTIC_SIMILARITY_THRESHOLD = 0.85
+PARALLEL_PROCESSING = True
+```
+
+### Customizing Visualization Styling
+
+The Viz Agent supports different styling options:
+
+```
+VIZ_COLOR_SCHEME=professional
+VIZ_INTERACTIVE_FEATURES=true
+VIZ_DEFAULT_CHART_TYPE=auto
+```
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **Connection errors**: Ensure all services are running with `docker compose ps`
+
+2. **Database connection issues**:
+   - Check TiDB is running: `docker compose logs tidb`
+   - Verify database credentials in `.env`
+
+3. **WebSocket connection errors**:
+   - Check WebSocket server is running: `docker compose logs backend`
+   - Verify WebSocket settings in frontend configuration
+
+4. **Visualization errors**:
+   - Ensure data format is correct
+   - Check Viz Agent logs: `docker compose logs viz-agent`
+
+5. **Slow performance**:
+   - Check NLP Agent cache settings
+   - Verify database has proper indexes
+
+### Diagnostics
+
+For a complete system health check:
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+## 📝 API Documentation
+
+### Key Endpoints
+
+- **Frontend**: http://localhost:3000
+  - Web interface for querying and visualization
+
+- **Backend**:
+  - `GET /health` - System health check
+  - `POST /query` - Submit a natural language query
+  - `WS /ws` - WebSocket connection endpoint
+
+- **NLP Agent**:
+  - `POST /process` - Process natural language query
+  - `GET /health` - Agent health status
+
+- **TiDB MCP Server**:
+  - `WS /ws` - WebSocket endpoint for MCP
+  - `GET /health` - Server health status
 
 ## 🧪 Testing
 
@@ -223,21 +343,14 @@ pip install uv
 cd frontend && npm test
 
 # Backend tests
-cd backend && uv run pytest
+cd backend && pytest
 
 # Agent tests
-cd agents/[agent-name] && uv run pytest
+cd agents/[agent-name] && pytest
 
-# All tests
-make test
-````
-
-## 📝 API Documentation
-
-Once the backend is running, visit:
-
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+# End-to-end tests
+cd system-tests && pytest
+```
 
 ## 🤝 Contributing
 

@@ -1,6 +1,6 @@
 # NLP Agent v2.2.0 - Optimized Performance Edition
 
-This is the high-performance Natural Language Processing (NLP) Agent for the AI-Powered CFO BI Agent system. It provides advanced natural language query understanding with optimized performance, intelligent caching, and WebSocket connectivity.
+This is the high-performance Natural Language Processing (NLP) Agent for the Agentic BI system. It provides advanced natural language query understanding with optimized performance, intelligent caching, and WebSocket connectivity.
 
 ## 🚀 Key Features
 
@@ -306,4 +306,4 @@ Environment-specific optimization:
 
 ## 📄 License
 
-This project is part of the AI-Powered CFO BI Agent system.
+This project is part of the Agentic BI system.
