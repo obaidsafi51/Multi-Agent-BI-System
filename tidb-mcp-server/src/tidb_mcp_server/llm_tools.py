@@ -210,20 +210,55 @@ class LLMClient:
         Returns:
             Dictionary with generated SQL and metadata
         """
-        system_prompt = """You are a SQL expert. Convert natural language questions into valid SQL SELECT queries.
-Rules:
-1. Only generate SELECT queries (no INSERT, UPDATE, DELETE, DROP, etc.)
-2. Use proper SQL syntax for TiDB/MySQL
-3. Include comments explaining the query logic
-4. Return only the SQL query without additional explanation"""
+        system_prompt = """You are a SQL expert specializing in TiDB Cloud databases. Convert natural language questions into valid SQL SELECT queries.
+
+MANDATORY REQUIREMENTS - EVERY QUERY MUST:
+1. START WITH: USE `database_name`; (REQUIRED - NO EXCEPTIONS)
+2. Only generate SELECT queries (no INSERT, UPDATE, DELETE, DROP, etc.)
+3. Use backticks around ALL table and column names: `table_name`.`column_name`
+4. Use proper TiDB/MySQL syntax with proper aggregation rules
+5. When using GROUP BY, ensure all non-aggregated columns in SELECT are in GROUP BY
+6. Use appropriate date functions: YEAR(), MONTH(), DATE_FORMAT()
+7. For time-based queries, use DATE_FORMAT for proper grouping
+8. Return clean, executable SQL without markdown formatting
+
+REQUIRED FORMAT:
+```
+USE `database_name`;
+SELECT ... FROM `table_name` ...;
+```
+
+TiDB SYNTAX EXAMPLES:
+- USE `Retail_Business_Agentic_AI`;
+- SELECT `column1`, SUM(`column2`) FROM `table` WHERE YEAR(`date_column`) = 2024 GROUP BY `column1`;
+- DATE_FORMAT(`date_column`, '%Y-%m') for month grouping
+- ALWAYS use backticks for ALL identifiers
+
+CRITICAL: Every response MUST begin with USE statement!"""
         
         if schema_info:
             system_prompt += f"\n\nDatabase Schema:\n{schema_info}"
+            system_prompt += "\n\nIMPORTANT: Use the exact table and column names from the schema above. Always include the USE statement for the database."
         
         if examples:
             system_prompt += f"\n\nExample queries:\n" + "\n".join(examples)
         
-        user_prompt = f"Convert this question to SQL: {natural_language_query}"
+        user_prompt = f"""Convert this question to SQL: {natural_language_query}
+
+MANDATORY FORMAT - Your response must start with USE statement:
+USE `database_name`;
+SELECT ... FROM `table_name` ...;
+
+CRITICAL REQUIREMENTS:
+1. FIRST LINE MUST BE: USE `database_name`; (ABSOLUTELY REQUIRED)
+2. Use proper backtick syntax for ALL identifiers
+3. Ensure proper GROUP BY clauses for aggregations
+4. Use appropriate date functions for time-based queries
+5. Return only the SQL statements, no explanations or markdown
+
+EXAMPLE RESPONSE:
+USE `Retail_Business_Agentic_AI`;
+SELECT `column`, SUM(`amount`) FROM `table` GROUP BY `column`;"""
         
         result = await self.generate_text(
             prompt=user_prompt,
@@ -231,9 +266,35 @@ Rules:
             temperature=0.1  # Very low temperature for precise SQL generation
         )
         
+        # Post-process to ensure USE statement is included
+        if "generated_text" in result and result["generated_text"]:
+            sql_text = result["generated_text"].strip()
+            
+            # Check if USE statement is missing
+            if not sql_text.upper().startswith("USE "):
+                # Extract database name from schema_info if available
+                database_name = "Retail_Business_Agentic_AI"  # Default database
+                if schema_info and "Database:" in schema_info:
+                    # Try to extract database name from schema
+                    lines = schema_info.split('\n')
+                    for line in lines:
+                        if line.strip().startswith("Database:"):
+                            database_name = line.split("Database:")[1].strip()
+                            break
+                
+                # Prepend USE statement
+                use_statement = f"USE `{database_name}`;"
+                result["generated_text"] = f"{use_statement}\n{sql_text}"
+                
+                logger.info(f"Added missing USE statement for database: {database_name}")
+        
         # Add SQL-specific metadata
         result["query_type"] = "sql_generation"
         result["natural_language_query"] = natural_language_query
+        
+        # Log the complete generated SQL for debugging
+        if "generated_text" in result:
+            logger.info(f"COMPLETE GENERATED SQL:\n{result['generated_text']}")
         
         return result
     

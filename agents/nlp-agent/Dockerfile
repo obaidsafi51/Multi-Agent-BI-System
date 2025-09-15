@@ -27,7 +27,6 @@ ENV PYTHONUNBUFFERED=1
 COPY src/ ./src/
 COPY shared/ ./shared/
 COPY main_optimized.py ./main.py
-COPY config_optimized.py ./config.py
 COPY performance_config.py ./performance_config.py
 # websocket_server.py removed - NLP agent acts as client only
 COPY startup.py ./startup.py
@@ -52,5 +51,5 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8001/health || exit 1
 
-# Start both HTTP and WebSocket servers using startup script
-CMD ["python", "startup.py"]
+# Start HTTP and WebSocket server using main.py directly
+CMD ["python", "main.py"]

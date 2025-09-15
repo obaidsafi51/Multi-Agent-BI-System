@@ -1,24 +1,28 @@
 # NLP Agent Cleanup Summary
 
 ## Overview
+
 Major cleanup of NLP agent codebase completed, removing redundant, outdated, and unused files that were replaced by optimized implementations.
 
 ## Files Removed
 
 ### Old Source Files
+
 - `nlp_agent.py` - Replaced by `src/optimized_nlp_agent.py`
 - `kimi_client.py` - Replaced by `src/optimized_kimi_client.py`
 - `mcp_client.py` - Replaced by `src/websocket_mcp_client.py`
 - `mcp_context_client.py` - Functionality integrated into optimized components
-- `query_parser.py` - Replaced by enhanced query classification in `src/query_classifier.py`
+- `query_parser.py` - Replaced by unified processing approach in optimized_nlp_agent.py
 
 ### Old Test Files
+
 - `test_nlp_agent.py` - Outdated tests for old implementation
 - `test_kimi_client.py` - Outdated tests for old implementation
 - `test_query_parser.py` - Outdated tests for old implementation
 - `test_integration.py` - Outdated integration tests
 
 ### Configuration & Documentation
+
 - `config/` directory - Configuration now centralized in performance_optimizer.py
 - `examples/` directory - Outdated examples
 - `nlp_agent.log` - Old log file
@@ -27,6 +31,7 @@ Major cleanup of NLP agent codebase completed, removing redundant, outdated, and
 ## Current Optimized Structure
 
 ### Source Code (`src/`)
+
 - `optimized_nlp_agent.py` - Main optimized agent
 - `optimized_kimi_client.py` - Enhanced Kimi API client
 - `websocket_mcp_client.py` - Optimized WebSocket client
@@ -35,13 +40,16 @@ Major cleanup of NLP agent codebase completed, removing redundant, outdated, and
 - `enhanced_monitoring.py` - Performance monitoring
 - `context_builder.py` - Dynamic context building
 - `models.py` - Data models
-- `query_classifier.py` - Enhanced query classification
+- `hybrid_mcp_operations_adapter.py` - WebSocket + HTTP failover adapter
+- `http_mcp_client.py` - HTTP MCP client for fallback
 - `enhanced_websocket_client.py` - WebSocket connection management
 
 ### Tests (`tests/`)
+
 - `test_context_builder.py` - Current context builder tests
 
 ### Root Files
+
 - `main_optimized.py` - Optimized main entry point
 - `Dockerfile` - Container configuration
 - `pyproject.toml` - Project dependencies
@@ -50,18 +58,21 @@ Major cleanup of NLP agent codebase completed, removing redundant, outdated, and
 ## Impact
 
 ### Performance Improvements Maintained
+
 - 1,277x performance improvement (7.665s → 0.0048s)
 - Multi-level caching system intact
 - WebSocket optimization preserved
 - Fast-path processing functional
 
 ### Codebase Benefits
+
 - Reduced complexity and maintenance overhead
 - Eliminated duplicate functionality
 - Cleaner architecture with focused components
 - Improved development experience
 
 ### Technical Debt Reduction
+
 - Removed deprecated implementations
 - Eliminated outdated configuration patterns
 - Streamlined testing approach
@@ -81,7 +92,30 @@ Major cleanup of NLP agent codebase completed, removing redundant, outdated, and
 3. Verify Docker deployment works correctly
 4. Monitor performance metrics post-cleanup
 
+## Additional Cleanup (Phase 2)
+
+### Files Removed in Phase 2
+
+- `src/query_classifier.py` - Removed, replaced by unified processing approach
+- `config_optimized.py` - Unused configuration file
+- `standardized_response_template.py` - Unused template file
+
+### Architecture Changes
+
+- **Unified Processing**: Removed query classification in favor of unified processing path for all queries
+- **Simplified Configuration**: Removed unused configuration files
+- **Streamlined Templates**: Removed unused response templates
+
+### Benefits
+
+- Further reduced code complexity
+- Eliminated unused functionality
+- Simplified maintenance
+- Cleaner architecture
+
 ---
-*Cleanup completed: 2025-01-27*
-*Performance improvements preserved*
-*Architecture streamlined*
+
+_Initial Cleanup: 2025-01-27_
+_Phase 2 Cleanup: 2025-09-14_
+_Performance improvements preserved_
+_Architecture streamlined_

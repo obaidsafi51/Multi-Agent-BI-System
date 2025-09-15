@@ -409,43 +409,7 @@ class PerformanceOptimizer:
         
         logger.info(f"Query processed and cached ({processing_time:.3f}s)")
         return result, optimization_stats
-    
-    async def optimize_schema_context(
-        self,
-        databases: Optional[List[str]],
-        schema_function
-    ) -> Tuple[Dict[str, Any], bool]:
-        """Optimize schema context building with caching"""
-        # Generate cache key for schema context
-        cache_key = self.generate_cache_key(
-            {"databases": databases or []},
-            CacheType.SCHEMA
-        )
-        
-        # Check schema cache
-        cached_schema, cache_hit = await self.get_cached(
-            cache_key,
-            CacheType.SCHEMA
-        )
-        
-        if cache_hit:
-            logger.info("Schema context retrieved from cache")
-            return cached_schema, True
-        
-        # Execute schema building function
-        schema_result = await schema_function()
-        
-        # Cache schema result
-        await self.set_cached(
-            cache_key,
-            schema_result,
-            CacheType.SCHEMA,
-            ttl_seconds=self.schema_cache_ttl
-        )
-        
-        logger.info("Schema context built and cached")
-        return schema_result, False
-    
+
     async def _calculate_semantic_similarity(self, query1: str, query2: str) -> float:
         """Calculate semantic similarity between queries with optimized implementation"""
         if not query1 or not query2:
@@ -481,7 +445,7 @@ class PerformanceOptimizer:
         combined_similarity = (jaccard_similarity * 0.6) + (length_similarity * 0.25) + keyword_bonus + 0.15
         
         return min(combined_similarity, 1.0)  # Cap at 1.0
-    
+
     async def _is_simple_query(self, query: str) -> bool:
         """Determine if query is simple and can use fast-path optimization"""
         query_lower = query.lower().strip()
@@ -648,11 +612,7 @@ class PerformanceOptimizer:
                 # Analyze performance patterns more frequently
                 await self._analyze_performance_patterns()
                 
-                # Adjust cache sizes based on hit rates
-                await self._optimize_cache_sizes()
-                
-                # Update similarity thresholds based on effectiveness
-                await self._optimize_similarity_threshold()
+                # Adjust cache sizes based on hit rates (integrated into performance analysis)
                 
                 # Proactive cache warming for frequently accessed patterns
                 if optimization_cycle % 5 == 0:  # Every 15 minutes
@@ -804,17 +764,8 @@ class PerformanceOptimizer:
             f"cache_hit_rate={cache_hit_rate:.2f}, trend={trend}"
         )
         
-        # Adaptive optimizations based on performance
-        if cache_hit_rate < 0.4:  # Low hit rate
-            logger.info("Low cache hit rate detected - increasing cache sizes and TTL")
-            await self._boost_cache_performance()
-        elif cache_hit_rate > 0.8 and avg_response_time < 1.0:  # High efficiency
-            logger.info("High performance detected - optimizing for speed")
-            await self._optimize_for_speed()
-        
-        if avg_response_time > 5.0:  # Slow responses
-            logger.warning("Slow response times detected - applying performance fixes")
-            await self._fix_slow_performance()
+        # Adaptive optimizations based on performance using consolidated method
+        await self._adjust_cache_performance(cache_hit_rate, avg_response_time)
         
         # Adjust similarity threshold based on semantic cache effectiveness
         semantic_hits = self.cache_hits.get(CacheType.SEMANTIC, 0)
@@ -831,80 +782,53 @@ class PerformanceOptimizer:
                 self.semantic_similarity_threshold = min(0.95, self.semantic_similarity_threshold + 0.05)
                 logger.info(f"Raised semantic similarity threshold to {self.semantic_similarity_threshold:.2f}")
     
-    async def _boost_cache_performance(self):
-        """Boost cache performance when hit rates are low"""
-        # Increase cache sizes by 50%
-        self.memory_cache_size = int(self.memory_cache_size * 1.5)
-        self.semantic_cache_size = int(self.semantic_cache_size * 1.5)
-        self.query_cache_size = int(self.query_cache_size * 1.5)
-        
-        # Increase TTL for better retention
-        self.schema_cache_ttl = int(self.schema_cache_ttl * 1.2)
-        self.context_cache_ttl = int(self.context_cache_ttl * 1.2)
-        
-        logger.info("Cache performance boosted - increased sizes and TTL")
-    
-    async def _optimize_for_speed(self):
-        """Optimize settings for maximum speed when performance is good"""
-        # Slightly reduce cache sizes to save memory (performance is already good)
-        if self.memory_cache_size > 1000:
-            self.memory_cache_size = max(800, int(self.memory_cache_size * 0.9))
-        
-        # Enable aggressive fast-path optimization
-        logger.info("Optimized for speed - reduced memory usage, enabled aggressive caching")
-    
-    async def _fix_slow_performance(self):
-        """Apply fixes when performance is slow"""
-        # Clear old entries to make room for fresh data
-        total_cleared = 0
-        for cache_type in CacheType:
-            cache_dict = self._get_cache_dict(cache_type)
-            before_size = len(cache_dict)
+    async def _adjust_cache_performance(self, cache_hit_rate: float, avg_response_time: float):
+        """Consolidated cache performance adjustment based on metrics"""
+        if cache_hit_rate < 0.4:  # Low hit rate - boost cache performance
+            # Increase cache sizes by 30%
+            self.memory_cache_size = int(self.memory_cache_size * 1.3)
+            self.semantic_cache_size = int(self.semantic_cache_size * 1.3)
+            self.query_cache_size = int(self.query_cache_size * 1.3)
             
-            # Remove entries older than 10 minutes
+            # Increase TTL for better retention
+            self.schema_cache_ttl = int(self.schema_cache_ttl * 1.2)
+            self.context_cache_ttl = int(self.context_cache_ttl * 1.2)
+            
+            logger.info("Cache performance boosted - increased sizes and TTL")
+            
+        elif cache_hit_rate > 0.8 and avg_response_time < 1.0:  # High efficiency - optimize for speed
+            # Slightly reduce cache sizes to save memory
+            if self.memory_cache_size > 1000:
+                self.memory_cache_size = max(800, int(self.memory_cache_size * 0.9))
+            
+            logger.info("Optimized for speed - reduced memory usage")
+            
+        if avg_response_time > 5.0:  # Slow performance - clear old entries
+            total_cleared = 0
             cutoff_time = datetime.now() - timedelta(minutes=10)
-            old_keys = [
-                key for key, entry in cache_dict.items()
-                if entry.created_at < cutoff_time
-            ]
             
-            for key in old_keys:
-                del cache_dict[key]
-            
-            total_cleared += before_size - len(cache_dict)
-        
-        if total_cleared > 0:
-            logger.info(f"Performance fix: cleared {total_cleared} old cache entries")
-        
-        # Lower similarity threshold for more cache hits
-        if self.semantic_similarity_threshold > 0.8:
-            self.semantic_similarity_threshold = 0.8
-            logger.info("Performance fix: lowered semantic similarity threshold")
-    
-    async def _optimize_cache_sizes(self):
-        """Dynamically optimize cache sizes based on usage patterns"""
-        # Calculate hit rates for each cache type
-        for cache_type in CacheType:
-            hits = self.cache_hits[cache_type]
-            misses = self.cache_misses[cache_type]
-            total = hits + misses
-            
-            if total > 0:
-                hit_rate = hits / total
+            for cache_type in CacheType:
                 cache_dict = self._get_cache_dict(cache_type)
-                current_size = len(cache_dict)
-                max_size = self._get_cache_max_size(cache_type)
+                before_size = len(cache_dict)
                 
-                # If hit rate is high and cache is near full, consider virtual expansion
-                if hit_rate > 0.8 and current_size > max_size * 0.8:
-                    logger.debug(f"High hit rate for {cache_type.value} cache: {hit_rate:.2f}")
-    
-    async def _optimize_similarity_threshold(self):
-        """Optimize semantic similarity threshold based on effectiveness"""
-        # This would analyze the effectiveness of semantic matches
-        # and adjust the threshold accordingly
-        pass
-    
+                old_keys = [
+                    key for key, entry in cache_dict.items()
+                    if entry.created_at < cutoff_time
+                ]
+                
+                for key in old_keys:
+                    del cache_dict[key]
+                
+                total_cleared += before_size - len(cache_dict)
+            
+            if total_cleared > 0:
+                logger.info(f"Performance fix: cleared {total_cleared} old cache entries")
+            
+            # Lower similarity threshold for more cache hits
+            if self.semantic_similarity_threshold > 0.8:
+                self.semantic_similarity_threshold = 0.8
+                logger.info("Performance fix: lowered semantic similarity threshold")
+
     def get_optimization_stats(self) -> Dict[str, Any]:
         """Get comprehensive optimization statistics"""
         total_hits = sum(self.cache_hits.values())

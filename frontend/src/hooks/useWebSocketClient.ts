@@ -16,10 +16,33 @@ interface SimpleWebSocketConfig {
   user_id?: string;
   reconnect?: boolean;
   maxReconnectAttempts?: number;
+  disableCleanup?: boolean;
 }
 
+// Helper function to get WebSocket URL from environment
+const getWebSocketUrl = (): string => {
+  // Try WebSocket-specific URL first
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  
+  // Convert HTTP backend URL to WebSocket URL
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+    return process.env.NEXT_PUBLIC_BACKEND_URL.replace('http://', 'ws://').replace('https://', 'wss://');
+  }
+  
+  // Convert API URL to WebSocket URL
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace('http://', 'ws://').replace('https://', 'wss://');
+  }
+  
+  // Development fallback - only used if no environment variables are set
+  console.warn('⚠️  No WebSocket environment variables found, using development fallback');
+  return process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080';
+};
+
 const DEFAULT_CONFIG: SimpleWebSocketConfig = {
-  url: process.env.NEXT_PUBLIC_BACKEND_URL || 'ws://localhost:8080',
+  url: getWebSocketUrl(),
   user_id: 'default_user',
   reconnect: false,  // Disable auto-reconnect to prevent storm
   maxReconnectAttempts: 0
@@ -55,8 +78,13 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
     strictModeCounterRef.current += 1;
     const currentAttempt = strictModeCounterRef.current;
     
-    // Generate unique connection ID for this attempt
-    const connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Generate stable agent ID using user_id and browser session (consistent with backend)
+    const sessionId = sessionStorage.getItem('websocket_session_id') || 
+                     `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (!sessionStorage.getItem('websocket_session_id')) {
+      sessionStorage.setItem('websocket_session_id', sessionId);
+    }
+    const connectionId = `frontend_${fullConfig.user_id}_${sessionId}`;
     connectionIdRef.current = connectionId;
     
     console.log(`useWebSocketClient: Connect attempt #${currentAttempt} (ID: ${connectionId})`);
@@ -68,7 +96,22 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
     }
     
     // Use global connection manager to prevent multiple connections
-    const wsUrl = `ws://localhost:8080/ws/chat/${fullConfig.user_id}`;
+    let baseUrl = fullConfig.url;
+    
+    // Ensure we have a WebSocket URL
+    if (!baseUrl) {
+      console.error('❌ No WebSocket URL configured - check environment variables');
+      throw new Error('WebSocket URL not configured');
+    }
+    
+    // Convert HTTP to WebSocket protocol if needed
+    if (baseUrl.startsWith('http://')) {
+      baseUrl = baseUrl.replace('http://', 'ws://');
+    } else if (baseUrl.startsWith('https://')) {
+      baseUrl = baseUrl.replace('https://', 'wss://');
+    }
+    
+    const wsUrl = `${baseUrl}/ws/chat/${fullConfig.user_id}`;
     
     try {
       isConnectingRef.current = true;
@@ -105,14 +148,60 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
         try {
           const message = JSON.parse(event.data);
           console.log('Received WebSocket message:', message);
-          // Handle message based on type
+          
+          // Handle standardized message types
+          switch (message.type) {
+            case 'connection_acknowledged':
+              console.log('Connection handshake acknowledged:', message.server_agent_id);
+              console.log('Server capabilities:', message.server_capabilities);
+              break;
+            case 'heartbeat_response':
+              console.log('Heartbeat acknowledged:', message.server_status);
+              break;
+            case 'connection_established':
+              console.log('Connection established:', message.message);
+              break;
+            case 'query_response':
+              console.log('Query response received:', message.response);
+              break;
+            case 'query_processing_started':
+              console.log('Query processing started:', message.query);
+              break;
+            case 'error':
+              console.error('Server error:', message.error);
+              break;
+            default:
+              console.log('Unhandled message type:', message.type);
+          }
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
         }
       };
 
       socket.onopen = () => {
-        console.log('useWebSocketClient: Connection established');
+        console.log('useWebSocketClient: Connection established, sending handshake');
+        
+        // Send connection handshake with agent information
+        const handshakeMessage = {
+          type: 'connection_handshake',
+          agent_id: connectionId,
+          agent_type: 'frontend',
+          user_id: fullConfig.user_id,
+          capabilities: ['query_processing', 'real_time_updates', 'heartbeat'],
+          timestamp: new Date().toISOString(),
+          client_info: {
+            browser: navigator.userAgent,
+            url: window.location.href
+          }
+        };
+        
+        try {
+          socket.send(JSON.stringify(handshakeMessage));
+          console.log('Handshake sent:', handshakeMessage);
+        } catch (error) {
+          console.error('Failed to send handshake:', error);
+        }
+        
         setConnectionState(WebSocketConnectionState.CONNECTED);
         setIsConnected(true);
         reconnectAttempts.current = 0;
@@ -162,7 +251,7 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
     setIsConnected(false);
   }, []);
 
-  // Send query
+  // Send query with standardized format
   const sendQuery = useCallback((query: string, sessionId?: string, databaseContext?: Record<string, unknown>): string => {
     if (!isConnected || !socketRef.current) {
       console.warn('WebSocket not connected, cannot send query');
@@ -171,12 +260,16 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
 
     const queryId = `query_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
+    // Standardized message format compatible with backend
     const message = {
       type: 'query',
-      message: query,
+      query: query,  // Use 'query' instead of 'message' for consistency
       query_id: queryId,
-      session_id: sessionId,
-      database_context: databaseContext
+      session_id: sessionId || `frontend_session_${Date.now()}`,
+      database_context: databaseContext || {},
+      preferences: { output_format: 'json' },
+      timestamp: new Date().toISOString(),
+      correlation_id: queryId
     };
 
     try {
@@ -203,13 +296,18 @@ export function useWebSocketClient(config?: SimpleWebSocketConfig): UseWebSocket
     }
   }, [isConnected]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount (only if cleanup is not disabled)
   useEffect(() => {
+    if (config?.disableCleanup) {
+      console.log('useWebSocketClient cleanup disabled');
+      return;
+    }
+    
     return () => {
       console.log('useWebSocketClient cleanup');
       disconnect();
     };
-  }, [disconnect]);
+  }, [disconnect, config?.disableCleanup]);
 
   return {
     // Connection state

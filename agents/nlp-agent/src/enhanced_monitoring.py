@@ -500,16 +500,7 @@ class EnhancedMonitoringSystem:
             except Exception as e:
                 logger.error(f"Error in alert handler: {e}")
     
-    def add_alert_rule(self, rule: ThresholdRule):
-        """Add custom alert rule"""
-        self.threshold_rules.append(rule)
-        logger.info(f"Added alert rule: {rule.name}")
-    
-    def add_alert_handler(self, handler: Callable):
-        """Add alert handler function"""
-        self.alert_handlers.append(handler)
-        logger.info("Added alert handler")
-    
+
     def acknowledge_alert(self, alert_id: str) -> bool:
         """Acknowledge an active alert"""
         for alert in self.active_alerts:

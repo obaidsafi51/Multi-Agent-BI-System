@@ -209,7 +209,7 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
         response = QueryExecuteResponse(
             success=True,
             query_id=request.query_id,
-            processed_data=result.get("data", []),
+            processed_data=result.get("rows", result.get("data", [])),
             columns=result.get("columns", []),
             row_count=result.get("row_count", 0),
             processing_time_ms=result.get("metadata", {}).get("processing_time_ms", 0),

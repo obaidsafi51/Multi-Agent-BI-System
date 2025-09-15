@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { BentoGridCard, ChatMessage, QuerySuggestion } from "@/types/dashboard";
 import { apiService, QueryRequest, QueryResponse } from "@/lib/api";
 import { useDatabaseContext } from "@/contexts/DatabaseContext";
+import { useGlobalWebSocket } from "@/contexts/WebSocketContext";
+import { useWebSocketQuery } from "@/hooks/useWebSocketQuery";
 
 interface UseRealDataReturn {
   // State
@@ -20,8 +22,10 @@ interface UseRealDataReturn {
 }
 
 export function useRealData(): UseRealDataReturn {
-  // Get database context
+  // Get database context and WebSocket connections
   const { sessionId } = useDatabaseContext();
+  const { isConnected } = useGlobalWebSocket();
+  const { processQuery, isProcessing } = useWebSocketQuery();
   
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [bentoCards, setBentoCards] = useState<BentoGridCard[]>([]);
@@ -31,28 +35,52 @@ export function useRealData(): UseRealDataReturn {
   const [refreshSuccess, setRefreshSuccess] = useState(false);
 
   const loadSuggestions = useCallback(async () => {
-    try {
-      const apiSuggestions = await apiService.getSuggestions();
-      const transformedSuggestions = apiService.transformSuggestions(apiSuggestions);
-      setSuggestions(transformedSuggestions);
-    } catch (err) {
-      console.error("Failed to load suggestions:", err);
-      // Use fallback suggestions if API fails
-      setSuggestions([
-        {
-          id: "fallback_1",
-          text: "Show me revenue trends",
-          category: "Revenue",
-          confidence: 0.9,
-        },
-        {
-          id: "fallback_2",
-          text: "What's our cash flow status?",
-          category: "Cash Flow",
-          confidence: 0.85,
-        },
-      ]);
-    }
+    // Use static suggestions instead of API call
+    const staticSuggestions = [
+      "Show me the total revenue by month",
+      "What are our top performing products?", 
+      "Analyze cash flow trends over time",
+      "Compare profit margins by category",
+      "Show budget vs actual expenses",
+      "What is our customer acquisition cost?",
+      "Display quarterly financial ratios",
+      "Show investment portfolio performance",
+      "What are the main expense categories?",
+      "Analyze revenue growth year over year"
+    ];
+    
+    // Transform suggestions inline
+    const transformedSuggestions = staticSuggestions.map((text, index) => {
+      const lowerText = text.toLowerCase();
+      let category = "General";
+      
+      if (lowerText.includes("revenue") || lowerText.includes("sales")) {
+        category = "Revenue";
+      } else if (lowerText.includes("cash flow") || lowerText.includes("cash")) {
+        category = "Cash Flow";
+      } else if (lowerText.includes("budget") || lowerText.includes("expense")) {
+        category = "Budget";
+      } else if (lowerText.includes("investment") || lowerText.includes("roi")) {
+        category = "Investments";
+      } else if (lowerText.includes("ratio") || lowerText.includes("debt")) {
+        category = "Financial Ratios";
+      } else if (lowerText.includes("product")) {
+        category = "Products";
+      } else if (lowerText.includes("profit") || lowerText.includes("margin")) {
+        category = "Profitability";
+      } else if (lowerText.includes("customer")) {
+        category = "Customers";
+      }
+      
+      return {
+        id: `suggestion_${index}`,
+        text,
+        category,
+        confidence: 0.9,
+      };
+    });
+    
+    setSuggestions(transformedSuggestions);
   }, []);
 
   const loadInitialDashboard = useCallback(async () => {
@@ -308,30 +336,14 @@ export function useRealData(): UseRealDataReturn {
     }
   }, [getNextAvailablePosition]);
 
-  const sendMessage = useCallback(async (content: string) => {
+  const processQueryResponse = useCallback((content: string, response: QueryResponse) => {
     try {
-      setIsLoading(true);
-      setError(null);
-
-      // Process query through API FIRST
-      const queryRequest: QueryRequest = {
-        query: content,
-        user_id: "anonymous",
-        session_id: sessionId || undefined,
-        context: { 
-          user_id: "anonymous",
-          source: "chat_interface"
-        }
-      };
-
-      const response = await apiService.processQuery(queryRequest);
-
-      // Only add user message if API call succeeds
+      // Only add user message if processing succeeds
       const userMessage: ChatMessage = {
-        id: `user_${crypto.randomUUID()}`, // Use crypto.randomUUID() for consistent IDs
+        id: `user_${crypto.randomUUID()}`,
         content,
         sender: "user",
-        timestamp: new Date(), // This is OK since we're client-side only now
+        timestamp: new Date(),
       };
       
       setChatMessages(prev => [...prev, userMessage]);
@@ -341,7 +353,7 @@ export function useRealData(): UseRealDataReturn {
         id: response.query_id,
         content: generateResponseMessage(response),
         sender: "assistant",
-        timestamp: new Date(), // This is OK since we're client-side only now
+        timestamp: new Date(),
         metadata: {
           queryId: response.query_id,
           processingTime: response.result?.processing_time_ms,
@@ -354,17 +366,87 @@ export function useRealData(): UseRealDataReturn {
       if (response.result && response.result.data.length > 0) {
         updateDashboardFromQuery(response);
       }
-
     } catch (err) {
-      console.error("API call failed:", err);
+      console.error("Query response processing failed:", err);
+      setError(err instanceof Error ? err.message : "Failed to process response");
+    }
+  }, [updateDashboardFromQuery]);
+
+  const sendMessage = useCallback(async (content: string) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // Check if WebSocket is connected and use it, otherwise fallback to HTTP
+      if (isConnected) {
+        console.log("Using WebSocket for query:", content);
+        
+        // Process query through WebSocket
+        const wsResponse = await processQuery({
+          query: content,
+          session_id: sessionId || undefined,
+          preferences: {
+            output_format: "json"
+          }
+        });
+
+        // Transform WebSocket response to expected format
+        const response: QueryResponse = {
+          query_id: wsResponse.response?.query_id || `ws_${Date.now()}`,
+          result: {
+            data: Array.isArray(wsResponse.response?.data) ? wsResponse.response.data : [],
+            processing_time_ms: 1000, // Default processing time
+            columns: [],
+            row_count: Array.isArray(wsResponse.response?.data) ? wsResponse.response.data.length : 0
+          },
+          intent: {
+            metric_type: "unknown",
+            time_period: "unknown",
+            aggregation_level: "summary"
+          },
+          error: wsResponse.error ? {
+            error_type: wsResponse.error.error_type,
+            message: wsResponse.error.message,
+            recovery_action: "retry",
+            suggestions: wsResponse.error.suggestions || []
+          } : undefined
+        };
+
+        // Use the transformed response
+        processQueryResponse(content, response);
+      } else {
+        console.log("WebSocket not connected, using HTTP fallback");
+        
+        // Fallback to HTTP API
+        const queryRequest: QueryRequest = {
+          query: content,
+          user_id: "anonymous",
+          session_id: sessionId || undefined,
+          context: { 
+            user_id: "anonymous",
+            source: "chat_interface_http_fallback"
+          }
+        };
+
+        const response = await apiService.processQuery(queryRequest);
+        processQueryResponse(content, response);
+      }
+    } catch (err) {
+      console.error("Failed to send message:", err);
+      setError(err instanceof Error ? err.message : "Failed to process query");
       
-      // Don't add any messages to chat if API fails
-      // Just set a global error to show the error dialog
-      setError(err instanceof Error ? err.message : "Failed to process message");
+      // Add error message to chat
+      const errorMessage: ChatMessage = {
+        id: `error_${Date.now()}`,
+        content: `Sorry, I encountered an error: ${err instanceof Error ? err.message : "Unknown error"}`,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId, updateDashboardFromQuery]);
+  }, [sessionId, isConnected, processQuery, processQueryResponse]);
 
   const generateResponseMessage = (response: QueryResponse): string => {
     if (response.error) {

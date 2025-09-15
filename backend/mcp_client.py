@@ -1,6 +1,7 @@
 """
 Backend MCP Client for TiDB MCP Server integration.
 Replaces direct database connections with MCP server communication.
+Supports both HTTP and WebSocket modes for optimal performance.
 """
 
 import asyncio
@@ -14,31 +15,68 @@ from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
+try:
+    from .websocket_mcp_client import WebSocketMCPClient
+except ImportError:
+    # Fallback for when running as script or in certain environments
+    try:
+        from websocket_mcp_client import WebSocketMCPClient
+    except ImportError:
+        # If WebSocket client is not available, disable WebSocket mode
+        WebSocketMCPClient = None
+        logger.warning("WebSocketMCPClient not available, WebSocket mode disabled")
+
 
 class BackendMCPClient:
     """
     MCP Client for Backend to communicate with TiDB MCP Server.
     Provides database operations through MCP protocol.
+    Supports both HTTP and WebSocket modes for optimal performance.
     """
     
-    def __init__(self, server_url: Optional[str] = None):
-        self.server_url = server_url or os.getenv('TIDB_MCP_SERVER_URL', 'http://tidb-mcp-server:8000')
-        self.session: Optional[aiohttp.ClientSession] = None
+    def __init__(self, server_url: Optional[str] = None, use_websocket: bool = True):
+        self.use_websocket = use_websocket and os.getenv('USE_WEBSOCKET_MCP', 'false').lower() == 'true' and WebSocketMCPClient is not None
+        
+        # Choose appropriate server URL based on mode
+        if self.use_websocket and WebSocketMCPClient is not None:
+            self.server_url = server_url or os.getenv('MCP_SERVER_WS_URL', 'ws://tidb-mcp-server:8000/ws')
+        else:
+            self.server_url = server_url or os.getenv('TIDB_MCP_SERVER_URL', 'http://tidb-mcp-server:8000')
+        
+        # Initialize appropriate client
+        if self.use_websocket and WebSocketMCPClient is not None:
+            self.ws_client = WebSocketMCPClient(server_url=self.server_url, agent_type="backend")
+            self.session = None
+            logger.info("Initialized WebSocket MCP Client")
+        else:
+            self.ws_client = None
+            self.session: Optional[aiohttp.ClientSession] = None
+            if use_websocket and WebSocketMCPClient is None:
+                logger.warning("WebSocket requested but not available, falling back to HTTP")
+            logger.info("Initialized HTTP MCP Client")
+            
         self.is_connected = False
         
     async def connect(self) -> bool:
         """Connect to the TiDB MCP Server."""
         try:
-            if not self.session:
-                timeout = aiohttp.ClientTimeout(total=30)
-                self.session = aiohttp.ClientSession(timeout=timeout)
-            
-            # Test connection with health check
-            async with self.session.get(f"{self.server_url}/health") as response:
-                if response.status == 200:
-                    self.is_connected = True
-                    logger.info("Successfully connected to TiDB MCP Server")
-                    return True
+            if self.use_websocket and self.ws_client:
+                self.is_connected = await self.ws_client.connect()
+                if self.is_connected:
+                    logger.info("Successfully connected to TiDB MCP Server via WebSocket")
+                return self.is_connected
+            else:
+                # HTTP fallback
+                if not self.session:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    self.session = aiohttp.ClientSession(timeout=timeout)
+                
+                # Test connection with health check
+                async with self.session.get(f"{self.server_url}/health") as response:
+                    if response.status == 200:
+                        self.is_connected = True
+                        logger.info("Successfully connected to TiDB MCP Server via HTTP")
+                        return True
                     
         except Exception as e:
             logger.error(f"Failed to connect to TiDB MCP Server: {e}")
@@ -48,19 +86,18 @@ class BackendMCPClient:
     
     async def disconnect(self):
         """Disconnect from the TiDB MCP Server."""
-        if self.session:
+        if self.use_websocket and self.ws_client:
+            await self.ws_client.disconnect()
+        elif self.session:
             await self.session.close()
             self.session = None
         
         self.is_connected = False
         logger.info("Disconnected from TiDB MCP Server")
     
-    async def execute_query(self, query: str, params: Optional[List] = None) -> Optional[Dict[str, Any]]:
-        """Execute a SQL query through MCP server."""
+    async def execute_query(self, query: str, database: str = None, params: Dict = None) -> Dict[str, Any]:
+        """Execute a query through MCP server."""
         try:
-            if not self.session:
-                await self.connect()
-            
             payload = {
                 "query": query,
                 "timeout": 30,
@@ -70,58 +107,34 @@ class BackendMCPClient:
             if params:
                 payload["params"] = params
             
-            async with self.session.post(
-                f"{self.server_url}/tools/execute_query_tool",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    # The MCP server returns the result directly, convert to backend format
-                    if isinstance(result, dict):
-                        return {
-                            "success": True,
-                            "data": result.get("rows", []),
-                            "columns": result.get("columns", []),
-                            "row_count": result.get("row_count", 0)
-                        }
-                    else:
-                        return {
-                            "success": True,
-                            "data": result if isinstance(result, list) else [],
-                            "columns": [],
-                            "row_count": len(result) if isinstance(result, list) else 0
-                        }
-                else:
-                    error_text = await response.text()
-                    logger.error(f"MCP query execution failed ({response.status}): {error_text}")
-                    return {"success": False, "error": f"HTTP {response.status}: {error_text}"}
+            # Use the generic call_tool method which handles both WebSocket and HTTP modes
+            result = await self.call_tool("execute_query", payload)
+            
+            # The MCP server returns the result directly, convert to backend format
+            if isinstance(result, dict) and "error" not in result:
+                return {
+                    "success": True,
+                    "data": result.get("rows", []),
+                    "columns": result.get("columns", []),
+                    "metadata": result.get("metadata", {}),
+                    "summary": result.get("summary", f"Query executed successfully"),
+                    "query": query
+                }
+            else:
+                return result if "error" in result else {"error": "Unexpected response format from MCP server"}
                     
         except Exception as e:
-            logger.error(f"MCP query execution error: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"MCP execute query error: {e}")
+            return {"error": str(e)}
     
 
     
     async def discover_databases(self) -> Optional[Dict[str, Any]]:
         """Discover all databases through MCP server."""
         try:
-            if not self.session:
-                await self.connect()
-            
-            # No payload needed for discover_databases
-            async with self.session.post(
-                f"{self.server_url}/tools/discover_databases_tool",
-                json={},
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result
-                else:
-                    error_text = await response.text()
-                    logger.error(f"MCP database discovery failed ({response.status}): {error_text}")
-                    return {"error": f"HTTP {response.status}: {error_text}"}
+            # Use the generic call_tool method which handles both WebSocket and HTTP modes
+            result = await self.call_tool("list_databases")
+            return result
                     
         except Exception as e:
             logger.error(f"MCP database discovery error: {e}")
@@ -130,60 +143,69 @@ class BackendMCPClient:
     async def discover_tables(self, database: str) -> Optional[Dict[str, Any]]:
         """Discover tables in a specific database through MCP server."""
         try:
-            if not self.session:
-                await self.connect()
-            
             payload = {"database": database}
             
-            async with self.session.post(
-                f"{self.server_url}/tools/discover_tables_tool",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result
-                else:
-                    error_text = await response.text()
-                    logger.error(f"MCP table discovery failed ({response.status}): {error_text}")
-                    return {"error": f"HTTP {response.status}: {error_text}"}
+            # Use the generic call_tool method which handles both WebSocket and HTTP modes
+            result = await self.call_tool("list_tables", payload)
+            return result
                     
         except Exception as e:
             logger.error(f"MCP table discovery error: {e}")
             return {"error": str(e)}
     
-    async def call_tool(self, tool_name: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        """Generic method to call any MCP tool with proper endpoint mapping."""
+    async def call_tool(self, tool_name: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Generic tool calling method for MCP server - handles both WebSocket and HTTP modes."""
         try:
-            if not self.session:
-                await self.connect()
+            if params is None:
+                params = {}
             
-            payload = params or {}
-            
-            # Map tool names to actual endpoints
-            tool_endpoint_map = {
-                "list_databases": "discover_databases_tool",
-                "list_tables": "discover_tables_tool", 
-                "get_table_schema": "get_table_schema_tool",
-                "execute_query": "execute_query_tool",
-                "get_sample_data": "get_sample_data_tool",
-                "validate_query": "validate_query_tool"
+            # Map our generic tool names to MCP tool names
+            tool_name_map = {
+                "list_databases": "discover_databases",
+                "list_tables": "discover_tables", 
+                "get_table_schema": "get_table_schema",
+                "execute_query": "execute_query",
+                "get_sample_data": "get_sample_data",
+                "validate_query": "validate_query"
             }
             
-            endpoint = tool_endpoint_map.get(tool_name, f"{tool_name}_tool")
+            mcp_tool_name = tool_name_map.get(tool_name, tool_name)
             
-            async with self.session.post(
-                f"{self.server_url}/tools/{endpoint}",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result
-                else:
-                    error_text = await response.text()
-                    logger.error(f"MCP tool '{tool_name}' -> '{endpoint}' failed ({response.status}): {error_text}")
-                    return {"error": f"HTTP {response.status}: {error_text}"}
+            # Use WebSocket client if enabled, otherwise use HTTP
+            if self.use_websocket and self.ws_client:
+                logger.debug(f"Calling MCP tool '{mcp_tool_name}' via WebSocket with params: {params}")
+                result = await self.ws_client.call_tool(mcp_tool_name, **params)
+                logger.debug(f"WebSocket MCP tool '{mcp_tool_name}' result: {result}")
+                return result
+            else:
+                # HTTP fallback
+                if not self.session:
+                    await self.connect()
+                
+                # Map to HTTP endpoint names
+                endpoint_map = {
+                    "list_databases": "discover_databases_tool",
+                    "list_tables": "discover_tables_tool", 
+                    "get_table_schema": "get_table_schema_tool",
+                    "execute_query": "execute_query_tool",
+                    "get_sample_data": "get_sample_data_tool",
+                    "validate_query": "validate_query_tool"
+                }
+                
+                endpoint = endpoint_map.get(tool_name, f"{tool_name}_tool")
+                
+                async with self.session.post(
+                    f"{self.server_url}/tools/{endpoint}",
+                    json=params,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        return result
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"MCP tool '{tool_name}' -> '{endpoint}' failed ({response.status}): {error_text}")
+                        return {"error": f"HTTP {response.status}: {error_text}"}
                     
         except Exception as e:
             logger.error(f"MCP tool '{tool_name}' error: {e}")
@@ -244,12 +266,19 @@ class BackendMCPClient:
                                 "table": table_name
                             })
                             
-                            if schema_result and "columns" in schema_result:
+                            logger.debug(f"🔍 Schema result for {db_name}.{table_name}: {type(schema_result)}")
+                            
+                            # Handle different response formats - WebSocket MCP wraps in success/schema structure
+                            actual_schema = schema_result
+                            if isinstance(schema_result, dict) and schema_result.get("success") and "schema" in schema_result:
+                                actual_schema = schema_result["schema"]
+                            
+                            if actual_schema and "columns" in actual_schema:
                                 # MCP server returns schema directly, not nested
-                                columns = schema_result.get("columns", [])
-                                indexes = schema_result.get("indexes", [])
-                                foreign_keys = schema_result.get("foreign_keys", [])
-                                primary_keys = schema_result.get("primary_keys", [])
+                                columns = actual_schema.get("columns", [])
+                                indexes = actual_schema.get("indexes", [])
+                                foreign_keys = actual_schema.get("foreign_keys", [])
+                                primary_keys = actual_schema.get("primary_keys", [])
                                 
                                 # Build detailed table info with complete column metadata
                                 table_info = {
@@ -271,7 +300,9 @@ class BackendMCPClient:
                                 
                                 logger.debug(f"📋 {table_name}: {len(columns)} columns with detailed metadata")
                             else:
-                                logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name}: {schema_result.get('error')}")
+                                logger.warning(f"⚠️ Failed to get schema for {db_name}.{table_name}: {schema_result}")
+                                if schema_result and "error" in schema_result:
+                                    logger.error(f"❌ Schema error for {db_name}.{table_name}: {schema_result['error']}")
                                 
                         except Exception as e:
                             logger.error(f"❌ Error getting schema for {db_name}.{table_name}: {e}")
@@ -297,26 +328,68 @@ class BackendMCPClient:
     async def health_check(self) -> bool:
         """Check MCP server health."""
         try:
-            if not self.session:
+            if self.use_websocket and self.ws_client and self.ws_client.is_connected:
+                # WebSocket is connected, assume healthy
+                return True
+            elif not self.session:
                 await self.connect()
             
-            async with self.session.get(f"{self.server_url}/health") as response:
-                return response.status == 200
+            if self.session:
+                async with self.session.get(f"{self.server_url}/health") as response:
+                    return response.status == 200
+            return False
                 
         except Exception as e:
             logger.error(f"MCP health check failed: {e}")
             return False
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """Get performance statistics from the MCP client."""
+        base_stats = {
+            "connection_type": "websocket" if self.use_websocket else "http",
+            "is_connected": self.is_connected,
+            "server_url": self.server_url
+        }
+        
+        if self.use_websocket and self.ws_client:
+            # Get WebSocket-specific stats
+            ws_stats = self.ws_client.get_cache_stats()
+            base_stats.update({
+                "websocket_stats": ws_stats,
+                "client_side_caching": True,
+                "request_deduplication": True
+            })
+        else:
+            base_stats.update({
+                "websocket_stats": None,
+                "client_side_caching": False,
+                "request_deduplication": False
+            })
+        
+        return base_stats
+    
+    def subscribe_to_schema_changes(self, handler):
+        """Subscribe to real-time schema change events (WebSocket only)."""
+        if self.use_websocket and self.ws_client:
+            self.ws_client.subscribe_to_events("schema_changed", handler)
+            logger.info("Subscribed to schema change events")
+        else:
+            logger.warning("Schema change events only available with WebSocket connection")
 
 
 # Global MCP client instance
 _backend_mcp_client: Optional[BackendMCPClient] = None
+_client_creation_lock = asyncio.Lock()
 
 
 def get_backend_mcp_client() -> BackendMCPClient:
     """Get the global backend MCP client instance."""
     global _backend_mcp_client
     if _backend_mcp_client is None:
+        logger.debug("Creating new BackendMCPClient instance")
         _backend_mcp_client = BackendMCPClient()
+    else:
+        logger.debug("Returning existing BackendMCPClient instance")
     return _backend_mcp_client
 
 

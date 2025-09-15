@@ -1,4 +1,4 @@
-import { BentoGridCard, QuerySuggestion, CardType, CardSize } from "@/types/dashboard";
+import { BentoGridCard, CardType, CardSize } from "@/types/dashboard";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -163,12 +163,6 @@ class ApiService {
     );
   }
 
-  async getSuggestions(): Promise<string[]> {
-    return this.fetchWithErrorHandling<string[]>(
-      `${this.baseUrl}/api/suggestions`
-    );
-  }
-
   async getDashboardLayout(layoutId: string): Promise<Record<string, unknown>> {
     return this.fetchWithErrorHandling(
       `${this.baseUrl}/api/dashboard/${layoutId}`
@@ -317,34 +311,6 @@ class ApiService {
       }
     }
     return String(value);
-  }
-
-  // Convert API suggestions to frontend format
-  transformSuggestions(apiSuggestions: string[]): QuerySuggestion[] {
-    return apiSuggestions.map((text, index) => ({
-      id: `suggestion_${index}`,
-      text,
-      category: this.categorizeQuery(text),
-      confidence: 0.9, // Use fixed confidence value to avoid hydration mismatch
-    }));
-  }
-
-  private categorizeQuery(query: string): string {
-    const lowerQuery = query.toLowerCase();
-    
-    if (lowerQuery.includes("revenue") || lowerQuery.includes("sales")) {
-      return "Revenue";
-    } else if (lowerQuery.includes("cash flow") || lowerQuery.includes("cash")) {
-      return "Cash Flow";
-    } else if (lowerQuery.includes("budget") || lowerQuery.includes("expense")) {
-      return "Budget";
-    } else if (lowerQuery.includes("investment") || lowerQuery.includes("roi")) {
-      return "Investments";
-    } else if (lowerQuery.includes("ratio") || lowerQuery.includes("debt")) {
-      return "Financial Ratios";
-    } else {
-      return "General";
-    }
   }
 }
 

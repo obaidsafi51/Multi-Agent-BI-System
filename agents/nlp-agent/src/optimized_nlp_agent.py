@@ -97,19 +97,8 @@ class OptimizedNLPAgent:
         # Initialize context builder
         self.context_builder = ContextBuilder()
         
-        # Table name mapping for database schema compatibility
-        # self.table_mappings = {
-        #     "cash_flow": "cashflow",  # Fix: NLP generates cash_flow but DB has cashflow
-        #     "balance_sheet": "balance_Sheet",  # Fix: Handle case sensitivity
-        #     "pnl": "pnl_statement",
-        #     "profit_loss": "pnl_statement",
-        #     "expense": "expenses",
-        #     "cost": "expenses",
-        #     "general_ledger": "general_ledger",
-        #     "inventory": "inventory",
-        #     "revenue": "revenue",
-        #     "supplier": "supplier_payments"
-        # }
+        # Table name mappings - will be populated dynamically from database schema
+        self.table_mappings = {}
         
         # Agent state
         self.is_running = False
@@ -152,10 +141,6 @@ class OptimizedNLPAgent:
     async def validate_query(self, query):
         """Direct MCP validate_query method for external client compatibility"""
         return await self.mcp_client.send_request("validate_sql_query", {"query": query})
-        
-    async def analyze_data(self, **kwargs):
-        """Direct MCP analyze_data method for external client compatibility"""
-        return await self.mcp_client.send_request("analyze_query_result", kwargs)
 
 
     def _setup_event_handlers(self):
@@ -364,6 +349,9 @@ class OptimizedNLPAgent:
             schema_context = await self._get_cached_schema_context(database_context)
             logger.info(f"🔍 DEBUG: schema_context = {schema_context}")
             
+            # Build dynamic table mappings from schema context
+            self._build_dynamic_table_mappings(schema_context)
+            
             progress_steps["schema_context"]["status"] = "completed"
             progress_steps["schema_context"]["message"] = f"Schema loaded: {schema_context.get('total_tables', 0)} tables"
             
@@ -540,19 +528,24 @@ class OptimizedNLPAgent:
         # 🚫 NLP AGENT SHOULD NOT FETCH SCHEMA - Use backend's cached schema only
         logger.info(f"� Looking for cached schema from backend for {cache_key}")
         
-        # Try to get schema from backend's cache via Redis or HTTP API
+        # Try to get schema from backend's cache via Redis direct access
         try:
-            # Try to get from Redis cache (same key as backend uses)
-            if hasattr(self, 'cache_manager') and self.cache_manager:
+            # Direct Redis access to get backend's cached schema
+            if hasattr(self, 'cache_manager') and self.cache_manager and self.cache_manager._redis_client:
                 backend_cache_key = f"schema_context:{cache_key}"
-                cached_schema = await self.cache_manager.get("redis", backend_cache_key)
+                logger.info(f"🔍 Attempting direct Redis access for key: {backend_cache_key}")
                 
-                if cached_schema:
+                # Direct Redis get without NLP cache prefixes
+                redis_value = await self.cache_manager._redis_client.get(backend_cache_key)
+                if redis_value:
+                    cached_schema = json.loads(redis_value)
                     logger.info(f"✅ Using backend's cached schema for {cache_key}")
                     self.schema_cache = cached_schema
                     self.last_schema_update = current_time
                     self.schema_cache_key = cache_key
                     return cached_schema
+                else:
+                    logger.warning(f"🔍 No Redis value found for key: {backend_cache_key}")
             
             # If no cached schema found, return empty schema and log warning
             logger.warning(f"❌ No cached schema found for {cache_key} - database must be selected first in frontend")
@@ -592,36 +585,69 @@ class OptimizedNLPAgent:
             if databases:
                 for db_name, db_info in databases.items():
                     schema_lines.append(f"\nDatabase: {db_name}")
-                    tables = db_info.get("tables", {})
+                    tables = db_info.get("tables", [])
                     
                     if tables:
                         schema_lines.append(f"Tables ({len(tables)}):")
                         
-                        for table_name, table_schema in tables.items():
-                            # Add table information
-                            schema_lines.append(f"  - {table_name}:")
-                            
-                            # Add column details
-                            columns = table_schema.get("columns", [])
-                            if columns:
-                                schema_lines.append("    Columns:")
-                                for column in columns:
-                                    col_name = column.get("name", "unknown")
-                                    col_type = column.get("data_type", "unknown")
-                                    nullable = "NULL" if column.get("is_nullable", True) else "NOT NULL"
-                                    schema_lines.append(f"      {col_name} ({col_type}) {nullable}")
-                            
-                            # Add primary keys if available
-                            primary_keys = table_schema.get("primary_keys", [])
-                            if primary_keys:
-                                schema_lines.append(f"    Primary Keys: {', '.join(primary_keys)}")
-                            
-                            # Add indexes if available
-                            indexes = table_schema.get("indexes", [])
-                            if indexes:
-                                index_names = [idx.get("name", "unknown") for idx in indexes if isinstance(idx, dict)]
-                                if index_names:
-                                    schema_lines.append(f"    Indexes: {', '.join(index_names)}")
+                        # Handle both list and dict formats for tables
+                        if isinstance(tables, list):
+                            for table_schema in tables:
+                                if isinstance(table_schema, dict):
+                                    table_name = table_schema.get("name", "unknown")
+                                    # Add table information
+                                    schema_lines.append(f"  - {table_name}:")
+                                    
+                                    # Add column details
+                                    columns = table_schema.get("columns", [])
+                                    if columns:
+                                        schema_lines.append("    Columns:")
+                                        for column in columns:
+                                            col_name = column.get("name", "unknown")
+                                            col_type = column.get("data_type", "unknown")
+                                            nullable = "NULL" if column.get("is_nullable", True) else "NOT NULL"
+                                            schema_lines.append(f"      {col_name} ({col_type}) {nullable}")
+                                    
+                                    # Add primary keys if available
+                                    primary_keys = table_schema.get("primary_keys", [])
+                                    if primary_keys:
+                                        schema_lines.append(f"    Primary Keys: {', '.join(primary_keys)}")
+                                    
+                                    # Add indexes if available
+                                    indexes = table_schema.get("indexes", [])
+                                    if indexes:
+                                        index_names = [idx.get("name", "unknown") for idx in indexes if isinstance(idx, dict)]
+                                        if index_names:
+                                            schema_lines.append(f"    Indexes: {', '.join(index_names)}")
+                        elif isinstance(tables, dict):
+                            # Handle dict format where tables is a dictionary
+                            for table_name, table_schema in tables.items():
+                                # Get the actual table name - could be in 'name' field or use the key
+                                actual_table_name = table_schema.get("name", table_name) if isinstance(table_schema, dict) else table_name
+                                schema_lines.append(f"  - {actual_table_name}:")
+                                
+                                if isinstance(table_schema, dict):
+                                    # Add column details
+                                    columns = table_schema.get("columns", [])
+                                    if columns:
+                                        schema_lines.append("    Columns:")
+                                        for column in columns:
+                                            col_name = column.get("name", "unknown")
+                                            col_type = column.get("data_type", "unknown")
+                                            nullable = "NULL" if column.get("is_nullable", True) else "NOT NULL"
+                                            schema_lines.append(f"      {col_name} ({col_type}) {nullable}")
+                                    
+                                    # Add primary keys if available
+                                    primary_keys = table_schema.get("primary_keys", [])
+                                    if primary_keys:
+                                        schema_lines.append(f"    Primary Keys: {', '.join(primary_keys)}")
+                                    
+                                    # Add indexes if available
+                                    indexes = table_schema.get("indexes", [])
+                                    if indexes:
+                                        index_names = [idx.get("name", "unknown") for idx in indexes if isinstance(idx, dict)]
+                                        if index_names:
+                                            schema_lines.append(f"    Indexes: {', '.join(index_names)}")
             else:
                 # Fallback to basic format if detailed schema not available
                 tables = schema_context.get("tables", [])
@@ -709,12 +735,18 @@ class OptimizedNLPAgent:
     def _fix_table_names(self, sql_query: str) -> str:
         """
         Fix table names in SQL query to match actual database schema.
-        Maps common variations to actual table names.
+        Uses dynamic table mappings from schema context when available.
         """
         try:
+            # If no table mappings are available, return the SQL as-is
+            # The MCP server should handle table name validation
+            if not self.table_mappings:
+                logger.debug("No table mappings available - using SQL as generated by MCP server")
+                return sql_query
+            
             fixed_sql = sql_query
             
-            # Apply table name mappings
+            # Apply dynamic table name mappings if available
             for logical_name, actual_name in self.table_mappings.items():
                 # Use word boundary regex to avoid partial matches
                 # Match table name in FROM, JOIN, UPDATE, INSERT INTO clauses
@@ -734,13 +766,73 @@ class OptimizedNLPAgent:
                                      fixed_sql, flags=re.IGNORECASE)
             
             if fixed_sql != sql_query:
-                logger.info(f"Fixed table names in SQL: {sql_query} -> {fixed_sql}")
+                logger.info(f"Applied dynamic table name mappings: {sql_query} -> {fixed_sql}")
             
             return fixed_sql
             
         except Exception as e:
             logger.error(f"Error fixing table names in SQL: {e}")
             return sql_query  # Return original on error
+    
+    def _build_dynamic_table_mappings(self, schema_context: Dict[str, Any]) -> None:
+        """
+        Build dynamic table mappings from database schema context.
+        This creates mappings for common table name variations.
+        """
+        try:
+            if not schema_context or 'databases' not in schema_context:
+                return
+            
+            # Clear existing mappings
+            self.table_mappings = {}
+            
+            # Extract actual table names from schema
+            actual_tables = set()
+            for db_name, db_info in schema_context['databases'].items():
+                if isinstance(db_info, dict) and 'tables' in db_info:
+                    tables = db_info['tables']
+                    
+                    # Handle both list and dict formats for tables
+                    if isinstance(tables, list):
+                        for table_info in tables:
+                            if isinstance(table_info, dict) and 'name' in table_info:
+                                actual_tables.add(table_info['name'].lower())
+                    elif isinstance(tables, dict):
+                        # This handles the case where tables is a dict
+                        for table_name, table_info in tables.items():
+                            if isinstance(table_info, dict):
+                                # Use the key (table_name) if it exists, otherwise look for 'name' field
+                                name = table_info.get('name', table_name)
+                                actual_tables.add(name.lower())
+            
+            # Build common variations mapping to actual table names
+            for table_name in actual_tables:
+                # Add common variations that might be generated by LLM
+                variations = []
+                
+                # Handle underscore/space variations
+                if '_' in table_name:
+                    variations.append(table_name.replace('_', ' '))
+                    variations.append(table_name.replace('_', ''))
+                
+                # Handle common financial table variations
+                if 'cash' in table_name and 'flow' in table_name:
+                    variations.extend(['cash_flow', 'cashflow', 'cash flow'])
+                elif 'balance' in table_name and 'sheet' in table_name:
+                    variations.extend(['balance_sheet', 'balance sheet', 'balancesheet'])
+                elif 'pnl' in table_name or 'profit' in table_name:
+                    variations.extend(['pnl', 'profit_loss', 'profit and loss', 'pnl_statement'])
+                
+                # Map variations to actual table name
+                for variation in variations:
+                    if variation.lower() != table_name.lower():
+                        self.table_mappings[variation.lower()] = table_name
+            
+            if self.table_mappings:
+                logger.info(f"Built dynamic table mappings: {self.table_mappings}")
+                
+        except Exception as e:
+            logger.error(f"Error building dynamic table mappings: {e}")
     
     def _build_minimal_context(
         self,
