@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI CFO BI Agent has successfully migrated from static schema management to dynamic MCP-based schema management. This document outlines the changes made and provides guidance for developers working with the new system.
+The AGENT BI has successfully migrated from static schema management to dynamic MCP-based schema management. This document outlines the changes made and provides guidance for developers working with the new system.
 
 ## What Changed
 

@@ -100,7 +100,7 @@ export function BentoGrid({ cards, onCardsUpdate }: BentoGridProps) {
                 className="text-xl font-semibold mb-3"
                 style={{ color: 'var(--corporate-gray-900)' }}
               >
-                Welcome to your AI CFO Dashboard
+                Welcome to your AGENT BI Dashboard
               </h3>
               <p 
                 className="text-base mb-4 leading-relaxed"

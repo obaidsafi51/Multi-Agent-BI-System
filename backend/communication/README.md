@@ -1,6 +1,6 @@
 # Communication Protocols Implementation
 
-This module implements the three communication protocols for the AI CFO BI Agent system:
+This module implements the three communication protocols for the AGENT BI system:
 
 - **MCP (Model Context Protocol)**: Redis-based context store with JSON serialization and session management
 - **A2A (Agent-to-Agent Protocol)**: RabbitMQ message broker with topic exchanges and routing

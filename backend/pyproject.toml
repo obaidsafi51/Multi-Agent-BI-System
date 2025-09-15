@@ -1,9 +1,9 @@
 [project]
 name = "ai-cfo-backend"
 version = "0.1.0"
-description = "FastAPI backend for AI CFO BI Agent"
+description = "FastAPI backend for AGENT BI"
 authors = [
-    {name = "AI CFO Team", email = "team@ai-cfo.com"}
+    {name = "AGENT BI Team", email = "team@agent-bi.com"}
 ]
 dependencies = [
     "fastapi>=0.104.1",

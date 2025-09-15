@@ -239,7 +239,7 @@ class DataAgent:
             )
             
         except Exception as e:
-            logger.error("Failed to initialize Data Agent", error=str(e))
+            logger.error(f"Failed to initialize Data Agent: {str(e)}")
             raise
     
     async def process_query(
@@ -265,10 +265,9 @@ class DataAgent:
         
         try:
             logger.info(
-                "Processing query",
-                query_id=query_id,
-                metric_type=query_intent.get('metric_type'),
-                time_period=query_intent.get('time_period')
+                f"Processing query - query_id={query_id}, "
+                f"metric_type={query_intent.get('metric_type')}, "
+                f"time_period={query_intent.get('time_period')}"
             )
             
             # Step 1: Check cache first (using dynamic cache tags if available)
@@ -336,11 +335,10 @@ class DataAgent:
             self._update_metrics(time.time() - start_time, success=True)
             
             logger.info(
-                "Query processed successfully",
-                query_id=query_id,
-                processing_time_ms=int((time.time() - start_time) * 1000),
-                data_quality_score=validation_result.quality_score,
-                cache_stored=validation_result.is_valid
+                f"Query processed successfully - query_id={query_id}, "
+                f"processing_time_ms={int((time.time() - start_time) * 1000)}, "
+                f"data_quality_score={validation_result.quality_score}, "
+                f"cache_stored={validation_result.is_valid}"
             )
             
             return response
@@ -349,10 +347,9 @@ class DataAgent:
             self._update_metrics(time.time() - start_time, success=False)
             
             logger.error(
-                "Query processing failed",
-                query_id=query_id,
-                error=str(e),
-                processing_time_ms=int((time.time() - start_time) * 1000)
+                f"Query processing failed - query_id={query_id}, "
+                f"error={str(e)}, "
+                f"processing_time_ms={int((time.time() - start_time) * 1000)}"
             )
             
             # Return error response
@@ -415,7 +412,7 @@ class DataAgent:
             }
             
         except Exception as e:
-            logger.error("Failed to get data summary", table=table_name, error=str(e))
+            logger.error(f"Failed to get data summary for table {table_name}: {str(e)}")
             raise
     
     async def invalidate_cache(self, tags: Optional[List[str]] = None) -> int:
@@ -436,12 +433,12 @@ class DataAgent:
                 await self.cache_manager.clear_all()
                 invalidated = -1  # Indicate full clear
             
-            logger.info("Cache invalidation completed", tags=tags, invalidated_count=invalidated)
+            logger.info(f"Cache invalidation completed: tags={tags}, invalidated_count={invalidated}")
             
             return invalidated
             
         except Exception as e:
-            logger.error("Cache invalidation failed", error=str(e))
+            logger.error(f"Cache invalidation failed: {str(e)}")
             raise
     
     async def health_check(self) -> Dict[str, Any]:
@@ -509,7 +506,7 @@ class DataAgent:
                 health_status['status'] = 'unhealthy'
 
         except Exception as e:
-            logger.error("Health check failed", error=str(e))
+            logger.error(f"Health check failed: {str(e)}")
             return {
                 'status': 'unhealthy', 
                 'timestamp': time.time(),
@@ -583,7 +580,7 @@ class DataAgent:
             logger.info("Data Agent closed successfully")
             
         except Exception as e:
-            logger.error("Error closing Data Agent", error=str(e))
+            logger.error(f"Error closing Data Agent: {str(e)}")
             raise
     
     def _generate_cache_key(self, query_intent: Dict[str, Any]) -> str:

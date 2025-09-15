@@ -39,6 +39,9 @@ class WebSocketVizServer:
         self.viz_agent: Optional[VisualizationAgent] = None
         self.performance_optimizer: Optional[PerformanceOptimizer] = None
         
+        # Dashboard integration
+        self.dashboard_manager = None
+        
         # Statistics
         self.start_time = time.time()
         self.message_count = 0
@@ -56,11 +59,33 @@ class WebSocketVizServer:
             # Initialize main Viz agent
             self.viz_agent = VisualizationAgent()
             
-            logger.info("Enhanced Viz Agent components initialized successfully")
+            # Initialize dashboard integration manager
+            from src.dashboard_integration import dashboard_integration_manager
+            self.dashboard_manager = dashboard_integration_manager
+            
+            # Initialize backend connection for dashboard updates
+            await self.dashboard_manager.initialize_backend_connection()
+            
+            # Register dashboard update callback
+            self.dashboard_manager.register_update_callback(self._handle_dashboard_update)
+            
+            logger.info("Enhanced Viz Agent components initialized successfully with dashboard integration")
             
         except Exception as e:
             logger.error(f"Failed to initialize Viz agent: {e}")
             raise
+    
+    async def _handle_dashboard_update(self, update):
+        """Handle dashboard update from dashboard integration manager"""
+        try:
+            # Log dashboard updates
+            logger.info(f"Dashboard update: {update.update_type} for session {update.session_id}")
+            
+            # Here we could broadcast updates to connected WebSocket clients
+            # or send notifications to the backend
+            
+        except Exception as e:
+            logger.error(f"Error handling dashboard update: {e}")
     
     async def start_server(self):
         """Start the WebSocket server"""
@@ -355,15 +380,22 @@ class WebSocketVizServer:
         await websocket.send(json.dumps(response))
     
     async def handle_viz_query(self, websocket: WebSocketServerProtocol, data: Dict, client_id: str, message_id: str):
-        """Handle visualization query from backend"""
+        """Handle visualization query from backend with dashboard integration"""
         try:
             # Extract data and query information
             query_data = data.get("data", [])
             columns = data.get("columns", [])
             query = data.get("query", "")
             intent = data.get("intent", {})
+            session_id = data.get("session_id", "default_session")
+            user_id = data.get("user_id", "anonymous")
             
-            # Generate appropriate visualization based on the data
+            logger.info(f"Processing viz query for session {session_id}")
+            
+            # Import dashboard integration manager
+            from src.dashboard_integration import dashboard_integration_manager
+            
+            # Generate appropriate visualization and dashboard card
             if not query_data:
                 response = {
                     "type": "viz_response",
@@ -374,23 +406,45 @@ class WebSocketVizServer:
                     "timestamp": datetime.utcnow().isoformat()
                 }
             else:
-                # For now, return the data with basic chart suggestion
-                visualization_hint = intent.get("visualization_hint", "table")
+                # Process the query data and create dashboard visualization
+                dashboard_result = await dashboard_integration_manager.process_query_for_dashboard(
+                    data=query_data,
+                    columns=columns,
+                    query=query,
+                    query_id=message_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                    intent=intent
+                )
                 
-                response = {
-                    "type": "viz_response",
-                    "response_to": message_id,
-                    "client_id": client_id,
-                    "success": True,
-                    "visualization": {
-                        "type": visualization_hint,
-                        "data": query_data,
-                        "columns": columns,
-                        "row_count": len(query_data)
-                    },
-                    "query": query,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
+                if dashboard_result["success"]:
+                    # Successful visualization and dashboard update
+                    response = {
+                        "type": "viz_response",
+                        "response_to": message_id,
+                        "client_id": client_id,
+                        "success": True,
+                        "chart_config": dashboard_result.get("chart_config"),
+                        "dashboard_updated": True,
+                        "processing_time_ms": dashboard_result.get("processing_time_ms", 0),
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    
+                    # Also send dashboard notification to backend if configured
+                    await self._notify_backend_dashboard_update(session_id, dashboard_result)
+                    
+                else:
+                    # Visualization failed but error card was created
+                    response = {
+                        "type": "viz_response",
+                        "response_to": message_id,
+                        "client_id": client_id,
+                        "success": False,
+                        "error": dashboard_result.get("error", "Visualization failed"),
+                        "fallback_card": dashboard_result.get("fallback_card"),
+                        "dashboard_updated": dashboard_result.get("dashboard_updated", False),
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
             
             await websocket.send(json.dumps(response))
             
@@ -405,6 +459,20 @@ class WebSocketVizServer:
                 "timestamp": datetime.utcnow().isoformat()
             }
             await websocket.send(json.dumps(error_response))
+    
+    async def _notify_backend_dashboard_update(self, session_id: str, dashboard_result: Dict[str, Any]):
+        """Notify backend that dashboard has been updated"""
+        try:
+            # This would send a notification to the backend about the dashboard update
+            # The backend can then notify the frontend via WebSocket if needed
+            logger.info(f"Dashboard updated for session {session_id}: {dashboard_result.get('query_id')}")
+            
+            # For now, we just log the update
+            # In a production system, this might push to Redis, send to a message queue,
+            # or directly notify the backend WebSocket connection
+            
+        except Exception as e:
+            logger.warning(f"Failed to notify backend of dashboard update: {e}")
     
     async def send_progress(self, websocket: WebSocketServerProtocol, message_id: str, client_id: str, status: str, progress: int):
         """Send progress update"""

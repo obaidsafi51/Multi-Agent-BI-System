@@ -38,7 +38,7 @@ class QueryValidator:
         'THEN', 'ELSE', 'END', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
         'SUBSTRING', 'CONCAT', 'UPPER', 'LOWER', 'TRIM', 'COALESCE',
         'CAST', 'CONVERT', 'DATE', 'TIME', 'TIMESTAMP', 'YEAR', 'MONTH',
-        'DAY', 'HOUR', 'MINUTE', 'SECOND', 'NOW', 'CURDATE', 'CURTIME'
+        'DAY', 'HOUR', 'MINUTE', 'SECOND', 'NOW', 'CURDATE', 'CURTIME',
     }
 
     # Forbidden SQL keywords that indicate DML/DDL operations
@@ -51,9 +51,9 @@ class QueryValidator:
         'LOAD', 'OUTFILE', 'INFILE', 'BACKUP', 'RESTORE'
     }
     
-    # Allow these keywords for schema discovery
+    # Allow these keywords for schema discovery and database context switching
     ALLOWED_SCHEMA_KEYWORDS = {
-        'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN'
+        'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'USE'
     }
 
     # Dangerous patterns that should be blocked
@@ -126,7 +126,59 @@ class QueryValidator:
         """
         for pattern in self._compiled_patterns:
             if pattern.search(query):
+                # Special handling for USE + SELECT pattern (safe database switching)
+                if pattern.pattern == r';\s*\w+':
+                    if self._is_safe_use_select_validator(query):
+                        continue
                 raise QueryValidationError(f"Query contains dangerous pattern: {pattern.pattern}")
+    
+    def _is_safe_use_select_pattern(self, query: str) -> bool:
+        """
+        Check if query is a safe USE database; SELECT ... pattern.
+        
+        Args:
+            query: Normalized query string
+            
+        Returns:
+            True if it's a safe USE + SELECT pattern
+        """
+        # Split by semicolon and clean up statements
+        statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+        
+        # Must be exactly 2 statements: USE database; SELECT ...
+        if len(statements) != 2:
+            return False
+            
+        # First statement must be USE
+        first_stmt = statements[0].upper()
+        if not first_stmt.startswith('USE '):
+            return False
+            
+        # Second statement must be a safe query type
+        second_stmt = statements[1].upper()
+        safe_second_statements = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN']
+        
+        return any(second_stmt.startswith(stmt + ' ') for stmt in safe_second_statements)
+
+    def _is_safe_use_select_validator(self, query: str) -> bool:
+        """
+        Validator version - check if query is a safe USE database; SELECT ... pattern.
+        """
+        statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+        
+        if len(statements) != 2:
+            return False
+            
+        first_stmt = statements[0].upper()
+        if not first_stmt.startswith('USE '):
+            return False
+            
+        second_stmt = statements[1].upper()
+        safe_second_statements = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN']
+        
+        return any(second_stmt.startswith(stmt + ' ') for stmt in safe_second_statements)
+    
+
 
     def _check_forbidden_keywords(self, query: str) -> None:
         """
@@ -141,12 +193,12 @@ class QueryValidator:
         # Extract words from query
         words = set(re.findall(r'\b\w+\b', query))
 
-        # Check for forbidden keywords, but allow schema discovery keywords
+        # Check for forbidden keywords, but allow schema discovery and USE keywords
         forbidden_found = words.intersection(self.FORBIDDEN_KEYWORDS)
-        allowed_found = words.intersection(self.ALLOWED_SCHEMA_KEYWORDS)
+        schema_keywords_found = words.intersection(self.ALLOWED_SCHEMA_KEYWORDS)
         
-        # If we found forbidden keywords but they are schema-related, allow them
-        if forbidden_found and not (forbidden_found.issubset(self.ALLOWED_SCHEMA_KEYWORDS) or allowed_found):
+        # Allow forbidden keywords if they are actually schema/USE keywords
+        if forbidden_found and not forbidden_found.issubset(self.ALLOWED_SCHEMA_KEYWORDS):
             raise QueryValidationError(f"Query contains forbidden keywords: {', '.join(forbidden_found)}")
 
     def _validate_query_structure(self, query: str) -> None:
@@ -159,13 +211,22 @@ class QueryValidator:
         Raises:
             QueryValidationError: If query structure is invalid
         """
-        # Must start with SELECT
-        if not query.strip().startswith('SELECT'):
-            raise QueryValidationError("Query must start with SELECT statement")
+        # Must start with SELECT, SHOW, DESCRIBE, EXPLAIN, or safe USE statement
+        stripped_query = query.strip()
+        
+        # Allow schema discovery queries and USE statements
+        safe_starting_keywords = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'USE']
+        
+        # Check if query starts with a safe keyword
+        query_starts_safely = any(stripped_query.startswith(keyword + ' ') for keyword in safe_starting_keywords)
+        
+        if not query_starts_safely:
+            raise QueryValidationError("Query must start with SELECT, SHOW, DESCRIBE, EXPLAIN, or USE statement")
 
-        # Check for multiple statements (basic check)
+        # Handle multi-statement queries - only allow safe USE + SELECT patterns
         if ';' in query.rstrip(';'):
-            raise QueryValidationError("Multiple statements are not allowed")
+            if not self._is_safe_use_select_validator(query):
+                raise QueryValidationError("Multiple statements are not allowed except for safe USE database; SELECT patterns")
 
         # Basic FROM clause validation
         if 'FROM' not in query:
@@ -315,6 +376,7 @@ class QueryExecutor:
     def _execute_with_timeout(self, query: str, timeout: int) -> list[dict[str, Any]]:
         """
         Execute query with timeout enforcement.
+        Handles USE + SELECT patterns by executing them as separate operations.
         
         Args:
             query: SQL query to execute
@@ -328,8 +390,11 @@ class QueryExecutor:
             QueryExecutionError: If query execution fails
         """
         try:
-            # Note: The DatabaseManager should handle timeouts internally
-            # For now, we'll rely on the database connection timeout settings
+            # Check if this is a USE + SELECT pattern that needs special handling
+            if ';' in query.rstrip(';') and self._is_safe_use_select_pattern(query):
+                return self._execute_use_select_pattern(query)
+            
+            # Execute single statement normally
             results = self.db_manager.execute_query(query, fetch_all=True)
             return results if results else []
 
@@ -339,6 +404,56 @@ class QueryExecutor:
                 raise QueryTimeoutError(f"Query execution timed out: {error_msg}")
             else:
                 raise QueryExecutionError(f"Database error: {error_msg}")
+    
+    def _is_safe_use_select_pattern(self, query: str) -> bool:
+        """
+        Check if query is a safe USE database; SELECT ... pattern.
+        
+        Args:
+            query: Normalized query string
+            
+        Returns:
+            True if it's a safe USE + SELECT pattern
+        """
+        # Split by semicolon and clean up statements
+        statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+        
+        # Must be exactly 2 statements: USE database; SELECT ...
+        if len(statements) != 2:
+            return False
+            
+        # First statement must be USE
+        first_stmt = statements[0].upper()
+        if not first_stmt.startswith('USE '):
+            return False
+            
+        # Second statement must be a safe query type
+        second_stmt = statements[1].upper()
+        safe_second_statements = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN']
+        
+        return any(second_stmt.startswith(stmt + ' ') for stmt in safe_second_statements)
+
+    def _execute_use_select_pattern(self, query: str) -> list[dict[str, Any]]:
+        """
+        Execute USE database; SELECT ... pattern as separate operations.
+        
+        Args:
+            query: Multi-statement query with USE + SELECT pattern
+            
+        Returns:
+            Results from the SELECT statement
+        """
+        # Split the query into USE and SELECT parts
+        statements = [stmt.strip() for stmt in query.split(';') if stmt.strip()]
+        use_stmt = statements[0]
+        select_stmt = statements[1]
+        
+        # Execute USE statement first (this switches database context)
+        self.db_manager.execute_query(use_stmt, fetch_all=False)
+        
+        # Execute SELECT statement and return results
+        results = self.db_manager.execute_query(select_stmt, fetch_all=True)
+        return results if results else []
 
     def _process_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """

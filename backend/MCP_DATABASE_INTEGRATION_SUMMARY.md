@@ -2,7 +2,7 @@
 
 ## Overview
 
-Successfully integrated the MCP (Model Context Protocol) client into the database layer of the AI CFO BI Agent. This implementation enables dynamic schema management through the TiDB MCP server while maintaining backward compatibility with direct database operations.
+Successfully integrated the MCP (Model Context Protocol) client into the database layer of the AGENT BI. This implementation enables dynamic schema management through the TiDB MCP server while maintaining backward compatibility with direct database operations.
 
 ## Implementation Details
 

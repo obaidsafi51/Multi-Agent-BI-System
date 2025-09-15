@@ -304,6 +304,29 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
                 cpu_usage_percent=cpu_percent
             )
             
+            # Check if processing was successful
+            if not result.success:
+                # If processing failed, return error response
+                logger.error(f"NLP processing failed: {result.error}")
+                response = ProcessResponse(
+                    query=request.query,
+                    intent={},
+                    entities={},
+                    sql_query="",
+                    explanation="",
+                    complexity="unified",
+                    processing_path="unified_path",
+                    execution_time=execution_time,
+                    cache_hit=optimization_stats.get("cache_hits", 0) > 0,
+                    timestamp=datetime.now().isoformat(),
+                    success=False
+                )
+                
+                # Add error information to response for backend to process
+                response_dict = response.model_dump()
+                response_dict["error"] = result.error or "Unknown processing error"
+                return response_dict
+            
             response = ProcessResponse(
                 query=request.query,
                 intent=result.intent.model_dump() if result.intent else {},
@@ -314,7 +337,8 @@ async def process_query(request: ProcessRequest, background_tasks: BackgroundTas
                 processing_path="unified_path",
                 execution_time=execution_time,
                 cache_hit=optimization_stats.get("cache_hits", 0) > 0,
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().isoformat(),
+                success=True
             )
             
             # Log performance metrics with optimization details

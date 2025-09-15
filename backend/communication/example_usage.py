@@ -1,5 +1,5 @@
 """
-Example usage of communication protocols for AI CFO BI Agent system.
+Example usage of communication protocols for AGENT BI system.
 """
 
 import asyncio
@@ -374,7 +374,7 @@ async def example_health_monitoring(comm_manager: CommunicationManager):
 
 async def run_example_system():
     """Run example system with multiple agents"""
-    logger.info("Starting example AI CFO BI Agent communication system")
+    logger.info("Starting example AGENT BI communication system")
     
     # Start agents concurrently
     tasks = [

@@ -25,7 +25,7 @@ export function useRealData(): UseRealDataReturn {
   // Get database context and WebSocket connections
   const { sessionId } = useDatabaseContext();
   const { isConnected } = useGlobalWebSocket();
-  const { processQuery, isProcessing } = useWebSocketQuery();
+  const { processQuery } = useWebSocketQuery();
   
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [bentoCards, setBentoCards] = useState<BentoGridCard[]>([]);
@@ -264,7 +264,7 @@ export function useRealData(): UseRealDataReturn {
           // Add welcome message
           const welcomeMessage: ChatMessage = {
             id: "welcome",
-            content: "Hello! I'm your AI CFO assistant. I can help you analyze financial data from your database. What would you like to know?",
+            content: "Hello! I'm your AGENT BI assistant. I can help you analyze financial data from your database. What would you like to know?",
             sender: "assistant",
             timestamp: new Date("2024-01-01T00:00:00Z"), // Fixed timestamp to avoid hydration mismatch
           };
@@ -308,9 +308,26 @@ export function useRealData(): UseRealDataReturn {
     }
   }, [bentoCards]);
 
-  const updateDashboardFromQuery = useCallback((queryResponse: QueryResponse) => {
+  const updateDashboardFromQuery = useCallback(async (queryResponse: QueryResponse) => {
     if (!queryResponse.result) return;
 
+    // Try to get updated dashboard cards from viz-agent
+    if (sessionId) {
+      try {
+        const dashboardCardsResponse = await apiService.getDashboardCards(sessionId);
+        
+        if (dashboardCardsResponse.success && dashboardCardsResponse.cards.length > 0) {
+          // Use the cards from the viz-agent dashboard integration
+          setBentoCards(dashboardCardsResponse.cards);
+          console.log(`Updated dashboard with ${dashboardCardsResponse.total_cards} cards from viz-agent`);
+          return;
+        }
+      } catch (error) {
+        console.warn("Failed to get dashboard cards from viz-agent, using fallback:", error);
+      }
+    }
+
+    // Fallback to old method if viz-agent dashboard integration is not available
     const newCards: BentoGridCard[] = [];
 
     // Determine where to place new cards
@@ -334,7 +351,7 @@ export function useRealData(): UseRealDataReturn {
     if (newCards.length > 0) {
       setBentoCards(prev => [...prev, ...newCards]);
     }
-  }, [getNextAvailablePosition]);
+  }, [getNextAvailablePosition, sessionId]);
 
   const processQueryResponse = useCallback((content: string, response: QueryResponse) => {
     try {

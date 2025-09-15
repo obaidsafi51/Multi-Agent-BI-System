@@ -274,14 +274,17 @@ class WebSocketAgentManager:
                     try:
                         data = json.loads(message)
                         message_id = data.get("response_to")
+                        msg_type = data.get("type", "unknown")
                         
-                        # If this is a response to a pending request, complete the future
-                        if message_id and message_id in connection.pending_responses:
+                        # Only complete futures for actual response messages, not progress updates
+                        if (message_id and message_id in connection.pending_responses and 
+                            msg_type not in ["progress_update", "heartbeat", "heartbeat_response"]):
                             future = connection.pending_responses.pop(message_id)
                             if not future.done():
                                 future.set_result(data)
+                                logger.debug(f"Completed future for message_id {message_id} with type {msg_type}")
                         else:
-                            # Handle other message types
+                            # Handle other message types (including progress updates)
                             await self._handle_message(agent_type, message)
                             
                     except json.JSONDecodeError:
@@ -526,9 +529,17 @@ class WebSocketAgentManager:
         # Import here to avoid circular imports
         import httpx
         
+        # Determine the correct endpoint based on agent type
+        if agent_type == AgentType.DATA:
+            endpoint = "/execute"  # Data agent uses /execute endpoint
+        elif agent_type == AgentType.VIZ:
+            endpoint = "/visualize"  # VIZ agent uses /visualize endpoint
+        else:
+            endpoint = "/process"  # NLP agent uses /process endpoint
+        
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{config.http_url}/process",
+                f"{config.http_url}{endpoint}",
                 json=message,
                 timeout=timeout
             )

@@ -1,4 +1,4 @@
-# Advanced WebSocket Features for AI CFO BI System
+# Advanced WebSocket Features for AGENT BI System
 
 ## Real-Time Features to Implement
 

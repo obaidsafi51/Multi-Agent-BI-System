@@ -1,9 +1,9 @@
 [project]
 name = "ai-cfo-viz-agent"
 version = "0.1.0"
-description = "Visualization Agent for AI CFO BI Agent"
+description = "Visualization Agent for AGENT BI"
 authors = [
-    {name = "AI CFO Team", email = "team@ai-cfo.com"}
+    {name = "AGENT BI Team", email = "team@agent-bi.com"}
 ]
 dependencies = [
     "pydantic>=2.8.0,<3.0.0",

@@ -159,6 +159,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def clean_sql_query_for_tidb(sql_query: str) -> str:
+    """
+    Clean SQL query to ensure proper TiDB syntax with USE statement support.
+    
+    Args:
+        sql_query: Original SQL query
+        
+    Returns:
+        Cleaned SQL query with proper formatting
+    """
+    # Keep USE statements but ensure proper formatting (MCP server now supports them)
+    # Handle both multi-line and single-line USE + SELECT patterns
+    
+    # First, check if we have a USE + SELECT pattern on a single line
+    if ';' in sql_query and sql_query.upper().strip().startswith('USE '):
+        # Split by semicolon to separate USE from other statements
+        parts = [part.strip() for part in sql_query.split(';') if part.strip()]
+        cleaned_lines = []
+        
+        for part in parts:
+            if part.upper().startswith('USE '):
+                # Keep USE statement with semicolon
+                cleaned_lines.append(part + ';')
+                logger.info(f"✅ HTTP: Keeping USE statement: {part};")
+            else:
+                # Keep other statements
+                cleaned_lines.append(part)
+                logger.info(f"✅ HTTP: Keeping SQL statement: {part}")
+        
+        cleaned_sql = '\n'.join(cleaned_lines)
+    else:
+        # Process line by line for multi-line queries
+        lines = sql_query.strip().split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Process USE statements - keep them but ensure proper semicolon
+            if line.upper().startswith('USE '):
+                # Ensure USE statement ends with semicolon
+                if not line.endswith(';'):
+                    line = line + ';'
+                logger.info(f"✅ HTTP: Keeping USE statement with proper formatting: {line}")
+                cleaned_lines.append(line)
+                continue
+                
+            # Skip empty lines
+            if not line:
+                continue
+                
+            cleaned_lines.append(line)
+        
+        cleaned_sql = '\n'.join(cleaned_lines)
+    
+    # Clean up multiple semicolons and ensure proper formatting
+    cleaned_sql = cleaned_sql.replace(';;', ';').strip()
+    
+    logger.info(f"✅ HTTP: SQL cleaning successful - maintained USE statements: {cleaned_sql}")
+    return cleaned_sql
+
+
 @app.post("/execute", response_model=QueryExecuteResponse)
 async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
     """Execute SQL query and return processed data"""
@@ -179,6 +241,10 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
         else:
             logger.info(f"No database context provided for query {request.query_id}")
         
+        # Clean the SQL query to remove USE statements that cause MCP server issues
+        logger.info(f"Original SQL query: {request.sql_query}")
+        cleaned_sql_query = clean_sql_query_for_tidb(request.sql_query)
+        
         # Convert query context to intent format expected by data agent
         query_intent = {
             "metric_type": request.query_context.get("metric_type", "revenue"),
@@ -188,11 +254,18 @@ async def execute_query(request: QueryExecuteRequest) -> QueryExecuteResponse:
             "comparison_periods": request.query_context.get("comparison_periods", [])
         }
         
-        # Process query through the data agent
+        # Process query through the data agent using cleaned SQL
         result = await data_agent.process_query(query_intent, user_context={
             "query_id": request.query_id,
-            "sql_query": request.sql_query
+            "sql_query": cleaned_sql_query  # Use cleaned SQL
         })
+        
+        # Debug logging to understand result structure
+        logger.info(f"🔍 HTTP: MCP Agent result keys: {list(result.keys()) if result else 'None'}")
+        logger.info(f"🔍 HTTP: MCP Agent result success: {result.get('success', 'MISSING')}")
+        logger.info(f"🔍 HTTP: MCP Agent result data: {result.get('data', 'MISSING')}")
+        logger.info(f"🔍 HTTP: MCP Agent result rows: {result.get('rows', 'MISSING')}")
+        logger.info(f"🔍 HTTP: MCP Agent result columns: {result.get('columns', 'MISSING')}")
         
         if not result.get("success", False):
             return QueryExecuteResponse(

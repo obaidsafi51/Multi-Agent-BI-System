@@ -35,7 +35,7 @@ class PendingRequest:
     params: Dict[str, Any]
     timestamp: float
     future: asyncio.Future
-    timeout: float = 30.0
+    timeout: float = 120.0  # Increased to 120s for schema operations
 
 
 @dataclass
@@ -100,9 +100,26 @@ class WebSocketMCPClient:
         # Request deduplication
         self.active_requests: Dict[str, List[asyncio.Future]] = {}  # cache_key -> futures
         
+        # Circuit breaker for connection failures
+        self.circuit_breaker = {
+            "failure_count": 0,
+            "last_failure_time": 0,
+            "failure_threshold": 5,
+            "recovery_time": 30.0,  # 30 seconds
+            "state": "closed"  # closed, open, half-open
+        }
+        
         # Background tasks
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.cleanup_task: Optional[asyncio.Task] = None
+        
+        # Operation state tracking
+        self.heavy_operation_in_progress = False
+        self.operation_lock = asyncio.Lock()
+        self.schema_operation_methods = {
+            "get_table_schema", "build_schema_context", "discover_databases", 
+            "discover_tables", "get_sample_data"
+        }
         
         # Event handlers
         self.event_handlers: Dict[str, List[Callable]] = {}
@@ -133,9 +150,11 @@ class WebSocketMCPClient:
             
             self.websocket = await websockets.connect(
                 self.server_url,
-                ping_interval=30,
-                ping_timeout=10,
-                close_timeout=10
+                ping_interval=120,  # Match nlp-agent settings for consistency
+                ping_timeout=60,   # Match nlp-agent settings for consistency
+                close_timeout=20,  # Increased close timeout
+                max_size=2**20,    # 1MB max message size
+                max_queue=100      # Increased message queue size
             )
             
             # Send initial connection message in the format expected by TiDB MCP server
@@ -238,10 +257,16 @@ class WebSocketMCPClient:
                 self.websocket = None
                 
     def _is_connection_healthy(self) -> bool:
-        """Check if the WebSocket connection is healthy."""
-        return (self.is_connected and 
-                self.websocket is not None and 
-                not self.websocket.closed)
+        """Check if the WebSocket connection is healthy with comprehensive validation."""
+        try:
+            return (self.is_connected and 
+                    self.websocket is not None and 
+                    not self.websocket.closed and
+                    hasattr(self.websocket, 'ping') and
+                    not self._connecting)  # Not in middle of connecting
+        except Exception as e:
+            logger.debug(f"Connection health check failed: {e}")
+            return False
     
     async def _start_background_tasks(self):
         """Start background tasks for message handling and maintenance."""
@@ -301,29 +326,56 @@ class WebSocketMCPClient:
             logger.warning(f"Unknown message type: {message_type}")
     
     async def _handle_response(self, message: Dict[str, Any]):
-        """Handle individual response message."""
+        """Handle individual response message with improved error handling."""
         request_id = message.get("request_id")
         if not request_id:
+            logger.warning("Received response without request_id")
             return
             
         async with self.request_lock:
             request = self.pending_requests.pop(request_id, None)
             
         if request:
-            # Handle TiDB MCP server response format
-            payload = message.get("payload", {})
-            if payload.get("success", True):
-                # Extract result from payload
-                result = payload.get("databases") or payload.get("tables") or payload.get("data") or payload
+            try:
+                # Handle TiDB MCP server response format
+                payload = message.get("payload", {})
+                
+                # Check for explicit success/error indicators
+                if payload.get("success") is False or message.get("type") == "error":
+                    error = payload.get("error") or message.get("error", "Unknown error")
+                    logger.warning(f"MCP operation {request.method} failed: {error}")
+                    request.future.set_exception(Exception(error))
+                    return
+                
+                # Extract result from payload with fallback handling
+                result = None
+                if "databases" in payload:
+                    result = payload["databases"]
+                elif "tables" in payload:
+                    result = payload["tables"]
+                elif "data" in payload:
+                    result = payload["data"]
+                elif "schema" in payload:
+                    result = payload
+                else:
+                    result = payload
+                
+                # Validate result structure
+                if result is None:
+                    logger.warning(f"Empty result for {request.method}")
+                    result = {}
                 
                 # Cache the result if it's a schema operation
                 if request.method in ["get_table_schema", "discover_tables", "discover_databases"]:
                     await self._cache_result(request, result)
                 
                 request.future.set_result(result)
-            else:
-                error = payload.get("error") or message.get("error", "Unknown error")
-                request.future.set_exception(Exception(error))
+                
+            except Exception as e:
+                logger.error(f"Error processing response for {request.method}: {e}")
+                request.future.set_exception(e)
+        else:
+            logger.debug(f"Received response for unknown request_id: {request_id}")
     
     async def _handle_batch_response(self, message: Dict[str, Any]):
         """Handle batch response message."""
@@ -386,15 +438,19 @@ class WebSocketMCPClient:
             # Determine TTL based on operation type
             ttl = 300.0  # 5 minutes default
             if request.method == "get_table_schema":
-                ttl = 600.0  # 10 minutes for schema (less frequent changes)
+                ttl = 900.0  # 15 minutes for schema (less frequent changes)
             elif request.method in ["discover_databases", "discover_tables"]:
-                ttl = 180.0  # 3 minutes for discovery (moderate changes)
+                ttl = 300.0  # 5 minutes for discovery (moderate changes)
+            elif request.method == "build_schema_context":
+                ttl = 1200.0  # 20 minutes for full schema context (expensive operation)
                 
             self.cache[cache_key] = CachedResult(
                 data=result,
                 timestamp=time.time(),
                 ttl=ttl
             )
+            
+            logger.debug(f"Cached result for {request.method} with TTL {ttl}s")
     
     def _get_cache_key(self, method: str, params: Dict[str, Any]) -> str:
         """Generate cache key for method and parameters."""
@@ -419,17 +475,47 @@ class WebSocketMCPClient:
         return None
     
     async def _heartbeat_loop(self):
-        """Send periodic heartbeat messages."""
+        """Send periodic heartbeat messages with connection health monitoring."""
+        consecutive_failures = 0
+        max_failures = 3
+        
         try:
             while self.is_connected:
-                await asyncio.sleep(30)
-                if self.websocket and self.is_connected:
-                    ping_msg = {"type": "ping", "timestamp": time.time()}
+                await asyncio.sleep(120)  # Match ping_interval for consistency
+                
+                if not self._is_connection_healthy():
+                    logger.warning("Connection unhealthy during heartbeat, attempting reconnection")
+                    asyncio.create_task(self._handle_disconnection())
+                    break
+                
+                # Skip heartbeat if heavy operation is in progress to prevent conflicts
+                if self.heavy_operation_in_progress:
+                    logger.debug("Skipping heartbeat - heavy operation in progress")
+                    consecutive_failures = 0  # Reset failures during heavy ops
+                    continue
+                
+                try:
+                    # Send ping message
+                    ping_msg = {"type": "ping", "timestamp": time.time(), "agent_id": self.agent_id}
                     await self.websocket.send(json.dumps(ping_msg))
+                    consecutive_failures = 0  # Reset failure counter on success
+                    logger.debug(f"Heartbeat sent for agent {self.agent_id}")
+                    
+                except Exception as e:
+                    consecutive_failures += 1
+                    logger.warning(f"Heartbeat failed ({consecutive_failures}/{max_failures}): {e}")
+                    
+                    if consecutive_failures >= max_failures:
+                        logger.error("Too many consecutive heartbeat failures, triggering reconnection")
+                        asyncio.create_task(self._handle_disconnection())
+                        break
+                        
         except asyncio.CancelledError:
-            pass
+            logger.debug("Heartbeat loop cancelled")
         except Exception as e:
-            logger.error(f"Heartbeat error: {e}")
+            logger.error(f"Heartbeat loop error: {e}")
+            if self.is_connected:
+                asyncio.create_task(self._handle_disconnection())
     
     async def _cleanup_loop(self):
         """Periodic cleanup of expired cache entries and timed-out requests."""
@@ -472,14 +558,36 @@ class WebSocketMCPClient:
             logger.error(f"Cleanup loop error: {e}")
     
     async def _handle_disconnection(self):
-        """Handle WebSocket disconnection with reconnection logic."""
+        """Handle WebSocket disconnection with improved reconnection logic."""
+        if not self.is_connected:
+            return  # Already handling disconnection
+            
         self.is_connected = False
+        logger.warning("WebSocket connection closed")
         
+        # Cancel all pending requests with connection error
+        async with self.request_lock:
+            for request in list(self.pending_requests.values()):
+                if not request.future.done():
+                    request.future.set_exception(ConnectionClosed(None, None))
+            self.pending_requests.clear()
+        
+        # Clear active request deduplication
+        for futures in self.active_requests.values():
+            for future in futures:
+                if not future.done():
+                    future.set_exception(ConnectionClosed(None, None))
+        self.active_requests.clear()
+        
+        # Attempt reconnection with exponential backoff
         if self.reconnect_attempts < self.max_reconnect_attempts:
             self.reconnect_attempts += 1
-            delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), 30)
+            # Exponential backoff with jitter
+            base_delay = min(self.reconnect_delay * (2 ** (self.reconnect_attempts - 1)), 30)
+            jitter = base_delay * 0.1 * (0.5 - asyncio.get_event_loop().time() % 1)
+            delay = base_delay + jitter
             
-            logger.info(f"Attempting reconnection {self.reconnect_attempts}/{self.max_reconnect_attempts} in {delay}s")
+            logger.info(f"Attempting reconnection {self.reconnect_attempts}/{self.max_reconnect_attempts} in {delay:.1f}s")
             await asyncio.sleep(delay)
             
             if await self.connect():
@@ -487,11 +595,43 @@ class WebSocketMCPClient:
             else:
                 await self._handle_disconnection()  # Retry
         else:
-            logger.error("Maximum reconnection attempts reached. Connection failed.")
+            logger.error("Maximum reconnection attempts reached. Connection failed permanently.")
     
+    def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker allows requests"""
+        current_time = time.time()
+        
+        if self.circuit_breaker["state"] == "open":
+            # Check if recovery time has passed
+            if current_time - self.circuit_breaker["last_failure_time"] > self.circuit_breaker["recovery_time"]:
+                self.circuit_breaker["state"] = "half-open"
+                logger.info("Circuit breaker moving to half-open state")
+                return True
+            return False
+        
+        return True
+    
+    def _record_success(self):
+        """Record successful operation"""
+        if self.circuit_breaker["state"] == "half-open":
+            self.circuit_breaker["state"] = "closed"
+            self.circuit_breaker["failure_count"] = 0
+            logger.info("Circuit breaker closed after successful operation")
+        elif self.circuit_breaker["state"] == "closed":
+            self.circuit_breaker["failure_count"] = max(0, self.circuit_breaker["failure_count"] - 1)
+    
+    def _record_failure(self):
+        """Record failed operation"""
+        self.circuit_breaker["failure_count"] += 1
+        self.circuit_breaker["last_failure_time"] = time.time()
+        
+        if self.circuit_breaker["failure_count"] >= self.circuit_breaker["failure_threshold"]:
+            self.circuit_breaker["state"] = "open"
+            logger.warning(f"Circuit breaker opened after {self.circuit_breaker['failure_count']} failures")
+
     async def call_tool(self, method: str, **params) -> Any:
         """
-        Call an MCP tool with intelligent caching and deduplication.
+        Call an MCP tool with intelligent caching, deduplication, and circuit breaker.
         
         Args:
             method: Tool method name
@@ -500,6 +640,10 @@ class WebSocketMCPClient:
         Returns:
             Tool result
         """
+        # Check circuit breaker
+        if not self._check_circuit_breaker():
+            raise Exception("Circuit breaker is open - too many recent failures")
+        
         # Check cache first
         cached_result = await self._get_cached_result(method, params)
         if cached_result is not None:
@@ -519,6 +663,13 @@ class WebSocketMCPClient:
         self.active_requests[cache_key] = []
         
         try:
+            # Mark heavy operations to prevent heartbeat conflicts
+            is_heavy_operation = method in self.schema_operation_methods
+            if is_heavy_operation:
+                async with self.operation_lock:
+                    self.heavy_operation_in_progress = True
+                    logger.debug(f"Started heavy operation: {method}")
+
             # Check connection health and reconnect if needed
             if not self._is_connection_healthy():
                 logger.info("WebSocket connection unhealthy, attempting to reconnect")
@@ -529,12 +680,20 @@ class WebSocketMCPClient:
             request_id = str(uuid.uuid4())
             future = asyncio.Future()
             
+            # Set dynamic timeout based on operation type
+            timeout = 120.0  # Increased default timeout
+            if method in ["get_table_schema", "build_schema_context"]:
+                timeout = 180.0  # Longer timeout for schema operations
+            elif method in ["discover_databases", "discover_tables"]:
+                timeout = 90.0  # Medium timeout for discovery operations
+            
             request = PendingRequest(
                 request_id=request_id,
                 method=method,
                 params=params,
                 timestamp=time.time(),
-                future=future
+                future=future,
+                timeout=timeout
             )
             
             async with self.request_lock:
@@ -554,6 +713,9 @@ class WebSocketMCPClient:
             # Wait for response
             result = await future
             
+            # Record success for circuit breaker
+            self._record_success()
+            
             # Notify duplicate requesters
             duplicates = self.active_requests.pop(cache_key, [])
             for dup_future in duplicates:
@@ -563,12 +725,21 @@ class WebSocketMCPClient:
             return result
             
         except Exception as e:
+            # Record failure for circuit breaker
+            self._record_failure()
+            
             # Notify duplicate requesters of error
             duplicates = self.active_requests.pop(cache_key, [])
             for dup_future in duplicates:
                 if not dup_future.done():
                     dup_future.set_exception(e)
             raise
+        finally:
+            # Clear heavy operation flag
+            if is_heavy_operation:
+                async with self.operation_lock:
+                    self.heavy_operation_in_progress = False
+                    logger.debug(f"Completed heavy operation: {method}")
     
     # Convenience methods for common operations
     async def get_table_schema(self, database: str, table: str) -> Dict[str, Any]:

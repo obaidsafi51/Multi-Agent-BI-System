@@ -39,7 +39,7 @@ describe('ChatInterface', () => {
     )
 
     expect(screen.getByText('Hello, how can I help you?')).toBeInTheDocument()
-    expect(screen.getByText('AI CFO Assistant')).toBeInTheDocument()
+    expect(screen.getByText('AGENT BI')).toBeInTheDocument()
   })
 
   it('allows user to send messages', async () => {

@@ -188,6 +188,73 @@ async def create_visualization(request: VisualizeRequest) -> VisualizeResponse:
             error=str(e)
         )
 
+
+class DashboardVisualizationRequest(BaseModel):
+    data: List[Dict[str, Any]]
+    columns: List[str]
+    query: str
+    query_id: str
+    session_id: str
+    user_id: Optional[str] = "anonymous"
+    intent: Optional[Dict[str, Any]] = None
+
+class DashboardVisualizationResponse(BaseModel):
+    success: bool
+    query_id: str
+    dashboard_updated: bool
+    chart_config: Optional[Dict[str, Any]] = None
+    processing_time_ms: int
+    error: Optional[str] = None
+
+
+@app.post("/dashboard/visualize", response_model=DashboardVisualizationResponse)
+async def create_dashboard_visualization(request: DashboardVisualizationRequest) -> DashboardVisualizationResponse:
+    """Create visualization specifically for dashboard display"""
+    if not viz_agent:
+        raise HTTPException(status_code=503, detail="Visualization Agent not initialized")
+    
+    start_time = datetime.now()
+    
+    try:
+        logger.info(f"Creating dashboard visualization for query {request.query_id} in session {request.session_id}")
+        
+        # Import dashboard integration manager
+        from src.dashboard_integration import dashboard_integration_manager
+        
+        # Process the query data and create dashboard visualization
+        dashboard_result = await dashboard_integration_manager.process_query_for_dashboard(
+            data=request.data,
+            columns=request.columns,
+            query=request.query,
+            query_id=request.query_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            intent=request.intent
+        )
+        
+        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        
+        return DashboardVisualizationResponse(
+            success=dashboard_result["success"],
+            query_id=request.query_id,
+            dashboard_updated=dashboard_result.get("dashboard_updated", False),
+            chart_config=dashboard_result.get("chart_config"),
+            processing_time_ms=dashboard_result.get("processing_time_ms", processing_time),
+            error=dashboard_result.get("error")
+        )
+        
+    except Exception as e:
+        processing_time = int((datetime.now() - start_time).total_seconds() * 1000)
+        logger.error(f"Dashboard visualization creation failed for {request.query_id}: {e}")
+        
+        return DashboardVisualizationResponse(
+            success=False,
+            query_id=request.query_id,
+            dashboard_updated=False,
+            processing_time_ms=processing_time,
+            error=str(e)
+        )
+
 @app.get("/chart-alternatives/{query_id}")
 async def get_chart_alternatives(query_id: str, data: List[Dict[str, Any]]):
     """Get alternative chart types for the given data"""
@@ -232,6 +299,64 @@ async def get_status():
         "timestamp": datetime.now().isoformat(),
         "cache_size": len(viz_agent.chart_cache) if viz_agent else 0
     }
+
+
+@app.get("/dashboard/cards/{session_id}")
+async def get_dashboard_cards(session_id: str):
+    """Get all dashboard cards for a session"""
+    try:
+        from src.dashboard_integration import dashboard_integration_manager
+        
+        cards = dashboard_integration_manager.get_session_cards(session_id)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "cards": [card.__dict__ for card in cards],
+            "total_cards": len(cards)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get dashboard cards for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/dashboard/cards/{session_id}")
+async def clear_dashboard_cards(session_id: str):
+    """Clear all dashboard cards for a session"""
+    try:
+        from src.dashboard_integration import dashboard_integration_manager
+        
+        dashboard_integration_manager.clear_session_cards(session_id)
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "message": "Dashboard cards cleared"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to clear dashboard cards for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/dashboard/stats")
+async def get_dashboard_stats():
+    """Get dashboard integration statistics"""
+    try:
+        from src.dashboard_integration import dashboard_integration_manager
+        
+        stats = dashboard_integration_manager.get_stats()
+        
+        return {
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            **stats
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get dashboard stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -163,7 +163,7 @@ class QueryGenerator:
             )
             
         except Exception as e:
-            logger.error("Failed to generate SQL query", error=str(e), query_intent=query_intent)
+            logger.error(f"Failed to generate SQL query: {str(e)}, query_intent={query_intent}")
             raise
     
     def _get_table_info(self, metric_type: str) -> Optional[Tuple[str, str]]:
@@ -451,7 +451,7 @@ class QueryGenerator:
             optimizations.append("Added result limit")
         
         if optimizations:
-            logger.debug("Applied query optimizations", optimizations=optimizations)
+            logger.debug(f"Applied query optimizations: {optimizations}")
         
         return query
     
@@ -520,7 +520,7 @@ class QueryGenerator:
             return query
             
         except Exception as e:
-            logger.error("Failed to substitute parameters", error=str(e), query=query, params=params)
+            logger.error(f"Failed to substitute parameters: {str(e)}, query={query}, params={params}")
             return query
 
 

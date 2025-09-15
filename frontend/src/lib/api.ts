@@ -1,4 +1,6 @@
 import { BentoGridCard, CardType, CardSize } from "@/types/dashboard";
+import { ChartType, ChartConfig } from "@/types/chart";
+import { ChartConfigBuilder } from "@/lib/chartUtils";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -213,6 +215,118 @@ class ApiService {
     );
   }
 
+  // Dashboard-specific API methods
+  async getDashboardCards(sessionId: string): Promise<{
+    success: boolean;
+    cards: BentoGridCard[];
+    total_cards: number;
+  }> {
+    try {
+      // Try to get cards from viz-agent directly
+      const vizAgentUrl = process.env.NEXT_PUBLIC_VIZ_AGENT_URL || "http://localhost:8003";
+      
+      interface VizAgentCard {
+        id: string;
+        card_type: string;
+        title: string;
+        position: { row: number; col: number };
+        size: string;
+        content: Record<string, unknown>;
+        metadata?: Record<string, unknown>;
+      }
+      
+      const response = await this.fetchWithErrorHandling<{
+        success: boolean;
+        session_id: string;
+        cards: VizAgentCard[];
+        total_cards: number;
+      }>(`${vizAgentUrl}/dashboard/cards/${sessionId}`);
+      
+      if (response.success) {
+        // Transform viz-agent cards to frontend format
+        const transformedCards = response.cards.map(card => this.transformVizAgentCard(card));
+        
+        return {
+          success: true,
+          cards: transformedCards,
+          total_cards: response.total_cards
+        };
+      } else {
+        return {
+          success: false,
+          cards: [],
+          total_cards: 0
+        };
+      }
+    } catch (error) {
+      console.warn("Failed to fetch dashboard cards from viz-agent:", error);
+      return {
+        success: false,
+        cards: [],
+        total_cards: 0
+      };
+    }
+  }
+
+  async clearDashboardCards(sessionId: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const vizAgentUrl = process.env.NEXT_PUBLIC_VIZ_AGENT_URL || "http://localhost:8003";
+      
+      const response = await this.fetchWithErrorHandling<{
+        success: boolean;
+        message: string;
+      }>(`${vizAgentUrl}/dashboard/cards/${sessionId}`, {
+        method: "DELETE"
+      });
+      
+      return response;
+    } catch (error) {
+      console.warn("Failed to clear dashboard cards:", error);
+      return {
+        success: false,
+        message: "Failed to clear dashboard cards"
+      };
+    }
+  }
+
+  private transformVizAgentCard(vizCard: {
+    id: string;
+    card_type: string;
+    title: string;
+    position: { row: number; col: number };
+    size: string;
+    content: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+  }): BentoGridCard {
+    // Transform viz-agent card format to frontend BentoGridCard format
+    const cardTypeMap: Record<string, CardType> = {
+      'chart': CardType.CHART,
+      'kpi': CardType.KPI,
+      'table': CardType.TABLE,
+      'insight': CardType.INSIGHT
+    };
+
+    const cardSizeMap: Record<string, CardSize> = {
+      'small': CardSize.SMALL,
+      'medium_h': CardSize.MEDIUM_H,
+      'medium_v': CardSize.MEDIUM_V,
+      'large': CardSize.LARGE
+    };
+
+    return {
+      id: vizCard.id,
+      cardType: cardTypeMap[vizCard.card_type] || CardType.CHART,
+      size: cardSizeMap[vizCard.size] || CardSize.MEDIUM_H,
+      position: vizCard.position,
+      content: {
+        ...vizCard.content,
+        // Ensure required fields are present
+        title: (vizCard.content.title as string) || vizCard.title,
+        description: (vizCard.content.description as string) || `Generated from query ${vizCard.metadata?.query_id || 'unknown'}`
+      }
+    };
+  }
+
   // WebSocket connection for real-time chat
   createWebSocketConnection(userId: string): WebSocket {
     const wsUrl = this.baseUrl.replace("http", "ws");
@@ -248,19 +362,81 @@ class ApiService {
     queryResponse: QueryResponse,
     position: { row: number; col: number }
   ): BentoGridCard {
+    // Enhanced chart card transformation with better visualization support
+    const visualization = queryResponse.visualization;
+    const result = queryResponse.result;
+    
+    // Determine size early so we can pass it to the chart config builder
+    const inferredSize = this.determineCardSize(visualization?.chart_type || "line", result?.row_count || 0);
+
+    // Build a robust ChartConfig for the frontend renderer
+    let chartConfig: ChartConfig | undefined = undefined;
+    try {
+      const columns = (result?.columns || []) as string[];
+      const data = (result?.data || []) as Array<Record<string, unknown>>;
+
+      if (columns.length >= 2 && data.length > 0) {
+        const xAxisKey = columns[0];
+        const yAxisKeys = columns.slice(1).filter((col) => col !== xAxisKey);
+
+        // Infer chart type if backend didn't provide one
+        const chartTypeStr = (visualization?.chart_type || "line").toLowerCase();
+        const inferredType: ChartType = chartTypeStr.includes("bar")
+          ? ChartType.BAR
+          : chartTypeStr.includes("pie")
+          ? ChartType.PIE
+          : chartTypeStr.includes("area")
+          ? ChartType.AREA
+          : chartTypeStr.includes("scatter")
+          ? ChartType.SCATTER
+          : ChartType.LINE;
+
+        chartConfig = new ChartConfigBuilder({
+          data,
+          xAxisKey,
+          yAxisKeys,
+        })
+          .setType(inferredType)
+          .setTitle(visualization?.title || "Chart")
+          .setDimensions(inferredSize)
+          .setInteractivity({ enableTooltip: true, enableLegend: true, enableAnimation: true })
+          .build();
+      }
+    } catch (e) {
+      console.warn("Failed to build chart config from result:", e);
+    }
+
     return {
       id: `chart_${queryResponse.query_id}`,
       cardType: CardType.CHART,
-      size: CardSize.MEDIUM_H,
+      size: inferredSize,
       position,
       content: {
-        title: queryResponse.visualization?.title || "Chart",
-        chartType: queryResponse.visualization?.chart_type || "Line Chart",
-        description: `Data from ${queryResponse.result?.row_count || 0} records`,
-        data: queryResponse.result?.data || [],
-        columns: queryResponse.result?.columns || [],
+        title: visualization?.title || "Chart",
+        chartType: visualization?.chart_type?.replace("_", " ") || "Line Chart",
+        description: `Data from ${result?.row_count || 0} records`,
+        data: result?.data || [],
+        columns: result?.columns || [],
+        chartConfig: chartConfig || (visualization?.config as ChartConfig | undefined),
+        interactive: true,
+        responsive: true
       },
     };
+  }
+
+  private determineCardSize(chartType: string, dataPoints: number): CardSize {
+    // Intelligent card sizing based on chart type and data volume
+    if (chartType.includes("gauge") || chartType.includes("kpi")) {
+      return CardSize.SMALL;
+    } else if (chartType.includes("table")) {
+      return dataPoints > 10 ? CardSize.LARGE : CardSize.MEDIUM_H;
+    } else if (chartType.includes("line") || chartType.includes("area")) {
+      return CardSize.MEDIUM_H; // Horizontal medium for time series
+    } else if (chartType.includes("bar") || chartType.includes("column")) {
+      return CardSize.MEDIUM_V; // Vertical medium for categorical data
+    } else {
+      return CardSize.MEDIUM_H; // Default
+    }
   }
 
   transformToTableCard(

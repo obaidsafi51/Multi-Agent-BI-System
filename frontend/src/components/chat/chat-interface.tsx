@@ -220,7 +220,7 @@ export function ChatInterface({
                 className={`font-bold tracking-tight ${isFullWidth ? 'text-3xl' : 'text-xl'}`}
                 style={{ color: 'var(--corporate-gray-900)' }}
               >
-                AI CFO Assistant
+                AGENT BI
               </h1>
               {isFullWidth && (
                 <p 

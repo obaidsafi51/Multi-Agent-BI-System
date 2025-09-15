@@ -64,11 +64,17 @@ class AgentConnection:
         return self.total_latency / self.request_count if self.request_count > 0 else 0.0
     
     async def send_message(self, message: Dict[str, Any]) -> bool:
-        """Send message to agent"""
+        """Send message to agent with proper connection state validation"""
         try:
-            if self.websocket.client_state == WebSocketState.CONNECTED:
+            # Check if websocket exists and is in connected state
+            if (self.websocket and 
+                hasattr(self.websocket, 'client_state') and 
+                self.websocket.client_state == WebSocketState.CONNECTED):
                 await self.websocket.send_text(json.dumps(message))
                 return True
+            else:
+                logger.debug(f"Cannot send message to {self.agent_id}: WebSocket not connected")
+                return False
         except Exception as e:
             logger.error(f"Failed to send message to {self.agent_id}: {e}")
         return False
@@ -625,9 +631,21 @@ class WebSocketMCPServerManager:
     
     # Utility methods
     async def _send_to_agent(self, agent_id: str, message: Dict[str, Any]) -> bool:
-        """Send message to specific agent"""
+        """Send message to specific agent with connection validation"""
         if agent_id in self.connected_agents:
-            return await self.connected_agents[agent_id].send_message(message)
+            connection = self.connected_agents[agent_id]
+            # Validate connection before sending
+            if (connection.websocket and 
+                hasattr(connection.websocket, 'client_state') and 
+                connection.websocket.client_state == WebSocketState.CONNECTED):
+                return await connection.send_message(message)
+            else:
+                logger.warning(f"Agent {agent_id} connection is not healthy, removing from active connections")
+                # Remove unhealthy connection
+                del self.connected_agents[agent_id]
+                if connection.agent_type in self.agent_types:
+                    self.agent_types[connection.agent_type].discard(agent_id)
+                self.metrics["active_connections"] = len(self.connected_agents)
         return False
     
     async def _send_error(
@@ -714,37 +732,79 @@ class WebSocketMCPServerManager:
         """Background cleanup task"""
         while True:
             try:
-                await asyncio.sleep(30)  # Cleanup every 30 seconds
+                await asyncio.sleep(60)  # Cleanup every 60 seconds
                 await self._cleanup_stale_connections()
             except Exception as e:
                 logger.error(f"Cleanup loop error: {e}")
     
     async def _heartbeat_loop(self):
-        """Background heartbeat task"""
+        """Background heartbeat task with improved timing for heavy operations"""
         while True:
             try:
-                await asyncio.sleep(30)  # Heartbeat every 30 seconds (more frequent for better connection health)
+                await asyncio.sleep(120)  # Increased to 120 seconds to avoid conflicts with schema operations
                 await self._send_heartbeat()
             except Exception as e:
                 logger.error(f"Heartbeat loop error: {e}")
     
     async def _cleanup_stale_connections(self):
-        """Clean up stale connections"""
+        """Clean up stale connections with improved validation"""
         current_time = time.time()
         stale_agents = []
         
-        for agent_id, connection in self.connected_agents.items():
-            # Consider connection stale if no ping for 5 minutes
-            if current_time - connection.last_ping > 300:
-                stale_agents.append(agent_id)
+        for agent_id, connection in list(self.connected_agents.items()):
+            try:
+                # Simplified stale connection detection - rely primarily on ping timeout
+                is_stale = False
+                
+                # Check ping timeout - increased to 15 minutes for heavy operations like KIMI API calls
+                if current_time - connection.last_ping > 900:  # No ping for 15 minutes
+                    is_stale = True
+                
+                # Skip WebSocket state checking to avoid compatibility issues
+                # Instead, rely on ping timeout and let actual communication failures trigger reconnections
+                elif connection.websocket is None:
+                    is_stale = True
+                
+                if is_stale:
+                    stale_agents.append(agent_id)
+                    
+            except Exception as e:
+                logger.debug(f"Connection health check error for {agent_id}: {e}")
+                # Only mark as stale if we're confident it's actually problematic
+                # Don't add to stale_agents unless we're sure
         
         for agent_id in stale_agents:
             logger.warning(f"Removing stale connection: {agent_id}")
-            # Connection will be cleaned up when WebSocket closes
             try:
-                await self.connected_agents[agent_id].websocket.close()
-            except:
-                pass
+                connection = self.connected_agents.get(agent_id)
+                if connection:
+                    # Clean up connection gracefully with improved WebSocket state checking
+                    if connection.websocket:
+                        try:
+                            # Simplified WebSocket close - just attempt to close without state checking
+                            if connection.websocket:
+                                await connection.websocket.close()
+                        except Exception as close_error:
+                            logger.debug(f"Error closing WebSocket for {agent_id}: {close_error}")
+                            # Continue with cleanup even if close fails
+                    
+                    # Remove from tracking
+                    del self.connected_agents[agent_id]
+                    
+                    if connection.agent_type in self.agent_types:
+                        self.agent_types[connection.agent_type].discard(agent_id)
+                        if not self.agent_types[connection.agent_type]:
+                            del self.agent_types[connection.agent_type]
+                    
+                    # Remove from event subscriptions
+                    for event_type, subscribers in self.event_subscribers.items():
+                        subscribers.discard(agent_id)
+                    
+                    self.metrics["active_connections"] = len(self.connected_agents)
+                    logger.info(f"Cleaned up stale connection for agent: {agent_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error cleaning up stale connection {agent_id}: {e}")
     
     async def _send_heartbeat(self):
         """Send heartbeat to all connected agents"""

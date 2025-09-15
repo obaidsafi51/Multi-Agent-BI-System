@@ -1,6 +1,6 @@
 /**
  * WebSocket Test Page
- * Demonstrates real-time WebSocket functionality with the AI CFO system
+ * Demonstrates real-time WebSocket functionality with the AGENT BI system
  */
 
 "use client";
@@ -73,7 +73,7 @@ export default function WebSocketTestPage() {
                 </div>
                 <div>
                   <h1 className="text-xl font-bold text-gray-900">WebSocket Test Environment</h1>
-                  <p className="text-sm text-gray-600">Real-time AI CFO Assistant Demo</p>
+                  <p className="text-sm text-gray-600">Real-time AGENT BI Demo</p>
                 </div>
               </div>
               
