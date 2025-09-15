@@ -13,10 +13,10 @@ class PerformanceConfig:
         "initial_reconnect_delay": 0.5,      # Fast initial reconnection
         "max_reconnect_delay": 30.0,         # Reasonable max delay
         "connection_timeout": 30.0,          # Increased connection timeout for Docker
-        "request_timeout": 180.0,            # Extended timeout for KIMI API processing
-        "heartbeat_interval": 45.0,          # Balanced heartbeat interval
+        "request_timeout": 300.0,            # Extended timeout for complex queries (5 minutes)
+        "heartbeat_interval": 90.0,          # Longer heartbeat for complex queries (1.5 minutes)
         "health_check_interval": 300.0,      # Less frequent health checks (5 minutes)
-        "ping_timeout": 20.0,                # Increased ping timeout
+        "ping_timeout": 60.0,                # Much longer ping timeout (1 minute)
         "enable_request_batching": True,
         "batch_size": 5,
         "batch_timeout": 0.1
@@ -66,12 +66,17 @@ class PerformanceConfig:
         "development": {
             "semantic_similarity_threshold": 0.80,  # Lower for more matches
             "cache_ttl_simple": 300,                # Shorter TTL for dev
-            "health_check_interval": 30.0           # More frequent checks
+            "health_check_interval": 30.0,          # More frequent checks
+            "ping_timeout": 45.0,                   # Shorter ping timeout for dev
+            "heartbeat_interval": 60.0              # More frequent heartbeat for dev
         },
         "production": {
             "semantic_similarity_threshold": 0.88,  # Higher for precision
             "cache_ttl_simple": 900,                # Longer TTL for prod
-            "memory_cache_size": 2000               # Larger cache for prod
+            "memory_cache_size": 2000,              # Larger cache for prod
+            "request_timeout": 600.0,               # Even longer timeout for prod (10 minutes)
+            "ping_timeout": 120.0,                  # Longer ping timeout for prod (2 minutes)
+            "heartbeat_interval": 120.0             # Less frequent heartbeat for prod (2 minutes)
         }
     }
     

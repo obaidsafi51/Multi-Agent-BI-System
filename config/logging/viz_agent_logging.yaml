@@ -1,0 +1,86 @@
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+  json:
+    format: '{"timestamp": "%(asctime)s", "name": "%(name)s", "level": "%(levelname)s", "message": "%(message)s", "module": "%(module)s", "function": "%(funcName)s", "line": %(lineno)d}'
+    datefmt: "%Y-%m-%dT%H:%M:%S"
+
+  detailed:
+    format: "%(asctime)s - VIZ-AGENT - %(levelname)s - [%(module)s:%(funcName)s:%(lineno)d] - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: detailed
+    filename: /app/logs/viz_agent.log
+    maxBytes: 10485760 # 10MB
+    backupCount: 5
+
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: /app/logs/viz_agent_error.log
+    maxBytes: 10485760 # 10MB
+    backupCount: 3
+
+  viz_file:
+    class: logging.handlers.RotatingFileHandler
+    level: INFO
+    formatter: json
+    filename: /app/logs/visualizations.log
+    maxBytes: 10485760 # 10MB
+    backupCount: 5
+
+loggers:
+  main:
+    level: INFO
+    handlers: [console, file, error_file]
+    propagate: false
+
+  visualization:
+    level: INFO
+    handlers: [console, file, viz_file]
+    propagate: false
+
+  chart_generator:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  uvicorn:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+  uvicorn.access:
+    level: WARNING
+    handlers: [console]
+    propagate: false
+
+  matplotlib:
+    level: WARNING
+    handlers: [console, file]
+    propagate: false
+
+  plotly:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+root:
+  level: INFO
+  handlers: [console, file, error_file]

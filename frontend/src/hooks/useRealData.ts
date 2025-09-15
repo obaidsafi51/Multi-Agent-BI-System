@@ -220,50 +220,43 @@ export function useRealData(): UseRealDataReturn {
     }
   }, [sessionId]);
 
-  const initializeData = useCallback(async () => {
-    try {
-      setError(null);
-      // Don't set loading true for initial data load - only for user interactions
+  // Removed initializeData function as we now handle initialization inline
 
-      // Add welcome message
-      const welcomeMessage: ChatMessage = {
-        id: "welcome",
-        content: "Hello! I'm your AI CFO assistant. I can help you analyze financial data from your database. What would you like to know?",
-        sender: "assistant",
-        timestamp: new Date("2024-01-01T00:00:00Z"), // Fixed timestamp to avoid hydration mismatch
-      };
-      setChatMessages([welcomeMessage]);
-
-      // Load suggestions (don't fail if this fails)
-      try {
-        await loadSuggestions();
-      } catch (err) {
-        console.warn("Failed to load suggestions, using fallbacks:", err);
-      }
-
-      // Load initial dashboard data (don't fail if this fails)
-      try {
-        await loadInitialDashboard();
-      } catch (err) {
-        console.warn("Failed to load initial dashboard, starting with empty dashboard:", err);
-        setBentoCards([]);
-      }
-
-    } catch (err) {
-      console.error("Critical initialization error:", err);
-      setError(err instanceof Error ? err.message : "Failed to initialize data");
-    }
-    // Remove the finally block that was setting loading to false
-  }, [loadSuggestions, loadInitialDashboard]);
-
-  // Initialize with welcome message and load initial data
+  // Initialize with welcome message only (no automatic data loading)
   useEffect(() => {
     // Prevent double initialization in React Strict Mode (development)
     let mounted = true;
     
     const initialize = async () => {
       if (mounted) {
-        await initializeData();
+        // Only initialize welcome message and suggestions, skip dashboard data loading
+        try {
+          setError(null);
+          
+          // Add welcome message
+          const welcomeMessage: ChatMessage = {
+            id: "welcome",
+            content: "Hello! I'm your AI CFO assistant. I can help you analyze financial data from your database. What would you like to know?",
+            sender: "assistant",
+            timestamp: new Date("2024-01-01T00:00:00Z"), // Fixed timestamp to avoid hydration mismatch
+          };
+          setChatMessages([welcomeMessage]);
+
+          // Load suggestions only (lightweight operation)
+          try {
+            await loadSuggestions();
+          } catch (err) {
+            console.warn("Failed to load suggestions, using fallbacks:", err);
+          }
+
+          // Skip automatic dashboard loading to prevent unnecessary queries
+          console.log("Frontend initialized without automatic queries");
+          setBentoCards([]);
+
+        } catch (err) {
+          console.error("Critical initialization error:", err);
+          setError(err instanceof Error ? err.message : "Failed to initialize data");
+        }
       }
     };
     
@@ -272,7 +265,7 @@ export function useRealData(): UseRealDataReturn {
     return () => {
       mounted = false;
     };
-  }, [initializeData]);
+  }, [loadSuggestions]); // Remove initializeData dependency
 
   const getNextAvailablePosition = useCallback((): { row: number; col: number } => {
     // Simple logic to find next available position

@@ -120,6 +120,7 @@ class EnhancedWebSocketMCPClient:
         self.websocket = None
         self.connection_state = ConnectionState.DISCONNECTED
         self.connection_lock = asyncio.Lock()
+        self.reconnection_lock = asyncio.Lock()  # Prevent multiple simultaneous reconnections
         self.stats = ConnectionStats()
         
         # Request handling
@@ -236,7 +237,8 @@ class EnhancedWebSocketMCPClient:
         return True
     
     async def connect(self) -> bool:
-        """Establish WebSocket connection with enhanced error handling"""
+        """Connect to MCP server with comprehensive error handling and retries"""
+        
         if self.is_connected:
             return True
         
@@ -245,8 +247,16 @@ class EnhancedWebSocketMCPClient:
             return False
         
         async with self.connection_lock:
-            if self.is_connected:  # Double check
+            # Triple check to prevent race conditions
+            if self.is_connected:
+                logger.debug("Connection already established during lock acquisition")
                 return True
+            
+            if self.connection_state == ConnectionState.CONNECTING:
+                logger.warning("Connection already in progress, waiting...")
+                # Wait a moment for existing connection attempt
+                await asyncio.sleep(0.5)
+                return self.is_connected
             
             self.connection_state = ConnectionState.CONNECTING
             self.stats.connection_attempts += 1
@@ -371,18 +381,25 @@ class EnhancedWebSocketMCPClient:
         # Notify connection event handlers
         await self._notify_connection_event("failed")
         
-        # Start reconnection if not at max attempts
+        # Start reconnection if not at max attempts and not already reconnecting
         if (self.max_reconnect_attempts < 0 or 
             self.stats.reconnection_attempts < self.max_reconnect_attempts):
-            asyncio.create_task(self._reconnect())
+            if not self.reconnection_lock.locked():
+                asyncio.create_task(self._reconnect())
     
     async def _reconnect(self):
         """Attempt to reconnect with exponential backoff"""
-        if self.connection_state == ConnectionState.RECONNECTING:
-            return  # Already reconnecting
-        
-        self.connection_state = ConnectionState.RECONNECTING
-        self.stats.reconnection_attempts += 1
+        async with self.reconnection_lock:
+            if self.connection_state == ConnectionState.RECONNECTING:
+                logger.debug("Reconnection already in progress, skipping duplicate attempt")
+                return  # Already reconnecting
+            
+            if self.is_connected:
+                logger.debug("Already connected, skipping reconnection")
+                return
+            
+            self.connection_state = ConnectionState.RECONNECTING
+            self.stats.reconnection_attempts += 1
         
         # Calculate backoff delay
         backoff_delay = min(
@@ -428,12 +445,16 @@ class EnhancedWebSocketMCPClient:
                     pass
     
     async def _send_connection_init(self):
-        """Send connection initialization message"""
+        """Send connection initialization message with unique connection ID"""
+        # Generate unique connection ID to prevent conflicts
+        connection_id = f"{self.agent_id}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
+        
         init_message = {
             "type": MessageType.EVENT.value,
             "event_name": "agent_connected",
             "payload": {
                 "agent_id": self.agent_id,
+                "connection_id": connection_id,  # Add unique connection identifier
                 "agent_type": "nlp-agent",
                 "version": "2.1.0",
                 "capabilities": [
@@ -454,6 +475,8 @@ class EnhancedWebSocketMCPClient:
                 }
             }
         }
+        
+        logger.info(f"Sending connection init with ID: {connection_id}")
         await self._send_raw_message(init_message)
     
     async def _send_raw_message(self, message: Dict[str, Any]):
@@ -502,8 +525,9 @@ class EnhancedWebSocketMCPClient:
             await self._notify_connection_event("disconnected")
             self.connection_state = ConnectionState.DISCONNECTED
             
-            # Start reconnection
-            asyncio.create_task(self._reconnect())
+            # Start reconnection only if not already reconnecting
+            if not self.reconnection_lock.locked():
+                asyncio.create_task(self._reconnect())
     
     async def _process_message(self, data: Dict[str, Any]):
         """Process incoming WebSocket message"""
