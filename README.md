@@ -215,6 +215,9 @@ python main.py
 
 ### Environment Variables
 
+Contact for environment variables for mock database on TiDB cloud : 
+obaidsafi31@gmail.com
+
 Key environment variables to configure:
 
 ```
